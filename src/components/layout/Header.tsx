@@ -1,0 +1,208 @@
+import { useState, useEffect, useRef } from 'react';
+import { Play, Square, ChevronDown, MousePointer2, Grid3X3, PenTool, Menu } from 'lucide-react';
+import * as Tone from 'tone';
+import { useComposerStore } from '@/store/useComposerStore';
+import { playComposition, stopComposition, setGlobalBpm } from '@/core/audio/ToneEngine';
+import { EffectorModal } from '../controls/EffectorModal';
+
+interface HeaderProps {
+  onMenuClick: () => void;
+}
+
+export function Header({ onMenuClick }: HeaderProps) {
+  const { 
+    song, tracks, isPlaying, setIsPlaying, setBpm, snapResolution, setSnapResolution, setTimeSignature,
+    currentTool, setCurrentTool, noteStyle, setNoteStyle
+  } = useComposerStore();
+  
+  const [displayTime, setDisplayTime] = useState("00:00.0");
+  const [totalTime, setTotalTime] = useState("00:00.0"); 
+  const [showEffector, setShowEffector] = useState(false);
+  const [showStyleDropdown, setShowStyleDropdown] = useState(false);
+
+  const styleRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (styleRef.current && !styleRef.current.contains(event.target as Node)) setShowStyleDropdown(false);
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  useEffect(() => {
+    let animId: number;
+    const updateTimer = () => {
+      if (isPlaying && Tone.Transport.state === 'started') {
+        const seconds = Tone.Transport.seconds;
+        const mins = Math.floor(seconds / 60).toString().padStart(2, '0');
+        const secs = Math.floor(seconds % 60).toString().padStart(2, '0');
+        const millis = Math.floor((seconds % 1) * 10);
+        setDisplayTime(`${mins}:${secs}.${millis}`);
+      }
+      animId = requestAnimationFrame(updateTimer);
+    };
+    if (isPlaying) updateTimer();
+    else setDisplayTime("00:00.0");
+    return () => cancelAnimationFrame(animId);
+  }, [isPlaying]);
+
+  useEffect(() => {
+    let maxTick = 0;
+    tracks.forEach(track => {
+      track.notes.forEach(note => {
+        const endTick = note.startTick + note.durationTicks;
+        if (endTick > maxTick) maxTick = endTick;
+      });
+    });
+    if (maxTick === 0) {
+      setTotalTime("00:00.0");
+      return;
+    }
+    const ticksPerSecond = (song.bpm * 480) / 60;
+    const totalSeconds = maxTick / ticksPerSecond;
+    const mins = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
+    const secs = Math.floor(totalSeconds % 60).toString().padStart(2, '0');
+    const millis = Math.floor((totalSeconds % 1) * 10);
+    setTotalTime(`${mins}:${secs}.${millis}`);
+  }, [tracks, song.bpm]);
+
+  const handlePlay = () => {
+    if (isPlaying) return;
+    setIsPlaying(true);
+    playComposition(tracks, song.bpm);
+  };
+
+  const handleStop = () => {
+    setIsPlaying(false);
+    stopComposition();
+  };
+
+  return (
+    <header className="relative flex h-14 w-full items-center border-b border-grid-light bg-surface-panel px-3 md:px-4 z-30 overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+      
+      <div className="flex items-center justify-between min-w-max w-full gap-4 md:gap-8">
+        
+        <div className="flex items-center">
+          
+          <button onClick={onMenuClick} className="md:hidden mr-3 text-[#DAB16C] hover:text-white transition-colors">
+            <Menu size={22} />
+          </button>
+
+          <div className="flex items-center gap-3 md:gap-6">
+            <div className="flex items-center gap-1">
+              <button 
+                onClick={() => setCurrentTool('select')}
+                className={`rounded border p-1.5 transition-colors ${currentTool === 'select' ? 'border-accent-primary text-accent-primary bg-black/30' : 'border-grid-light bg-surface-modal hover:text-accent-primary'}`}
+              >
+                <MousePointer2 size={16} />
+              </button>
+              <button 
+                onClick={() => setCurrentTool('draw')}
+                className={`rounded border p-1.5 transition-colors ${currentTool === 'draw' ? 'border-accent-primary text-accent-primary bg-black/30' : 'border-grid-light bg-surface-modal hover:text-accent-primary'}`}
+              >
+                <PenTool size={16} />
+              </button>
+            </div>
+            
+            <div 
+              className="flex items-center gap-3 rounded-full bg-surface-modal px-3 py-1.5 border border-grid-light cursor-pointer hover:border-accent-primary transition-colors"
+              onClick={() => setShowEffector(true)}
+            >
+              {['Reverb', 'Delay', 'Chorus'].map(eff => (
+                <div key={eff} className="flex items-center gap-1 text-[11px] md:text-xs text-content-primary">
+                  <div className="h-1.5 w-1.5 md:h-2 md:w-2 rounded-full bg-content-muted" /> <span>{eff}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] md:text-[11px] font-medium text-content-muted uppercase">BPM</span>
+              <input 
+                type="number" min="30" max="300" value={song.bpm}
+                onChange={(e) => {
+                  const newBpm = parseInt(e.target.value);
+                  if (newBpm > 0) { setBpm(newBpm); setGlobalBpm(newBpm); }
+                }}
+                className="w-10 md:w-12 rounded-sm border border-grid-light bg-surface-modal px-1 py-0.5 text-center text-xs text-accent-primary outline-none"
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 bg-[#1C1917] px-3 py-1.5 rounded-full border border-[#352F2A] shadow-inner">
+          <button onClick={handlePlay} className={`transition-colors ${isPlaying ? 'text-accent-primary' : 'text-content-primary hover:text-accent-primary'}`}>
+            <Play size={14} fill="currentColor" />
+          </button>
+          <button onClick={handleStop} className="text-content-primary hover:text-red-400 transition-colors">
+            <Square size={12} fill="currentColor" />
+          </button>
+          <span className="text-[11px] text-[#DAB16C] font-mono ml-1">{displayTime}</span>
+          <span className="text-[9px] text-content-muted font-mono">{totalTime}</span>
+        </div>
+
+        <div className="flex items-center gap-3 md:gap-4 text-content-muted shrink-0">
+          
+          <div className="flex flex-col items-start gap-0.5">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] md:text-[11px] text-content-muted">Ritmo</span>
+              <div className="relative flex items-center rounded-sm border border-grid-light bg-surface-modal px-2 py-0.5">
+                <select 
+                  value={`${song.timeSignature[0]}/${song.timeSignature[1]}`}
+                  onChange={(e) => {
+                    const [num, den] = e.target.value.split('/').map(Number);
+                    setTimeSignature([num, den]);
+                  }}
+                  className="appearance-none bg-transparent text-xs text-content-primary outline-none pr-4 cursor-pointer"
+                >
+                  <option value="4/4">4/4</option><option value="3/4">3/4</option><option value="6/8">6/8</option>
+                </select>
+                <ChevronDown size={12} className="absolute right-1 text-content-muted pointer-events-none" />
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1">
+              <Grid3X3 size={12} className="text-content-muted" />
+              <div className="relative flex items-center rounded-sm border border-grid-light bg-surface-modal px-2 py-0.5">
+                <select 
+                  value={snapResolution}
+                  onChange={(e) => setSnapResolution(Number(e.target.value))}
+                  className="appearance-none bg-transparent text-xs text-content-primary outline-none pr-4 cursor-pointer"
+                >
+                  <option value="4">1/4</option><option value="8">1/8</option><option value="16">1/16</option>
+                  <option value="32">1/32</option><option value="64">1/64</option>
+                </select>
+                <ChevronDown size={12} className="absolute right-1 text-content-muted pointer-events-none" />
+              </div>
+            </div>
+
+            <div className="relative" ref={styleRef}>
+              <div 
+                className="relative flex items-center rounded-sm border border-grid-light bg-surface-modal px-2 py-1 cursor-pointer min-w-[110px]"
+                onClick={() => setShowStyleDropdown(!showStyleDropdown)}
+              >
+                <div className={`h-1.5 w-1.5 rounded-sm mr-1.5 ${noteStyle === 'Sustenido' ? 'bg-content-muted' : 'bg-green-500'}`} />
+                <span className="text-[11px] text-content-primary truncate mr-4">{noteStyle}</span>
+                <ChevronDown size={12} className="absolute right-1 text-content-muted" />
+              </div>
+              {showStyleDropdown && (
+                <div className="absolute top-full right-0 mt-1 w-44 bg-surface-modal border border-grid-light rounded shadow-xl z-50 flex flex-col overflow-hidden">
+                  <button className="flex items-center gap-2 px-3 py-2 text-xs text-content-primary hover:bg-surface-base transition-colors" onClick={() => { setNoteStyle('Sustenido'); setShowStyleDropdown(false); }}>
+                    <div className="h-1.5 w-1.5 rounded-sm bg-content-muted" /> Sustenido
+                  </button>
+                  <button className="flex items-center gap-2 px-3 py-2 text-xs text-content-primary hover:bg-surface-base transition-colors" onClick={() => { setNoteStyle('Pedal de Sustentação'); setShowStyleDropdown(false); }}>
+                    <div className="h-1.5 w-1.5 rounded-sm bg-green-500" /> Pedal de Sustentação
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      {showEffector && <EffectorModal onClose={() => setShowEffector(false)} />}
+    </header>
+  );
+}
