@@ -4,6 +4,17 @@
 
 An advanced, open-source, and responsive web composer focused on creating, editing, and exporting musical scores for **Black Desert Online (BDO)**.
 
+> ⚠️ **Work in Progress:**  
+> Currently, the Piano instrument is the most complete and stable implementation.  
+> Other instruments are still under active development and may have incomplete mappings, playback inconsistencies, or missing sample libraries.
+
+---
+<p align="center">
+  <a href="https://lucaslinhares.dev.br/marni-web-composer" target="_blank">
+    <img src="https://img.shields.io/badge/Live%20Demo-Open%20Project-8A2BE2?style=for-the-badge&logo=vercel&logoColor=white" />
+  </a>
+</p>
+
 ---
 
 ## ✨ Features
