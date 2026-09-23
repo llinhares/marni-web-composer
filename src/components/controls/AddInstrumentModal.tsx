@@ -18,31 +18,74 @@ export function AddInstrumentModal({ onClose, onSelect }: AddInstrumentModalProp
     disabled?: boolean;
   }[] = [
     { 
-      id: 'Flauta', 
-      label: 'Flauta', 
-      imagePlaceholder: 'bg-gradient-to-b from-[#2A2D34] to-[#111113]',
-      instruments: ['Flauta Transversal', 'Clarinete', 'Trompa'],
+      id: 'Piano', 
+      label: 'Teclas & Pianos', 
+      imagePlaceholder: 'bg-gradient-to-b from-[#4A2609] to-[#150A02]', 
+      instruments: ['Grand Piano', 'Piano de Iniciante'],
       disabled: false
     },
     { 
       id: 'Violino', 
-      label: 'Violino', 
+      label: 'Cordas Acústicas', 
       imagePlaceholder: 'bg-gradient-to-b from-[#3F1C0D] to-[#140804]', 
-      instruments: ['Violão Acústico', 'Contrabaixo', 'Harpa', 'Violino'],
+      instruments: [
+        'Violão Acústico', 
+        'Contrabaixo', 
+        'Harpa', 
+        'Violino',
+        'Violão de Iniciante',
+        'Harpa de Iniciante',
+        'Violino de Iniciante'
+      ],
       disabled: false
     },
     { 
-      id: 'Piano', 
-      label: 'Piano', 
-      imagePlaceholder: 'bg-gradient-to-b from-[#4A2609] to-[#150A02]', 
-      instruments: ['Grand Piano'],
+      id: 'Flauta', 
+      label: 'Sopros', 
+      imagePlaceholder: 'bg-gradient-to-b from-[#2A2D34] to-[#111113]',
+      instruments: [
+        'Flauta Transversal', 
+        'Clarinete', 
+        'Trompa',
+        'Flauta de Iniciante',
+        'Flauta Doce de Iniciante'
+      ],
+      disabled: false
+    },
+    { 
+      id: 'Guitarras', 
+      label: 'Guitarras Elétricas', 
+      imagePlaceholder: 'bg-gradient-to-b from-[#5c1d1d] to-[#1a0808]',
+      instruments: [
+        'Guitarra Silver Wave',
+        'Guitarra Highway',
+        'Guitarra Hexe Glam'
+      ],
+      disabled: false
+    },
+    { 
+      id: 'Marnian', 
+      label: 'Marnian (Synths)', 
+      imagePlaceholder: 'bg-gradient-to-b from-[#1a384a] to-[#08131a]',
+      instruments: [
+        'Marnibass',
+        'Marnian Wavy Planet',
+        'Marnian Illusion Tree',
+        'Marnian Secret Note',
+        'Marnian Sandwich'
+      ],
       disabled: false
     },
     { 
       id: 'Percussao', 
       label: 'Percussão', 
       imagePlaceholder: 'bg-gradient-to-b from-[#282828] to-[#0F0F0F]', 
-      instruments: ['Tamborim', 'Kit de Bateria'],
+      instruments: [
+        'Kit de Bateria', 
+        'Tamborim',
+        'Pratos',
+        'Handpan'
+      ],
       disabled: false
     },
   ];
@@ -80,19 +123,24 @@ export function AddInstrumentModal({ onClose, onSelect }: AddInstrumentModalProp
 
         <div className="relative p-4 md:p-6 md:h-[420px] max-h-[60vh] overflow-y-auto">
           {!selectedCategory ? (
-            <div key="view-categories" className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 animate-in fade-in zoom-in-95 duration-300">
+            <div key="view-categories" className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 animate-in fade-in zoom-in-95 duration-300">
               {categories.map((cat) => (
                 <button
                   key={cat.id}
                   onClick={() => !cat.disabled && setSelectedCategory(cat.id)}
                   disabled={cat.disabled}
-                  className={`group relative flex h-40 md:h-80 flex-col overflow-hidden rounded-sm border transition-all ${
+                  className={`group relative flex h-36 md:h-44 flex-col overflow-hidden rounded-sm border transition-all ${
                     cat.disabled 
                     ? 'border-[#2A2A2A] bg-[#101010] cursor-not-allowed grayscale' 
                     : 'border-[#3E3832] bg-[#151515] hover:-translate-y-1 hover:border-[#D4AB6A] hover:shadow-[0_0_15px_rgba(212,171,106,0.3)]'
                   }`}
                 >
-                  <img src={`/images/${cat.id.toLowerCase()}.webp`} alt={cat.label} className="absolute inset-0 h-full w-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" />
+                  <img 
+                    src={`/images/${cat.id.toLowerCase()}.webp`} 
+                    alt={cat.label} 
+                    onError={(e) => { (e.currentTarget as HTMLElement).style.display = 'none'; }}
+                    className="absolute inset-0 h-full w-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" 
+                  />
                   <div className={`absolute inset-0 opacity-80 transition-opacity ${!cat.disabled && 'group-hover:opacity-50'} ${cat.imagePlaceholder}`} />
                   <div className="absolute inset-0 bg-gradient-to-t from-[#151515] via-transparent to-transparent opacity-90" />
                   

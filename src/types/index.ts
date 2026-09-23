@@ -1,8 +1,14 @@
-export type InstrumentCategory = 'Percussão' | 'Teclas' | 'Cordas' | 'Sopros';
+export type InstrumentCategory = 
+  | 'Teclas' 
+  | 'Cordas' 
+  | 'Sopros' 
+  | 'Guitarras Elétricas' 
+  | 'Marnian' 
+  | 'Percussão' 
+  | 'Iniciante';
 
 export type InstrumentType = 
-  | 'Tamborim' 
-  | 'Kit de Bateria' 
+  // Florchestra / Clássicos
   | 'Grand Piano' 
   | 'Violão Acústico' 
   | 'Contrabaixo' 
@@ -10,7 +16,29 @@ export type InstrumentType =
   | 'Violino' 
   | 'Flauta Transversal' 
   | 'Clarinete' 
-  | 'Trompa';
+  | 'Trompa'
+  // Guitarras Elétricas
+  | 'Guitarra Silver Wave'
+  | 'Guitarra Highway'
+  | 'Guitarra Hexe Glam'
+  // Marnian / Sintetizadores
+  | 'Marnibass'
+  | 'Marnian Wavy Planet'
+  | 'Marnian Illusion Tree'
+  | 'Marnian Secret Note'
+  | 'Marnian Sandwich'
+  // Percussão & Étnicos
+  | 'Kit de Bateria' 
+  | 'Tamborim' 
+  | 'Pratos'
+  | 'Handpan'
+  // Instrumentos de Iniciante
+  | 'Piano de Iniciante'
+  | 'Violão de Iniciante'
+  | 'Harpa de Iniciante'
+  | 'Violino de Iniciante'
+  | 'Flauta de Iniciante'
+  | 'Flauta Doce de Iniciante';
 
 export type ToolType = 'draw' | 'select';
 export type NoteStyleType = 'Sustenido' | 'Pedal de Sustentação';

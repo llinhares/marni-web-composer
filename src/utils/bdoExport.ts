@@ -41,6 +41,8 @@ export function getDefaultBdoInstrument(baseType: InstrumentType): string {
   switch (baseType) {
     case 'Tamborim': return 'Hand Drum';
     case 'Kit de Bateria': return 'Drum Set';
+    case 'Pratos': return 'Cymbals';
+    case 'Handpan': return 'Handpan';
     case 'Grand Piano': return 'Florchestra Piano';
     case 'Violão Acústico': return 'Florchestra Acoustic Guitar';
     case 'Contrabaixo': return 'Florchestra Contrabass';
@@ -49,16 +51,60 @@ export function getDefaultBdoInstrument(baseType: InstrumentType): string {
     case 'Flauta Transversal': return 'Florchestra Flute';
     case 'Clarinete': return 'Florchestra Clarinet';
     case 'Trompa': return 'Florchestra Horn';
+    case 'Guitarra Silver Wave': return 'Guitar Silver Wave';
+    case 'Guitarra Highway': return 'Guitar Highway';
+    case 'Guitarra Hexe Glam': return 'Guitar Hexe Glam';
+    case 'Marnibass': return 'Marnibass';
+    case 'Marnian Wavy Planet': return 'Marnian Wavy Planet';
+    case 'Marnian Illusion Tree': return 'Marnian Illusion Tree';
+    case 'Marnian Secret Note': return 'Marnian Secret Note';
+    case 'Marnian Sandwich': return 'Marnian Sandwich';
+    case 'Piano de Iniciante': return 'Beginner Piano';
+    case 'Violão de Iniciante': return 'Beginner Guitar';
+    case 'Harpa de Iniciante': return 'Beginner Harp';
+    case 'Violino de Iniciante': return 'Beginner Violin';
+    case 'Flauta de Iniciante': return 'Beginner Flute';
+    case 'Flauta Doce de Iniciante': return 'Beginner Recorder';
     default: return 'Florchestra Piano';
   }
 }
 
-const DRUM_PITCH_MAP: Record<string, number> = {
+const DRUM_NAME_TO_BDO: Record<string, number> = {
   'Kck': 48, 'SnrSide': 51, 'SnrHit': 50, 'RimShot': 51, 'SnrFlam': 50,
   'Tom1': 53, 'HihatC': 54, 'Tom2': 55, 'HatPdl': 56, 'Tom3': 57,
   'HihatO': 58, 'Tom4': 59, 'Tom5': 60, 'CymCrsh': 61, 'CymRide': 62,
   'SnrRollS': 50, 'SnrRollL': 50
 };
+
+const GM_NUM_TO_BDO: Record<number, number> = {
+  35: 48, 36: 48, 37: 51, 38: 50, 39: 50, 40: 50,
+  41: 53, 42: 54, 43: 55, 44: 56, 45: 57, 46: 58,
+  47: 59, 48: 60, 49: 61, 50: 60, 51: 62, 52: 61,
+  53: 62, 54: 61, 55: 61, 56: 51, 57: 61, 58: 51, 59: 62
+};
+
+export function resolveDrumPitch(pitch: string | number): number {
+  if (typeof pitch === 'string') {
+    if (DRUM_NAME_TO_BDO[pitch] !== undefined) return DRUM_NAME_TO_BDO[pitch];
+    const parsed = parseInt(pitch, 10);
+    if (!isNaN(parsed)) {
+      if (parsed >= 48 && parsed <= 64) return parsed;
+      if (GM_NUM_TO_BDO[parsed]) return GM_NUM_TO_BDO[parsed];
+      return 48;
+    }
+    try {
+      const idx = getPitchIndex(pitch);
+      if (GM_NUM_TO_BDO[idx]) return GM_NUM_TO_BDO[idx];
+      if (idx >= 48 && idx <= 64) return idx;
+    } catch {
+      // ignore
+    }
+  } else if (typeof pitch === 'number') {
+    if (pitch >= 48 && pitch <= 64) return pitch;
+    if (GM_NUM_TO_BDO[pitch]) return GM_NUM_TO_BDO[pitch];
+  }
+  return 48;
+}
 
 export interface ExportOptions {
   charName: string; ownerId: number; transpose: number;
@@ -134,13 +180,13 @@ function processVelocity(notes: Note[], opts: ExportOptions): Note[] {
 }
 
 export function exportToBdo(tracks: Track[], song: SongContext, options: ExportOptions): Blob {
-  const mergedNotesByInst: Record<number, Note[]> = {};
+  const mergedNotesByInst: Record<number, { notes: Note[], volume: number }> = {};
   
   tracks.forEach(t => {
     if (t.notes.length === 0 || t.isMuted) return; 
     
     const finalInstName = options.instrumentOverrides[t.id] || getDefaultBdoInstrument(t.instrument);
-    const instId = FULL_BDO_INSTRUMENTS[finalInstName];
+    const instId = FULL_BDO_INSTRUMENTS[finalInstName] ?? FULL_BDO_INSTRUMENTS['Florchestra Piano'];
     const isPerc = BDO_PERCUSSION_IDS.includes(instId);
     
     const msFactor = 60000 / (song.bpm * 480);
@@ -148,42 +194,46 @@ export function exportToBdo(tracks: Track[], song: SongContext, options: ExportO
     
     let processedNotes = t.notes.map(n => {
       let finalPitch = n.pitch;
-      if (isPerc && DRUM_PITCH_MAP[n.pitch] !== undefined) {
-        finalPitch = DRUM_PITCH_MAP[n.pitch].toString();
+      if (isPerc) {
+        finalPitch = resolveDrumPitch(n.pitch).toString();
       }
       return {
         ...n,
         pitch: finalPitch,
         startTick: n.startTick * msFactor, 
-        durationTicks: n.durationTicks * msFactor,
+        durationTicks: Math.max(60, n.durationTicks * msFactor), // Ensure minimum duration floor against ghost notes
         velocity: Math.max(1, Math.min(127, Math.round(n.velocity * scaleFactor)))
-      }
+      };
     });
     
     if (!isPerc) processedNotes = clampNotes(processedNotes, options.transpose);
     processedNotes = processVelocity(processedNotes, options);
     
-    if (!mergedNotesByInst[instId]) mergedNotesByInst[instId] = [];
-    mergedNotesByInst[instId].push(...processedNotes);
+    if (!mergedNotesByInst[instId]) {
+      mergedNotesByInst[instId] = { notes: [], volume: t.volume ?? 70 };
+    }
+    mergedNotesByInst[instId].notes.push(...processedNotes);
   });
 
-  const processedGroups: { instId: number, tracks: Note[][] }[] = [];
+  const processedGroups: { instId: number, volume: number, tracks: Note[][] }[] = [];
   
-  Object.entries(mergedNotesByInst).forEach(([idStr, notes]) => {
+  Object.entries(mergedNotesByInst).forEach(([idStr, groupData]) => {
     const instId = parseInt(idStr);
-    notes.sort((a, b) => a.startTick - b.startTick);
+    groupData.notes.sort((a, b) => a.startTick - b.startTick);
     
     const chunks: Note[][] = [];
     const chunkLimit = options.maxChunkNotes || 730;
-    for (let i = 0; i < notes.length; i += chunkLimit) {
-      chunks.push(notes.slice(i, i + chunkLimit));
+    for (let i = 0; i < groupData.notes.length; i += chunkLimit) {
+      chunks.push(groupData.notes.slice(i, i + chunkLimit));
     }
-    processedGroups.push({ instId, tracks: chunks });
+    processedGroups.push({ instId, volume: groupData.volume, tracks: chunks });
   });
 
-  if (processedGroups.length === 0) processedGroups.push({ instId: FULL_BDO_INSTRUMENTS['Florchestra Piano'], tracks: [] });
+  if (processedGroups.length === 0) {
+    processedGroups.push({ instId: FULL_BDO_INSTRUMENTS['Florchestra Piano'], volume: 70, tracks: [] });
+  }
 
-  const totalNoteCount = Object.values(mergedNotesByInst).reduce((acc, notes) => acc + notes.length, 0);
+  const totalNoteCount = Object.values(mergedNotesByInst).reduce((acc, g) => acc + g.notes.length, 0);
   const estimatedBufferSize = Math.max(16384, HEADER_SIZE + 4096 + (totalNoteCount * 28));
   const buffer = new ArrayBuffer(estimatedBufferSize); 
   const view = new DataView(buffer);
@@ -209,6 +259,7 @@ export function exportToBdo(tracks: Track[], song: SongContext, options: ExportO
   processedGroups.forEach((group, gIndex) => {
     const isFirstGroup = (gIndex === 0);
     const trackCount = group.tracks.length + 1; 
+    const isPercGroup = BDO_PERCUSSION_IDS.includes(group.instId);
     
     if (isFirstGroup) {
       view.setUint8(offset++, 0x00);
@@ -218,7 +269,8 @@ export function exportToBdo(tracks: Track[], song: SongContext, options: ExportO
 
     const writeTrack = (notes: Note[]) => {
       const dataSize = 2 + 8 + 2 + notes.length * 20;
-      const trackMarker = group.instId | (70 << 8); 
+      const vol127 = Math.min(127, Math.max(1, Math.round((group.volume ?? 70) * 1.27)));
+      const trackMarker = group.instId | (vol127 << 8); 
       
       view.setUint16(offset, dataSize, true); offset += 2;
       view.setUint16(offset, trackMarker, true); offset += 2;
@@ -235,9 +287,12 @@ export function exportToBdo(tracks: Track[], song: SongContext, options: ExportO
       view.setUint16(offset, notes.length, true); offset += 2;
 
       notes.forEach(n => {
-        const p = typeof n.pitch === 'string' ? parseInt(n.pitch) : n.pitch; 
+        const p = isPercGroup 
+          ? resolveDrumPitch(n.pitch) 
+          : (typeof n.pitch === 'string' ? parseInt(n.pitch, 10) : n.pitch); 
+        
         view.setUint8(offset++, p & 0x7F);
-        view.setUint8(offset++, BDO_PERCUSSION_IDS.includes(group.instId) ? 99 : 0);
+        view.setUint8(offset++, isPercGroup ? 99 : 0);
         view.setUint8(offset++, n.velocity & 0x7F);
         view.setUint8(offset++, n.velocity & 0x7F);
         view.setFloat64(offset, n.startTick, true); offset += 8;
