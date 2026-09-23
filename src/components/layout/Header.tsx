@@ -1,12 +1,14 @@
 import { useState, useEffect, useRef } from 'react';
 import { 
   Play, Square, ChevronDown, MousePointer2, Grid3X3, PenTool, Menu,
-  Undo2, Redo2, ZoomIn, ZoomOut, RotateCcw 
+  Undo2, Redo2, ZoomIn, ZoomOut, RotateCcw,
+  Circle, Ghost, Sliders, Cable
 } from 'lucide-react';
 import * as Tone from 'tone';
 import { useComposerStore, useComposerHistoryState } from '@/store/useComposerStore';
 import { playComposition, stopComposition, setGlobalBpm } from '@/core/audio/ToneEngine';
 import { EffectorModal } from '../controls/EffectorModal';
+import { webMidi } from '@/core/midi/WebMidiManager';
 
 interface HeaderProps {
   onMenuClick: () => void;
@@ -16,7 +18,10 @@ export function Header({ onMenuClick }: HeaderProps) {
   const { 
     song, tracks, isPlaying, setIsPlaying, setBpm, snapResolution, setSnapResolution, setTimeSignature,
     currentTool, setCurrentTool, noteStyle, setNoteStyle,
-    zoomX, setZoomX, seekTick
+    zoomX, setZoomX, seekTick,
+    ghostNotesEnabled, toggleGhostNotes,
+    isRecording, setIsRecording,
+    midiConnected, setShowMixer
   } = useComposerStore();
 
   const { canUndo, canRedo, undo, redo } = useComposerHistoryState();
@@ -27,6 +32,11 @@ export function Header({ onMenuClick }: HeaderProps) {
 
   const timeDisplayRef = useRef<HTMLSpanElement>(null);
   const styleRef = useRef<HTMLDivElement>(null);
+
+  // Initialize Web MIDI detection automatically
+  useEffect(() => {
+    webMidi.init();
+  }, []);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -97,7 +107,7 @@ export function Header({ onMenuClick }: HeaderProps) {
   return (
     <header className="relative flex h-14 w-full items-center border-b border-grid-light bg-surface-panel px-3 md:px-4 z-30 overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
       
-      <div className="flex items-center justify-between min-w-max w-full gap-4 md:gap-8">
+      <div className="flex items-center justify-between min-w-max w-full gap-4 md:gap-6">
         
         <div className="flex items-center">
           
@@ -105,7 +115,7 @@ export function Header({ onMenuClick }: HeaderProps) {
             <Menu size={22} />
           </button>
 
-          <div className="flex items-center gap-3 md:gap-4">
+          <div className="flex items-center gap-2.5 md:gap-3.5">
             {/* Tools (Select / Draw) */}
             <div className="flex items-center gap-1">
               <button 
@@ -123,6 +133,19 @@ export function Header({ onMenuClick }: HeaderProps) {
                 <PenTool size={16} />
               </button>
             </div>
+
+            {/* Ghost Notes Toggle (Alt+V) */}
+            <button
+              onClick={toggleGhostNotes}
+              title="Notas Fantasma / Ghost Notes (Alt+V)"
+              className={`rounded border p-1.5 transition-colors ${
+                ghostNotesEnabled 
+                  ? 'border-accent-primary text-accent-primary bg-black/30' 
+                  : 'border-grid-light bg-surface-modal text-content-muted hover:text-content-primary'
+              }`}
+            >
+              <Ghost size={15} />
+            </button>
 
             {/* Undo / Redo */}
             <div className="flex items-center gap-1">
@@ -181,6 +204,30 @@ export function Header({ onMenuClick }: HeaderProps) {
                 </button>
               )}
             </div>
+
+            {/* Mixer Button */}
+            <button
+              onClick={() => setShowMixer(true)}
+              title="Abrir Mesa de Som (Mixer Pro)"
+              className="flex items-center gap-1.5 rounded border border-grid-light bg-surface-modal px-2.5 py-1.5 text-xs text-content-primary hover:border-accent-primary hover:text-accent-primary transition-colors"
+            >
+              <Sliders size={14} className="text-[#DAB16C]" />
+              <span className="hidden lg:inline text-[11px] font-medium">Mixer</span>
+            </button>
+
+            {/* Web MIDI USB status badge */}
+            <button
+              onClick={() => webMidi.init()}
+              title={midiConnected ? "Teclado MIDI USB Conectado" : "Clique para Ativar Teclado MIDI USB"}
+              className={`flex items-center gap-1.5 rounded border px-2 py-1.5 text-[11px] transition-colors ${
+                midiConnected 
+                  ? 'border-emerald-600 bg-emerald-950/40 text-emerald-400' 
+                  : 'border-grid-light bg-surface-modal text-content-muted hover:text-accent-primary hover:border-accent-primary'
+              }`}
+            >
+              <Cable size={13} />
+              <span className="hidden xl:inline">{midiConnected ? 'MIDI Ativo' : 'Ativar MIDI'}</span>
+            </button>
             
             {/* Effector button */}
             <div 
@@ -209,8 +256,21 @@ export function Header({ onMenuClick }: HeaderProps) {
           </div>
         </div>
 
-        {/* Playback Controls & High-Performance Timer */}
-        <div className="flex items-center gap-3 bg-[#1C1917] px-3 py-1.5 rounded-full border border-[#352F2A] shadow-inner">
+        {/* Playback & Record Controls */}
+        <div className="flex items-center gap-3 bg-[#1C1917] px-3.5 py-1.5 rounded-full border border-[#352F2A] shadow-inner">
+          {/* Record Button */}
+          <button 
+            onClick={() => setIsRecording(!isRecording)} 
+            title={isRecording ? "Gravação MIDI Ativa (Clique para Desativar)" : "Ativar Gravação MIDI"}
+            className={`transition-colors p-1 rounded-full ${
+              isRecording 
+                ? 'text-red-500 bg-red-950/60 shadow-[0_0_8px_rgba(239,68,68,0.7)] animate-pulse' 
+                : 'text-content-muted hover:text-red-400'
+            }`}
+          >
+            <Circle size={12} fill="currentColor" />
+          </button>
+
           <button onClick={handlePlay} className={`transition-colors ${isPlaying ? 'text-accent-primary' : 'text-content-primary hover:text-accent-primary'}`}>
             <Play size={14} fill="currentColor" />
           </button>

@@ -28,6 +28,7 @@ export interface Track {
   name: string;
   instrument: InstrumentType;
   volume: number;
+  pan?: number;
   isMuted: boolean;
   isSolo: boolean;
   notes: Note[];
@@ -60,6 +61,11 @@ export interface ComposerState {
   zoomX: number;
   zoomY: number;
   seekTick: number;
+  masterVolume: number;
+  ghostNotesEnabled: boolean;
+  isRecording: boolean;
+  midiConnected: boolean;
+  showMixer: boolean;
   
   setTitle: (title: string) => void;
   setBpm: (bpm: number) => void;
@@ -70,6 +76,8 @@ export interface ComposerState {
   updateNoteInTrack: (trackId: string, noteId: string, updates: Partial<Note>) => void;
   setIsPlaying: (isPlaying: boolean) => void;
   updateTrackVolume: (trackId: string, volume: number) => void;
+  setTrackPan: (trackId: string, pan: number) => void;
+  setMasterVolume: (volume: number) => void;
   toggleTrackMute: (trackId: string) => void;
   toggleTrackSolo: (trackId: string) => void;
   setSnapResolution: (res: number) => void;
@@ -86,4 +94,8 @@ export interface ComposerState {
   setZoomX: (zoom: number) => void;
   setZoomY: (zoom: number) => void;
   setSeekTick: (tick: number) => void;
+  toggleGhostNotes: () => void;
+  setIsRecording: (isRecording: boolean) => void;
+  setMidiConnected: (connected: boolean) => void;
+  setShowMixer: (show: boolean) => void;
 }

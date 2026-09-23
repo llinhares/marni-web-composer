@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import { temporal } from 'zundo';
+import { useStore } from 'zustand';
 import { type ComposerState, type Track } from '@/types';
-import { updateTrackAudio, disposeTrackAudio } from '@/core/audio/ToneEngine';
+import { updateTrackAudio, disposeTrackAudio, updateMasterVolume } from '@/core/audio/ToneEngine';
 
 const generateId = () => Math.random().toString(36).substring(2, 9);
 
@@ -19,6 +20,7 @@ export const useComposerStore = create<ComposerState>()(
           name: 'Grand Piano',
           instrument: 'Grand Piano',
           volume: 70,
+          pan: 0,
           isMuted: false,
           isSolo: false,
           notes: [],
@@ -34,10 +36,15 @@ export const useComposerStore = create<ComposerState>()(
       zoomX: 1,
       zoomY: 1,
       seekTick: 0,
+      masterVolume: 80,
+      ghostNotesEnabled: true,
+      isRecording: false,
+      midiConnected: false,
+      showMixer: false,
 
       setTitle: (title) => set((state) => ({ song: { ...state.song, title } })),
       setBpm: (bpm) => set((state) => ({ song: { ...state.song, bpm } })),
-      addTrack: (track) => set((state) => ({ tracks: [...state.tracks, track] })),
+      addTrack: (track) => set((state) => ({ tracks: [...state.tracks, { ...track, pan: track.pan ?? 0 }] })),
       setActiveTrack: (trackId) => set({ activeTrackId: trackId, selectedNoteIds: [] }),
       addNoteToTrack: (trackId, note) => set((state) => ({
         tracks: state.tracks.map((track) => track.id === trackId ? { ...track, notes: [...track.notes, note] } : track)
@@ -54,19 +61,29 @@ export const useComposerStore = create<ComposerState>()(
       updateTrackVolume: (trackId, volume) => set((state) => {
         const tracks = state.tracks.map((t) => t.id === trackId ? { ...t, volume } : t);
         const track = tracks.find(t => t.id === trackId);
-        if (track) updateTrackAudio(trackId, volume, track.isMuted, track.isSolo, tracks.some(s => s.isSolo));
+        if (track) updateTrackAudio(trackId, volume, track.isMuted, track.isSolo, tracks.some(s => s.isSolo), track.pan || 0);
         return { tracks };
       }),
+      setTrackPan: (trackId, pan) => set((state) => {
+        const tracks = state.tracks.map((t) => t.id === trackId ? { ...t, pan } : t);
+        const track = tracks.find(t => t.id === trackId);
+        if (track) updateTrackAudio(trackId, track.volume, track.isMuted, track.isSolo, tracks.some(s => s.isSolo), pan);
+        return { tracks };
+      }),
+      setMasterVolume: (volume) => {
+        updateMasterVolume(volume);
+        set({ masterVolume: volume });
+      },
       toggleTrackMute: (trackId) => set((state) => {
         const tracks = state.tracks.map((t) => t.id === trackId ? { ...t, isMuted: !t.isMuted } : t);
         const track = tracks.find(t => t.id === trackId);
-        if (track) updateTrackAudio(trackId, track.volume, track.isMuted, track.isSolo, tracks.some(s => s.isSolo));
+        if (track) updateTrackAudio(trackId, track.volume, track.isMuted, track.isSolo, tracks.some(s => s.isSolo), track.pan || 0);
         return { tracks };
       }),
       toggleTrackSolo: (trackId) => set((state) => {
         const tracks = state.tracks.map((t) => t.id === trackId ? { ...t, isSolo: !t.isSolo } : t);
         const hasSolo = tracks.some(s => s.isSolo);
-        tracks.forEach(t => updateTrackAudio(t.id, t.volume, t.isMuted, t.isSolo, hasSolo));
+        tracks.forEach(t => updateTrackAudio(t.id, t.volume, t.isMuted, t.isSolo, hasSolo, t.pan || 0));
         return { tracks };
       }),
       setSnapResolution: (res) => set({ snapResolution: res }),
@@ -109,7 +126,7 @@ export const useComposerStore = create<ComposerState>()(
         };
       }),
       setMidiData: (newTracks, bpm) => set((state) => ({
-        tracks: newTracks,
+        tracks: newTracks.map(t => ({ ...t, pan: t.pan ?? 0 })),
         song: { ...state.song, bpm },
         activeTrackId: newTracks[0]?.id || null,
         selectedNoteIds: [],
@@ -118,6 +135,10 @@ export const useComposerStore = create<ComposerState>()(
       setZoomX: (zoom) => set({ zoomX: Math.max(0.3, Math.min(3, zoom)) }),
       setZoomY: (zoom) => set({ zoomY: Math.max(0.6, Math.min(2, zoom)) }),
       setSeekTick: (seekTick) => set({ seekTick: Math.max(0, seekTick) }),
+      toggleGhostNotes: () => set((state) => ({ ghostNotesEnabled: !state.ghostNotesEnabled })),
+      setIsRecording: (isRecording) => set({ isRecording }),
+      setMidiConnected: (connected) => set({ midiConnected: connected }),
+      setShowMixer: (show) => set({ showMixer: show }),
     }),
     {
       partialize: (state) => ({ tracks: state.tracks }),
@@ -125,8 +146,6 @@ export const useComposerStore = create<ComposerState>()(
     }
   )
 );
-
-import { useStore } from 'zustand';
 
 export const useComposerHistoryState = () => {
   const canUndo = useStore(useComposerStore.temporal, (state) => state.pastStates.length > 0);

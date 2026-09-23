@@ -20,7 +20,8 @@ export function PianoRoll() {
   const { 
     tracks, activeTrackId, addNoteToTrack, removeNoteFromTrack, updateNoteInTrack, isPlaying, song, snapResolution,
     currentTool, selectedNoteIds, setSelectedNotes, deleteSelectedNotes,
-    zoomX, zoomY, setZoomX, seekTick, setSeekTick
+    zoomX, zoomY, setZoomX, seekTick, setSeekTick,
+    ghostNotesEnabled, toggleGhostNotes
   } = useComposerStore();
 
   const { undo, redo } = useComposerHistoryState();
@@ -63,13 +64,19 @@ export function PianoRoll() {
         return;
       }
 
+      if (e.altKey && e.key.toLowerCase() === 'v') {
+        e.preventDefault();
+        toggleGhostNotes();
+        return;
+      }
+
       if (e.key === 'Delete' || e.key === 'Backspace') {
         deleteSelectedNotes();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [deleteSelectedNotes, undo, redo]);
+  }, [deleteSelectedNotes, undo, redo, toggleGhostNotes]);
 
   useEffect(() => {
     setScroll({ x: 0, y: 0 });
@@ -307,6 +314,38 @@ export function PianoRoll() {
     });
   }, [activeTrack, gridNotes, scroll.x, scroll.y, dimensions.width, dimensions.height, currentBeatWidth, currentNoteHeight]);
 
+  // Ghost notes from other tracks for harmonic reference (FL Studio style)
+  const ghostNotes = useMemo(() => {
+    if (!ghostNotesEnabled) return [];
+    const otherTracks = tracks.filter(t => t.id !== activeTrackId && !t.isMuted);
+    const viewLeft = scroll.x - 200;
+    const viewRight = scroll.x + dimensions.width + 200;
+    const viewTop = scroll.y - 100;
+    const viewBottom = scroll.y + dimensions.height + 100;
+
+    const list: { id: string, pitch: string, startTick: number, durationTicks: number, trackName: string }[] = [];
+    
+    otherTracks.forEach(t => {
+      t.notes.forEach(note => {
+        const rowIndex = gridNotes.indexOf(note.pitch);
+        if (rowIndex === -1) return;
+
+        const xPos = PIANO_ROLL.KEYBOARD_WIDTH + (note.startTick / PIANO_ROLL.TICKS_PER_BEAT) * currentBeatWidth;
+        const noteWidth = (note.durationTicks / PIANO_ROLL.TICKS_PER_BEAT) * currentBeatWidth;
+        const yPos = rowIndex * currentNoteHeight;
+
+        const isXVisible = (xPos + noteWidth >= viewLeft) && (xPos <= viewRight);
+        const isYVisible = (yPos + currentNoteHeight >= viewTop) && (yPos <= viewBottom);
+
+        if (isXVisible && isYVisible) {
+          list.push({ ...note, trackName: t.name });
+        }
+      });
+    });
+
+    return list;
+  }, [ghostNotesEnabled, tracks, activeTrackId, gridNotes, scroll.x, scroll.y, dimensions.width, dimensions.height, currentBeatWidth, currentNoteHeight]);
+
   // Viewport Culling for grid lines
   const visibleGrid = useMemo(() => {
     const totalBeats = totalMeasures * beatsPerMeasure;
@@ -365,6 +404,41 @@ export function PianoRoll() {
                 <Line key={line.key} points={[line.x, 0, line.x, totalHeight]} stroke={line.isMeasure ? colors.gridMeasure : colors.gridBeat} strokeWidth={line.isMeasure ? 2 : 1} />
               ))}
             </Group>
+
+            {/* Ghost Notes from other unmuted tracks */}
+            {ghostNotesEnabled && (
+              <Group listening={false} opacity={0.35}>
+                {ghostNotes.map((gn) => {
+                  const rowIndex = gridNotes.indexOf(gn.pitch);
+                  const y = rowIndex * currentNoteHeight;
+                  const x = PIANO_ROLL.KEYBOARD_WIDTH + (gn.startTick / PIANO_ROLL.TICKS_PER_BEAT) * currentBeatWidth;
+                  const w = (gn.durationTicks / PIANO_ROLL.TICKS_PER_BEAT) * currentBeatWidth;
+                  return (
+                    <Group key={`ghost-${gn.id}`} x={x} y={y}>
+                      <Rect 
+                        width={w} 
+                        height={currentNoteHeight} 
+                        fill="#7A7165" 
+                        stroke="#B4A693" 
+                        strokeWidth={1} 
+                        cornerRadius={2} 
+                      />
+                      {w > 35 && currentNoteHeight >= 14 && (
+                        <Text 
+                          text={gn.pitch} 
+                          x={4} 
+                          y={Math.max(2, (currentNoteHeight - 10) / 2)} 
+                          fontSize={9} 
+                          fill="#FFFFFF" 
+                          fontFamily="sans-serif" 
+                          fontStyle="bold" 
+                        />
+                      )}
+                    </Group>
+                  );
+                })}
+              </Group>
+            )}
 
             {/* Culled Note Blocks */}
             <Group>
