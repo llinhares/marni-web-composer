@@ -15,12 +15,12 @@ const _sbox = [new Uint32Array(1024), new Uint32Array(1024), new Uint32Array(102
 function _perm32(x: number): number { let result = 0, i = 0, unsignedX = x >>> 0; while (unsignedX) { if (unsignedX & 1) result |= _PBOX[i]; i++; unsignedX >>>= 1; } return result >>> 0; }
 function _gf_mult(a: number, b: number, m: number): number { let result = 0; while (b) { if (b & 1) result ^= a; a <<= 1; b >>= 1; if (a >= 256) a ^= m; } return result; }
 function _gf_exp7(b: number, m: number): number { if (b === 0) return 0; let x = _gf_mult(b, b, m); x = _gf_mult(b, x, m); x = _gf_mult(x, x, m); return _gf_mult(b, x, m); }
-function _init_sbox() { for (let i = 0; i < 1024; i++) { let col = (i >>> 1) & 0xFF, row = (i & 0x1) | ((i & 0x200) >>> 8); _sbox[0][i] = _perm32(_gf_exp7(col ^ _SXOR[0][row], _SMOD[0][row]) << 24); _sbox[1][i] = _perm32(_gf_exp7(col ^ _SXOR[1][row], _SMOD[1][row]) << 16); _sbox[2][i] = _perm32(_gf_exp7(col ^ _SXOR[2][row], _SMOD[2][row]) << 8); _sbox[3][i] = _perm32(_gf_exp7(col ^ _SXOR[3][row], _SMOD[3][row])); } }
-function _build_key_schedule(): number[][] { const key = new Uint8Array(8); for (let i = 0; i < 8; i++) key[i] = _KA[i] ^ _KB[i]; const ks: number[][] = Array(8).fill(0).map(() => [0, 0, 0]); const kb = [0, 0, 0, 0]; for (let i = 0; i < 4; i++) kb[3 - i] = (key[i * 2] << 8) | key[i * 2 + 1]; for (let i = 0; i < 8; i++) { const kr = _KEYROT[i]; for (let j = 0; j < 15; j++) { for (let k = 0; k < 4; k++) { let t = (kr + k) & 3; let kbb = kb[t]; let bit = kbb & 1; ks[i][j % 3] = ((ks[i][j % 3] << 1) | bit) >>> 0; kb[t] = ((kbb >>> 1) | ((bit ^ 1) << 15)) >>> 0; } } } return ks; }
+function _init_sbox() { for (let i = 0; i < 1024; i++) { const col = (i >>> 1) & 0xFF, row = (i & 0x1) | ((i & 0x200) >>> 8); _sbox[0][i] = _perm32(_gf_exp7(col ^ _SXOR[0][row], _SMOD[0][row]) << 24); _sbox[1][i] = _perm32(_gf_exp7(col ^ _SXOR[1][row], _SMOD[1][row]) << 16); _sbox[2][i] = _perm32(_gf_exp7(col ^ _SXOR[2][row], _SMOD[2][row]) << 8); _sbox[3][i] = _perm32(_gf_exp7(col ^ _SXOR[3][row], _SMOD[3][row])); } }
+function _build_key_schedule(): number[][] { const key = new Uint8Array(8); for (let i = 0; i < 8; i++) key[i] = _KA[i] ^ _KB[i]; const ks: number[][] = Array(8).fill(0).map(() => [0, 0, 0]); const kb = [0, 0, 0, 0]; for (let i = 0; i < 4; i++) kb[3 - i] = (key[i * 2] << 8) | key[i * 2 + 1]; for (let i = 0; i < 8; i++) { const kr = _KEYROT[i]; for (let j = 0; j < 15; j++) { for (let k = 0; k < 4; k++) { const t = (kr + k) & 3; const kbb = kb[t]; const bit = kbb & 1; ks[i][j % 3] = ((ks[i][j % 3] << 1) | bit) >>> 0; kb[t] = ((kbb >>> 1) | ((bit ^ 1) << 15)) >>> 0; } } } return ks; }
 _init_sbox(); const _KS = _build_key_schedule();
-function _ice_f(p: number, sk: number[]): number { let tl = (((p >>> 16) & 0x3FF) | (((p >>> 14) | (p << 18)) & 0xFFC00)) >>> 0; let tr = ((p & 0x3FF) | ((p << 2) & 0xFFC00)) >>> 0; let al = (sk[2] & (tl ^ tr)) >>> 0; let ar = (al ^ tr ^ sk[1]) >>> 0; al ^= tl ^ sk[0]; return (_sbox[0][al >>> 10] | _sbox[1][al & 0x3FF] | _sbox[2][ar >>> 10] | _sbox[3][ar & 0x3FF]) >>> 0; }
-function _encrypt_block(data: Uint8Array, offset: number): Uint8Array { let l = 0, r = 0; for (let i = 0; i < 4; i++) { let t = 24 - i * 8; l = (l | ((data[offset + i] & 0xFF) << t)) >>> 0; r = (r | ((data[offset + i + 4] & 0xFF) << t)) >>> 0; } for (let i = 0; i < 8; i += 2) { l = (l ^ _ice_f(r, _KS[i])) >>> 0; r = (r ^ _ice_f(l, _KS[i + 1])) >>> 0; } const out = new Uint8Array(8); for (let i = 0; i < 4; i++) { out[3 - i] = r & 0xFF; out[7 - i] = l & 0xFF; r >>>= 8; l >>>= 8; } return out; }
-function _decrypt_block(data: Uint8Array, offset: number): Uint8Array { let l = 0, r = 0; for (let i = 0; i < 4; i++) { let t = 24 - i * 8; l = (l | ((data[offset + i] & 0xFF) << t)) >>> 0; r = (r | ((data[offset + i + 4] & 0xFF) << t)) >>> 0; } for (let i = 7; i > 0; i -= 2) { l = (l ^ _ice_f(r, _KS[i])) >>> 0; r = (r ^ _ice_f(l, _KS[i - 1])) >>> 0; } const out = new Uint8Array(8); for (let i = 0; i < 4; i++) { out[3 - i] = r & 0xFF; out[7 - i] = l & 0xFF; r >>>= 8; l >>>= 8; } return out; }
+function _ice_f(p: number, sk: number[]): number { const tl = (((p >>> 16) & 0x3FF) | (((p >>> 14) | (p << 18)) & 0xFFC00)) >>> 0; const tr = ((p & 0x3FF) | ((p << 2) & 0xFFC00)) >>> 0; const al = (sk[2] & (tl ^ tr)) >>> 0; const ar = (al ^ tr ^ sk[1]) >>> 0; const finalAl = al ^ tl ^ sk[0]; return (_sbox[0][finalAl >>> 10] | _sbox[1][finalAl & 0x3FF] | _sbox[2][ar >>> 10] | _sbox[3][ar & 0x3FF]) >>> 0; }
+function _encrypt_block(data: Uint8Array, offset: number): Uint8Array { let l = 0, r = 0; for (let i = 0; i < 4; i++) { const t = 24 - i * 8; l = (l | ((data[offset + i] & 0xFF) << t)) >>> 0; r = (r | ((data[offset + i + 4] & 0xFF) << t)) >>> 0; } for (let i = 0; i < 8; i += 2) { l = (l ^ _ice_f(r, _KS[i])) >>> 0; r = (r ^ _ice_f(l, _KS[i + 1])) >>> 0; } const out = new Uint8Array(8); for (let i = 0; i < 4; i++) { out[3 - i] = r & 0xFF; out[7 - i] = l & 0xFF; r >>>= 8; l >>>= 8; } return out; }
+function _decrypt_block(data: Uint8Array, offset: number): Uint8Array { let l = 0, r = 0; for (let i = 0; i < 4; i++) { const t = 24 - i * 8; l = (l | ((data[offset + i] & 0xFF) << t)) >>> 0; r = (r | ((data[offset + i + 4] & 0xFF) << t)) >>> 0; } for (let i = 7; i > 0; i -= 2) { l = (l ^ _ice_f(r, _KS[i])) >>> 0; r = (r ^ _ice_f(l, _KS[i - 1])) >>> 0; } const out = new Uint8Array(8); for (let i = 0; i < 4; i++) { out[3 - i] = r & 0xFF; out[7 - i] = l & 0xFF; r >>>= 8; l >>>= 8; } return out; }
 function encryptIce(plaintext: Uint8Array): Uint8Array { const out = new Uint8Array(plaintext.length); let i = 0; while (i + 8 <= plaintext.length) { out.set(_encrypt_block(plaintext, i), i); i += 8; } if (i < plaintext.length) { out.set(plaintext.subarray(i), i); } return out; }
 export function decryptOwnerHeader(ciphertext: Uint8Array): Uint8Array { const maxOwnerFileSize = 0x08 << 0x06; if (ciphertext.length > maxOwnerFileSize) { throw new Error("File too large for owner ID extraction. Use a single-note file saved in-game."); } const out = new Uint8Array(ciphertext.length); let i = 0; while (i + 8 <= ciphertext.length) { out.set(_decrypt_block(ciphertext, i), i); i += 8; } if (i < ciphertext.length) out.set(ciphertext.subarray(i), i); return out; }
 
@@ -68,6 +68,7 @@ export interface ExportOptions {
   instrumentOverrides: Record<string, string>; 
   velocityScales: Record<string, number>;      
   effector: EffectorSettings;                 
+  maxChunkNotes?: number;
 }
 
 const BDO_VERSION = 9;
@@ -173,15 +174,18 @@ export function exportToBdo(tracks: Track[], song: SongContext, options: ExportO
     notes.sort((a, b) => a.startTick - b.startTick);
     
     const chunks: Note[][] = [];
-    for (let i = 0; i < notes.length; i += 730) {
-      chunks.push(notes.slice(i, i + 730));
+    const chunkLimit = options.maxChunkNotes || 730;
+    for (let i = 0; i < notes.length; i += chunkLimit) {
+      chunks.push(notes.slice(i, i + chunkLimit));
     }
     processedGroups.push({ instId, tracks: chunks });
   });
 
   if (processedGroups.length === 0) processedGroups.push({ instId: FULL_BDO_INSTRUMENTS['Florchestra Piano'], tracks: [] });
 
-  const buffer = new ArrayBuffer(1024 * 1024 * 5); 
+  const totalNoteCount = Object.values(mergedNotesByInst).reduce((acc, notes) => acc + notes.length, 0);
+  const estimatedBufferSize = Math.max(16384, HEADER_SIZE + 4096 + (totalNoteCount * 28));
+  const buffer = new ArrayBuffer(estimatedBufferSize); 
   const view = new DataView(buffer);
   let offset = 0;
 

@@ -14,23 +14,28 @@ interface NoteBlockProps {
   snapResolution: number; 
   onEditRequest: (note: Note, x: number, y: number) => void;
   isSelected: boolean;
-  gridNotes: string[]; 
+  gridNotes: string[];
+  beatWidth: number;
+  noteHeight: number;
 }
 
-export function NoteBlock({ note, trackId, removeNote, updateNote, scroll, snapResolution, onEditRequest, isSelected, gridNotes }: NoteBlockProps) {
+export function NoteBlock({ 
+  note, trackId, removeNote, updateNote, scroll, snapResolution, 
+  onEditRequest, isSelected, gridNotes, beatWidth, noteHeight 
+}: NoteBlockProps) {
   const [isHovered, setIsHovered] = useState(false);
   const [dragWidth, setDragWidth] = useState<number | null>(null);
   const isDraggingRef = useRef(false);
 
   const { currentTool, setSelectedNotes } = useComposerStore();
 
-  const snapWidth = (PIANO_ROLL.BEAT_WIDTH * 4) / snapResolution;
+  const snapWidth = (beatWidth * 4) / snapResolution;
 
   const rowIndex = gridNotes.indexOf(note.pitch);
-  const yPos = rowIndex * PIANO_ROLL.NOTE_HEIGHT;
-  const xPos = PIANO_ROLL.KEYBOARD_WIDTH + (note.startTick / PIANO_ROLL.TICKS_PER_BEAT) * PIANO_ROLL.BEAT_WIDTH;
+  const yPos = rowIndex * noteHeight;
+  const xPos = PIANO_ROLL.KEYBOARD_WIDTH + (note.startTick / PIANO_ROLL.TICKS_PER_BEAT) * beatWidth;
   
-  const storeWidth = (note.durationTicks / PIANO_ROLL.TICKS_PER_BEAT) * PIANO_ROLL.BEAT_WIDTH;
+  const storeWidth = (note.durationTicks / PIANO_ROLL.TICKS_PER_BEAT) * beatWidth;
   const currentWidth = dragWidth !== null ? dragWidth : storeWidth;
   const handleWidth = Math.min(6, currentWidth);
 
@@ -55,8 +60,10 @@ export function NoteBlock({ note, trackId, removeNote, updateNote, scroll, snapR
   };
 
   const handleResizeDragEnd = (e: KonvaEventObject<DragEvent>) => {
-    const newDurationTicks = Math.round((currentWidth / PIANO_ROLL.BEAT_WIDTH) * PIANO_ROLL.TICKS_PER_BEAT);
-    if (newDurationTicks !== note.durationTicks) updateNote(trackId, note.id, { durationTicks: newDurationTicks });
+    const newDurationTicks = Math.max(1, Math.round((currentWidth / beatWidth) * PIANO_ROLL.TICKS_PER_BEAT));
+    if (newDurationTicks !== note.durationTicks) {
+      updateNote(trackId, note.id, { durationTicks: newDurationTicks });
+    }
     
     setDragWidth(null);
     e.target.x(currentWidth - handleWidth);
@@ -70,8 +77,8 @@ export function NoteBlock({ note, trackId, removeNote, updateNote, scroll, snapR
     const boundedX = Math.max(PIANO_ROLL.KEYBOARD_WIDTH, localX);
     const snappedLocalX = Math.round((boundedX - PIANO_ROLL.KEYBOARD_WIDTH) / snapWidth) * snapWidth + PIANO_ROLL.KEYBOARD_WIDTH;
 
-    const snappedLocalY = Math.round(localY / PIANO_ROLL.NOTE_HEIGHT) * PIANO_ROLL.NOTE_HEIGHT;
-    const maxY = (gridNotes.length - 1) * PIANO_ROLL.NOTE_HEIGHT;
+    const snappedLocalY = Math.round(localY / noteHeight) * noteHeight;
+    const maxY = (gridNotes.length - 1) * noteHeight;
     const finalLocalY = Math.max(0, Math.min(maxY, snappedLocalY));
 
     return { 
@@ -87,14 +94,14 @@ export function NoteBlock({ note, trackId, removeNote, updateNote, scroll, snapR
     const newX = e.target.x();
     const newY = e.target.y();
 
-    const newRowIndex = Math.round(newY / PIANO_ROLL.NOTE_HEIGHT);
+    const newRowIndex = Math.round(newY / noteHeight);
     const newPitch = gridNotes[newRowIndex];
 
     const snappedX = Math.max(PIANO_ROLL.KEYBOARD_WIDTH, newX);
-    const beats = (snappedX - PIANO_ROLL.KEYBOARD_WIDTH) / PIANO_ROLL.BEAT_WIDTH;
-    const newStartTick = Math.round(beats * PIANO_ROLL.TICKS_PER_BEAT);
+    const beats = (snappedX - PIANO_ROLL.KEYBOARD_WIDTH) / beatWidth;
+    const newStartTick = Math.max(0, Math.round(beats * PIANO_ROLL.TICKS_PER_BEAT));
 
-    if (newPitch !== note.pitch || newStartTick !== note.startTick) {
+    if (newPitch && (newPitch !== note.pitch || newStartTick !== note.startTick)) {
       updateNote(trackId, note.id, { pitch: newPitch, startTick: newStartTick });
     } else {
       e.target.x(xPos);
@@ -166,11 +173,35 @@ export function NoteBlock({ note, trackId, removeNote, updateNote, scroll, snapR
       onDblClick={handleEditRequest}
       onDblTap={handleEditRequest}
     >
-      <Rect width={currentWidth} height={PIANO_ROLL.NOTE_HEIGHT} fill={colors.fill} stroke={isHovered ? '#FFFFFF' : colors.stroke} strokeWidth={isSelected ? 2 : 1} cornerRadius={2} />
-      <Rect x={0} y={0} width={currentWidth} height={4} fill="rgba(255, 255, 255, 0.15)" cornerRadius={[2, 2, 0, 0]} listening={false} />
+      <Rect 
+        width={currentWidth} 
+        height={noteHeight} 
+        fill={colors.fill} 
+        stroke={isHovered ? '#FFFFFF' : colors.stroke} 
+        strokeWidth={isSelected ? 2 : 1} 
+        cornerRadius={2} 
+      />
+      <Rect 
+        x={0} 
+        y={0} 
+        width={currentWidth} 
+        height={Math.min(4, noteHeight / 4)} 
+        fill="rgba(255, 255, 255, 0.15)" 
+        cornerRadius={[2, 2, 0, 0]} 
+        listening={false} 
+      />
 
-      {currentWidth > 30 && (
-        <Text text={note.pitch} x={4} y={6} fontSize={10} fill={colors.text} fontFamily="sans-serif" fontStyle="bold" listening={false} />
+      {currentWidth > 30 && noteHeight >= 14 && (
+        <Text 
+          text={note.pitch} 
+          x={4} 
+          y={Math.max(2, (noteHeight - 12) / 2)} 
+          fontSize={Math.min(10, noteHeight - 4)} 
+          fill={colors.text} 
+          fontFamily="sans-serif" 
+          fontStyle="bold" 
+          listening={false} 
+        />
       )}
 
       {showResize && (
@@ -179,7 +210,7 @@ export function NoteBlock({ note, trackId, removeNote, updateNote, scroll, snapR
           x={currentWidth - handleWidth}
           y={0}
           width={handleWidth}
-          height={PIANO_ROLL.NOTE_HEIGHT}
+          height={noteHeight}
           fill="transparent"
           stroke={colors.handle}
           strokeWidth={2}

@@ -22,14 +22,14 @@ export function AddInstrumentModal({ onClose, onSelect }: AddInstrumentModalProp
       label: 'Flauta', 
       imagePlaceholder: 'bg-gradient-to-b from-[#2A2D34] to-[#111113]',
       instruments: ['Flauta Transversal', 'Clarinete', 'Trompa'],
-      disabled: true
+      disabled: false
     },
     { 
       id: 'Violino', 
       label: 'Violino', 
       imagePlaceholder: 'bg-gradient-to-b from-[#3F1C0D] to-[#140804]', 
       instruments: ['Violão Acústico', 'Contrabaixo', 'Harpa', 'Violino'],
-      disabled: true
+      disabled: false
     },
     { 
       id: 'Piano', 
@@ -43,7 +43,7 @@ export function AddInstrumentModal({ onClose, onSelect }: AddInstrumentModalProp
       label: 'Percussão', 
       imagePlaceholder: 'bg-gradient-to-b from-[#282828] to-[#0F0F0F]', 
       instruments: ['Tamborim', 'Kit de Bateria'],
-      disabled: true
+      disabled: false
     },
   ];
 

@@ -1,7 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
-import { Play, Square, ChevronDown, MousePointer2, Grid3X3, PenTool, Menu } from 'lucide-react';
+import { 
+  Play, Square, ChevronDown, MousePointer2, Grid3X3, PenTool, Menu,
+  Undo2, Redo2, ZoomIn, ZoomOut, RotateCcw 
+} from 'lucide-react';
 import * as Tone from 'tone';
-import { useComposerStore } from '@/store/useComposerStore';
+import { useComposerStore, useComposerHistoryState } from '@/store/useComposerStore';
 import { playComposition, stopComposition, setGlobalBpm } from '@/core/audio/ToneEngine';
 import { EffectorModal } from '../controls/EffectorModal';
 
@@ -12,23 +15,30 @@ interface HeaderProps {
 export function Header({ onMenuClick }: HeaderProps) {
   const { 
     song, tracks, isPlaying, setIsPlaying, setBpm, snapResolution, setSnapResolution, setTimeSignature,
-    currentTool, setCurrentTool, noteStyle, setNoteStyle
+    currentTool, setCurrentTool, noteStyle, setNoteStyle,
+    zoomX, setZoomX, seekTick
   } = useComposerStore();
+
+  const { canUndo, canRedo, undo, redo } = useComposerHistoryState();
   
-  const [displayTime, setDisplayTime] = useState("00:00.0");
   const [totalTime, setTotalTime] = useState("00:00.0"); 
   const [showEffector, setShowEffector] = useState(false);
   const [showStyleDropdown, setShowStyleDropdown] = useState(false);
 
+  const timeDisplayRef = useRef<HTMLSpanElement>(null);
   const styleRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (styleRef.current && !styleRef.current.contains(event.target as Node)) setShowStyleDropdown(false);
+      if (styleRef.current && !styleRef.current.contains(event.target as Node)) {
+        setShowStyleDropdown(false);
+      }
     };
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  // Efficient DOM-ref timer to eliminate 60 FPS full re-renders
   useEffect(() => {
     let animId: number;
     const updateTimer = () => {
@@ -37,12 +47,19 @@ export function Header({ onMenuClick }: HeaderProps) {
         const mins = Math.floor(seconds / 60).toString().padStart(2, '0');
         const secs = Math.floor(seconds % 60).toString().padStart(2, '0');
         const millis = Math.floor((seconds % 1) * 10);
-        setDisplayTime(`${mins}:${secs}.${millis}`);
+        if (timeDisplayRef.current) {
+          timeDisplayRef.current.textContent = `${mins}:${secs}.${millis}`;
+        }
       }
       animId = requestAnimationFrame(updateTimer);
     };
-    if (isPlaying) updateTimer();
-    else setDisplayTime("00:00.0");
+
+    if (isPlaying) {
+      updateTimer();
+    } else if (timeDisplayRef.current) {
+      timeDisplayRef.current.textContent = "00:00.0";
+    }
+
     return () => cancelAnimationFrame(animId);
   }, [isPlaying]);
 
@@ -69,7 +86,7 @@ export function Header({ onMenuClick }: HeaderProps) {
   const handlePlay = () => {
     if (isPlaying) return;
     setIsPlaying(true);
-    playComposition(tracks, song.bpm);
+    playComposition(tracks, song.bpm, seekTick);
   };
 
   const handleStop = () => {
@@ -88,22 +105,84 @@ export function Header({ onMenuClick }: HeaderProps) {
             <Menu size={22} />
           </button>
 
-          <div className="flex items-center gap-3 md:gap-6">
+          <div className="flex items-center gap-3 md:gap-4">
+            {/* Tools (Select / Draw) */}
             <div className="flex items-center gap-1">
               <button 
                 onClick={() => setCurrentTool('select')}
+                title="Ferramenta Seleção"
                 className={`rounded border p-1.5 transition-colors ${currentTool === 'select' ? 'border-accent-primary text-accent-primary bg-black/30' : 'border-grid-light bg-surface-modal hover:text-accent-primary'}`}
               >
                 <MousePointer2 size={16} />
               </button>
               <button 
                 onClick={() => setCurrentTool('draw')}
+                title="Ferramenta Desenhar Nota"
                 className={`rounded border p-1.5 transition-colors ${currentTool === 'draw' ? 'border-accent-primary text-accent-primary bg-black/30' : 'border-grid-light bg-surface-modal hover:text-accent-primary'}`}
               >
                 <PenTool size={16} />
               </button>
             </div>
+
+            {/* Undo / Redo */}
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => undo()}
+                disabled={!canUndo}
+                title="Desfazer (Ctrl+Z)"
+                className={`rounded border p-1.5 transition-colors ${
+                  canUndo 
+                    ? 'border-grid-light bg-surface-modal text-content-primary hover:text-accent-primary hover:border-accent-primary cursor-pointer' 
+                    : 'border-[#26221E] bg-[#141211] text-[#554E46] cursor-not-allowed opacity-50'
+                }`}
+              >
+                <Undo2 size={15} />
+              </button>
+              <button
+                onClick={() => redo()}
+                disabled={!canRedo}
+                title="Refazer (Ctrl+Y)"
+                className={`rounded border p-1.5 transition-colors ${
+                  canRedo 
+                    ? 'border-grid-light bg-surface-modal text-content-primary hover:text-accent-primary hover:border-accent-primary cursor-pointer' 
+                    : 'border-[#26221E] bg-[#141211] text-[#554E46] cursor-not-allowed opacity-50'
+                }`}
+              >
+                <Redo2 size={15} />
+              </button>
+            </div>
+
+            {/* Zoom Controls */}
+            <div className="flex items-center gap-1 bg-surface-modal border border-grid-light rounded px-1.5 py-0.5">
+              <button
+                onClick={() => setZoomX(zoomX - 0.2)}
+                title="Diminuir Zoom"
+                className="text-content-muted hover:text-accent-primary p-0.5"
+              >
+                <ZoomOut size={13} />
+              </button>
+              <span className="text-[10px] font-mono text-[#DAB16C] px-1 select-none min-w-[34px] text-center">
+                {Math.round(zoomX * 100)}%
+              </span>
+              <button
+                onClick={() => setZoomX(zoomX + 0.2)}
+                title="Aumentar Zoom"
+                className="text-content-muted hover:text-accent-primary p-0.5"
+              >
+                <ZoomIn size={13} />
+              </button>
+              {zoomX !== 1 && (
+                <button
+                  onClick={() => setZoomX(1)}
+                  title="Redefinir Zoom (100%)"
+                  className="text-content-muted hover:text-accent-primary p-0.5 ml-0.5"
+                >
+                  <RotateCcw size={11} />
+                </button>
+              )}
+            </div>
             
+            {/* Effector button */}
             <div 
               className="flex items-center gap-3 rounded-full bg-surface-modal px-3 py-1.5 border border-grid-light cursor-pointer hover:border-accent-primary transition-colors"
               onClick={() => setShowEffector(true)}
@@ -115,6 +194,7 @@ export function Header({ onMenuClick }: HeaderProps) {
               ))}
             </div>
 
+            {/* BPM */}
             <div className="flex items-center gap-2">
               <span className="text-[10px] md:text-[11px] font-medium text-content-muted uppercase">BPM</span>
               <input 
@@ -129,6 +209,7 @@ export function Header({ onMenuClick }: HeaderProps) {
           </div>
         </div>
 
+        {/* Playback Controls & High-Performance Timer */}
         <div className="flex items-center gap-3 bg-[#1C1917] px-3 py-1.5 rounded-full border border-[#352F2A] shadow-inner">
           <button onClick={handlePlay} className={`transition-colors ${isPlaying ? 'text-accent-primary' : 'text-content-primary hover:text-accent-primary'}`}>
             <Play size={14} fill="currentColor" />
@@ -136,10 +217,11 @@ export function Header({ onMenuClick }: HeaderProps) {
           <button onClick={handleStop} className="text-content-primary hover:text-red-400 transition-colors">
             <Square size={12} fill="currentColor" />
           </button>
-          <span className="text-[11px] text-[#DAB16C] font-mono ml-1">{displayTime}</span>
+          <span ref={timeDisplayRef} className="text-[11px] text-[#DAB16C] font-mono ml-1">00:00.0</span>
           <span className="text-[9px] text-content-muted font-mono">{totalTime}</span>
         </div>
 
+        {/* Time Signature, Grid Snap & Style */}
         <div className="flex items-center gap-3 md:gap-4 text-content-muted shrink-0">
           
           <div className="flex flex-col items-start gap-0.5">

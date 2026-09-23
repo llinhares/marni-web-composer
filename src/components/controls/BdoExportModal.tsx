@@ -21,6 +21,7 @@ export function BdoExportModal({ onClose }: BdoExportModalProps) {
   const [rescaleMin, setRescaleMin] = useState('80');
   const [rescaleMax, setRescaleMax] = useState('127');
   const [floorVal, setFloorVal] = useState('100');
+  const [maxChunkNotes, setMaxChunkNotes] = useState('730');
   const [idStatus, setIdStatus] = useState('Selecione um arquivo .bms');
 
   const [instOverrides, setInstOverrides] = useState<Record<string, string>>({});
@@ -92,7 +93,8 @@ export function BdoExportModal({ onClose }: BdoExportModalProps) {
       velMode, velStepBase: parseInt(stepBase) || 100, velStepStep: parseInt(stepStep) || 5,
       velRescaleMin: parseInt(rescaleMin) || 80, velRescaleMax: parseInt(rescaleMax) || 127,
       velFloorVal: parseInt(floorVal) || 100, instrumentOverrides: instOverrides,
-      velocityScales: velScales, effector: effectorSettings 
+      velocityScales: velScales, effector: effectorSettings,
+      maxChunkNotes: parseInt(maxChunkNotes) || 730
     };
 
     const blob = exportToBdo(tracks, song, options);
@@ -148,7 +150,29 @@ export function BdoExportModal({ onClose }: BdoExportModalProps) {
                 <input type="number" value={transpose} onChange={e => setTranspose(e.target.value)} className={`${inputClass} w-16 text-center`} />
                 <span className="text-xs text-[#8B847A]">semitons</span>
               </div>
+
+              <span className={labelClass}>Notas por Trilha:</span>
+              <div className="flex items-center gap-2">
+                <select 
+                  value={maxChunkNotes} 
+                  onChange={e => setMaxChunkNotes(e.target.value)} 
+                  className={`${inputClass} w-48`}
+                >
+                  <option value="730">730 (Padrão / Rank Inicial)</option>
+                  <option value="1200">1200 (Rank Intermediário)</option>
+                  <option value="2400">2400 (Rank Mestre / Marni)</option>
+                </select>
+              </div>
             </div>
+
+            {ownerId === '0' && (
+              <div className="mt-4 flex items-start gap-2 bg-[#2A1E14] border border-[#6B4B24] p-3 rounded text-xs text-[#E6C280] leading-relaxed">
+                <span className="font-bold text-[#D4AB6A]">Aviso:</span>
+                <span>
+                  O <b>Owner ID</b> é 0. Para que o seu personagem possa reproduzir ou salvar a partitura no jogo, use o botão <b>Carregar ID BDO</b> com um arquivo <code>.bms</code> já salvo previamente pelo seu personagem no Black Desert.
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="relative rounded-sm border border-[#3E3832] bg-[#151515] p-5 pt-6 mt-2 shrink-0">

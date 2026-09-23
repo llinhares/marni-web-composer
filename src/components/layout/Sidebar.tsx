@@ -54,6 +54,9 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
         return 'Grand Piano'; 
       };
 
+      const midiPpq = midi.header.ppq || 480;
+      const ppqFactor = 480 / midiPpq;
+
       const newTracks: Track[] = midi.tracks.map((midiTrack, index) => ({
         id: `track-midi-${index}-${Date.now()}`,
         name: midiTrack.name || `MIDI Track ${index + 1}`,
@@ -64,9 +67,9 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
         notes: midiTrack.notes.map(note => ({
           id: `note-midi-${Math.random().toString(36).substring(2, 9)}`,
           pitch: note.name,
-          startTick: note.ticks,
-          durationTicks: note.durationTicks,
-          velocity: Math.floor(note.velocity * 100)
+          startTick: Math.round(note.ticks * ppqFactor),
+          durationTicks: Math.max(1, Math.round(note.durationTicks * ppqFactor)),
+          velocity: Math.max(1, Math.min(127, Math.floor(note.velocity * 100)))
         }))
       })).filter(t => t.notes.length > 0);
 

@@ -57,6 +57,9 @@ export interface ComposerState {
   currentTool: ToolType;
   noteStyle: NoteStyleType;
   selectedNoteIds: string[];
+  zoomX: number;
+  zoomY: number;
+  seekTick: number;
   
   setTitle: (title: string) => void;
   setBpm: (bpm: number) => void;
@@ -80,4 +83,7 @@ export interface ComposerState {
   setSelectedNotes: (ids: string[]) => void;
   deleteSelectedNotes: () => void;
   setMidiData: (tracks: Track[], bpm: number) => void;
+  setZoomX: (zoom: number) => void;
+  setZoomY: (zoom: number) => void;
+  setSeekTick: (tick: number) => void;
 }
