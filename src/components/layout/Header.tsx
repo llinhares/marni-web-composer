@@ -10,6 +10,8 @@ import { playComposition, stopComposition, setGlobalBpm } from '@/core/audio/Ton
 import { EffectorModal } from '../controls/EffectorModal';
 import { webMidi } from '@/core/midi/WebMidiManager';
 
+import { useShallow } from 'zustand/react/shallow';
+
 interface HeaderProps {
   onMenuClick: () => void;
 }
@@ -22,7 +24,14 @@ export function Header({ onMenuClick }: HeaderProps) {
     ghostNotesEnabled, toggleGhostNotes,
     isRecording, setIsRecording,
     midiConnected, setShowMixer
-  } = useComposerStore();
+  } = useComposerStore(useShallow(state => ({
+    song: state.song, tracks: state.tracks, isPlaying: state.isPlaying, setIsPlaying: state.setIsPlaying, setBpm: state.setBpm, snapResolution: state.snapResolution, setSnapResolution: state.setSnapResolution, setTimeSignature: state.setTimeSignature,
+    currentTool: state.currentTool, setCurrentTool: state.setCurrentTool, noteStyle: state.noteStyle, setNoteStyle: state.setNoteStyle,
+    zoomX: state.zoomX, setZoomX: state.setZoomX, seekTick: state.seekTick,
+    ghostNotesEnabled: state.ghostNotesEnabled, toggleGhostNotes: state.toggleGhostNotes,
+    isRecording: state.isRecording, setIsRecording: state.setIsRecording,
+    midiConnected: state.midiConnected, setShowMixer: state.setShowMixer
+  })));
 
   const { canUndo, canRedo, undo, redo } = useComposerHistoryState();
   

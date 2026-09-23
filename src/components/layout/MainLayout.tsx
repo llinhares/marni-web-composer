@@ -9,8 +9,12 @@ import { OnboardingModal } from '../controls/OnboardingModal';
 import { MixerModal } from '../controls/MixerModal';
 import { exportWavAudio } from '@/core/audio/ToneEngine';
 
+import { useShallow } from 'zustand/react/shallow';
+
 export function MainLayout() {
-  const { song, tracks, setTitle, showMixer, setShowMixer } = useComposerStore();
+  const { song, tracks, setTitle, showMixer, setShowMixer } = useComposerStore(useShallow(state => ({
+    song: state.song, tracks: state.tracks, setTitle: state.setTitle, showMixer: state.showMixer, setShowMixer: state.setShowMixer
+  })));
   const [showBdoExport, setShowBdoExport] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);

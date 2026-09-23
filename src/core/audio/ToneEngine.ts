@@ -1,76 +1,22 @@
 import * as Tone from 'tone';
-import { type Track, type EffectorSettings } from '@/types';
+import { type Track } from '@/types';
 import { useComposerStore } from '@/store/useComposerStore';
+
+import { DRUM_TONE_MAP, createInstrument, instruments, fallbackSynth } from './ToneInstruments';
+import { chorus } from './ToneEffects';
+
+export { updateEffector, updateMasterVolume, getMasterLevel } from './ToneEffects';
 
 Tone.Transport.PPQ = 480;
 
 const trackChannels: Record<string, Tone.Channel> = {};
 const trackParts: Record<string, Tone.Part> = {};
 const trackMeters: Record<string, Tone.Meter> = {};
-const instruments: Record<string, Tone.Sampler | Tone.PolySynth> = {};
-
-// Fallback synth for when samples are loading or missing
-const fallbackSynth = new Tone.PolySynth(Tone.Synth, {
-  oscillator: { type: 'triangle' },
-  envelope: { attack: 0.05, decay: 0.2, sustain: 0.6, release: 0.8 },
-});
-
-const chorus = new Tone.Chorus({ frequency: 2, delayTime: 2.5, depth: 0.5 }).start();
-const delay = new Tone.FeedbackDelay({ delayTime: "8n", feedback: 0.2 });
-const reverb = new Tone.Reverb({ decay: 1.5 });
-const masterVolume = new Tone.Volume(0);
-const masterMeter = new Tone.Meter();
-
-fallbackSynth.connect(chorus);
-chorus.chain(delay, reverb, masterVolume, masterMeter, Tone.Destination);
-chorus.wet.value = 0;
-delay.wet.value = 0;
-reverb.wet.value = 0;
-
-export const updateEffector = (settings: EffectorSettings) => {
-  reverb.decay = Math.max(0.1, (settings.reverbTime / 100) * 10);
-  reverb.wet.value = settings.reverbTime / 100;
-  delay.feedback.value = (settings.delayFeedback / 100) * 0.8;
-  delay.wet.value = settings.delayFeedback > 0 ? 0.5 : 0;
-  chorus.feedback.value = settings.chorusFeedback / 100;
-  chorus.depth = settings.chorusDepth / 100;
-  chorus.frequency.value = (settings.chorusFreq / 100) * 10;
-  chorus.wet.value = (settings.chorusFeedback > 0 || settings.chorusDepth > 0) ? 0.5 : 0;
-};
-
-export const updateMasterVolume = (volume: number) => {
-  masterVolume.volume.value = Tone.gainToDb(Math.max(0.0001, volume / 100));
-};
-
-export const getMasterLevel = (): number => {
-  const val = masterMeter.getValue();
-  return typeof val === 'number' ? val : -100;
-};
 
 export const getTrackLevel = (trackId: string): number => {
   if (!trackMeters[trackId]) return -100;
   const val = trackMeters[trackId].getValue();
   return typeof val === 'number' ? val : -100;
-};
-
-const DRUM_TONE_MAP: Record<string, string> = {
-  'Kck': 'C2',
-  'SnrSide': 'C#2',
-  'SnrHit': 'D2',
-  'RimShot': 'D#2',
-  'SnrFlam': 'E2',
-  'Tom1': 'F2',
-  'HihatC': 'F#2',
-  'Tom2': 'G2',
-  'HatPdl': 'G#2',
-  'Tom3': 'A2',
-  'HihatO': 'A#2',
-  'Tom4': 'B2',
-  'Tom5': 'C3',
-  'CymCrsh': 'C#3',
-  'CymRide': 'D3',
-  'SnrRollS': 'D#3',
-  'SnrRollL': 'E3'
 };
 
 const getTrackChannel = (trackId: string): Tone.Channel => {
@@ -86,147 +32,10 @@ const getTrackChannel = (trackId: string): Tone.Channel => {
 
 const getInstrument = (type: string, trackId: string): Tone.Sampler | Tone.PolySynth => {
   const key = `${type}-${trackId}`;
-  
   if (!instruments[key]) {
     const channel = getTrackChannel(trackId);
-    
-    if (type === 'Grand Piano' || type === 'Piano de Iniciante') {
-      instruments[key] = new Tone.Sampler({
-        urls: { A0: "A0.mp3", C1: "C1.mp3", C4: "C4.mp3", A7: "A7.mp3" },
-        baseUrl: "https://tonejs.github.io/audio/salamander/",
-        release: 2.5,
-        onerror: (err) => console.warn('Piano sample load fallback:', err)
-      }).connect(channel);
-    } 
-    else if (type === 'Flauta Transversal' || type === 'Flauta de Iniciante' || type === 'Flauta Doce de Iniciante' || type === 'Clarinete') {
-      instruments[key] = new Tone.PolySynth(Tone.FMSynth, {
-        harmonicity: 2, modulationIndex: 1.5,
-        oscillator: { type: "sine" }, 
-        envelope: { attack: 0.08, decay: 0.2, sustain: 1, release: 0.6 },
-      }).connect(channel);
-    } 
-    else if (type === 'Contrabaixo') {
-      instruments[key] = new Tone.PolySynth(Tone.Synth, {
-        oscillator: { type: "sawtooth" }, 
-        envelope: { attack: 0.15, decay: 0.3, sustain: 0.7, release: 0.9 }
-      }).connect(channel);
-    } 
-    else if (type === 'Violino' || type === 'Violino de Iniciante') {
-      instruments[key] = new Tone.PolySynth(Tone.Synth, {
-        oscillator: { type: "sawtooth" }, 
-        envelope: { attack: 0.2, decay: 0.3, sustain: 0.85, release: 1.0 }
-      }).connect(channel);
-    } 
-    else if (type === 'Trompa') {
-      instruments[key] = new Tone.PolySynth(Tone.Synth, {
-        oscillator: { type: "triangle" },
-        envelope: { attack: 0.12, decay: 0.3, sustain: 0.9, release: 0.8 }
-      }).connect(channel);
-    }
-    else if (type === 'Guitarra Silver Wave') {
-      instruments[key] = new Tone.PolySynth(Tone.Synth, {
-        oscillator: { type: "triangle" },
-        envelope: { attack: 0.02, decay: 0.4, sustain: 0.4, release: 1.2 }
-      }).connect(channel);
-    }
-    else if (type === 'Guitarra Highway') {
-      instruments[key] = new Tone.PolySynth(Tone.Synth, {
-        oscillator: { type: "sawtooth" },
-        envelope: { attack: 0.01, decay: 0.5, sustain: 0.6, release: 1.0 }
-      }).connect(channel);
-    }
-    else if (type === 'Guitarra Hexe Glam') {
-      instruments[key] = new Tone.PolySynth(Tone.Synth, {
-        oscillator: { type: "sawtooth8" },
-        envelope: { attack: 0.02, decay: 0.6, sustain: 0.7, release: 1.4 }
-      }).connect(channel);
-    }
-    else if (type === 'Marnibass') {
-      instruments[key] = new Tone.PolySynth(Tone.MonoSynth, {
-        oscillator: { type: "square" },
-        filter: { Q: 3, type: "lowpass", rolloff: -24 },
-        filterEnvelope: { attack: 0.02, decay: 0.2, sustain: 0.2, release: 0.4, baseFrequency: 60, octaves: 3 }
-      }).connect(channel);
-    }
-    else if (type === 'Marnian Wavy Planet') {
-      instruments[key] = new Tone.PolySynth(Tone.FMSynth, {
-        harmonicity: 3, modulationIndex: 4,
-        oscillator: { type: "sine" },
-        envelope: { attack: 0.05, decay: 0.3, sustain: 0.6, release: 1.0 }
-      }).connect(channel);
-    }
-    else if (type === 'Marnian Illusion Tree') {
-      instruments[key] = new Tone.PolySynth(Tone.AMSynth, {
-        harmonicity: 2.5,
-        oscillator: { type: "sine" },
-        envelope: { attack: 0.4, decay: 0.8, sustain: 0.8, release: 2.2 }
-      }).connect(channel);
-    }
-    else if (type === 'Marnian Secret Note') {
-      instruments[key] = new Tone.PolySynth(Tone.FMSynth, {
-        harmonicity: 5.01, modulationIndex: 10,
-        oscillator: { type: "sine" },
-        envelope: { attack: 0.005, decay: 0.8, sustain: 0.1, release: 1.5 }
-      }).connect(channel);
-    }
-    else if (type === 'Marnian Sandwich') {
-      instruments[key] = new Tone.PolySynth(Tone.Synth, {
-        oscillator: { type: "pulse", width: 0.4 },
-        envelope: { attack: 0.02, decay: 0.25, sustain: 0.5, release: 0.7 }
-      }).connect(channel);
-    }
-    else if (type === 'Handpan') {
-      instruments[key] = new Tone.PolySynth(Tone.FMSynth, {
-        harmonicity: 1.5, modulationIndex: 3,
-        oscillator: { type: "sine" },
-        envelope: { attack: 0.005, decay: 1.2, sustain: 0.1, release: 2.0 }
-      }).connect(channel);
-    }
-    else if (type === 'Kit de Bateria' || type === 'Tamborim' || type === 'Pratos') {
-      instruments[key] = new Tone.Sampler({
-        urls: {
-          "C2": "kick.flac",   
-          "D2": "snare.flac",  
-          "F#2": "hihat.flac",
-          "F2": "tom1.flac",
-          "C#3": "crash.flac",
-        },
-        baseUrl: "/samples/percussao/",
-        onerror: () => console.warn('Percussion sample load fallback')
-      }).connect(channel);
-    } 
-    else if (type === 'Harpa' || type === 'Harpa de Iniciante') {
-      instruments[key] = new Tone.Sampler({
-        urls: {
-          "A2": "A2_f1.flac", "A6": "A6_f1.flac", "B1": "B1_f1.flac", "B3": "B3_f1.flac",
-          "B5": "B5_f1.flac", "B6": "B6_f1.flac", "C3": "C3_f2.flac", "C5": "C5_f1.flac",
-          "D2": "D2_f1.flac", "D4": "D4_mf1.flac", "D6": "D6_f1.flac", "D7": "D7_f1.flac",
-          "E1": "E1_f1.flac", "E3": "E3_f1.flac", "E5": "E5_f1.flac", "F2": "F2_f1.flac",
-          "F4": "F4_f1.flac", "F6": "F6_f1.flac", "F7": "F7_f1.flac", "G1": "G1_f1.flac",
-          "G3": "G3_f1.flac", "G5": "G5_f1.flac",
-        },
-        baseUrl: "/samples/harpa/",
-        release: 2.5,
-        onerror: () => console.warn('Harp sample load fallback')
-      }).connect(channel);
-    }
-    else if (type === 'Violão Acústico' || type === 'Violão de Iniciante') {
-      instruments[key] = new Tone.Sampler({
-        urls: {
-          "E2": "HV_40.wav", "A2": "HV_45.wav", "D3": "HV_50.wav", "G3": "HV_55.wav",
-          "C4": "HV_60.wav", "F4": "HV_65.wav", "A#4": "HV_70.wav", "D#5": "HV_75.wav",
-          "G#5": "HV_80.wav", "B5": "HV_83.wav",
-        },
-        baseUrl: "/samples/violao/",
-        release: 2.0,
-        onerror: () => console.warn('Acoustic guitar sample load fallback')
-      }).connect(channel);
-    }
-    else {
-      instruments[key] = new Tone.PolySynth().connect(channel);
-    }
+    instruments[key] = createInstrument(type, channel);
   }
-  
   return instruments[key];
 };
 

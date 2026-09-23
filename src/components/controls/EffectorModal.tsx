@@ -63,8 +63,12 @@ interface EffectorModalProps {
   onClose: () => void;
 }
 
+import { useShallow } from 'zustand/react/shallow';
+
 export function EffectorModal({ onClose }: EffectorModalProps) {
-  const { effectorSettings, setEffectorSettings } = useComposerStore();
+  const { effectorSettings, setEffectorSettings } = useComposerStore(useShallow(state => ({
+    effectorSettings: state.effectorSettings, setEffectorSettings: state.setEffectorSettings
+  })));
 
   const handleUpdate = (key: keyof typeof effectorSettings, value: number) => {
     const newSettings = { ...effectorSettings, [key]: value };

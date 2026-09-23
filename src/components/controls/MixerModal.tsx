@@ -7,11 +7,16 @@ interface MixerModalProps {
   onClose: () => void;
 }
 
+import { useShallow } from 'zustand/react/shallow';
+
 export function MixerModal({ onClose }: MixerModalProps) {
   const { 
     tracks, updateTrackVolume, setTrackPan, toggleTrackMute, toggleTrackSolo,
     masterVolume, setMasterVolume 
-  } = useComposerStore();
+  } = useComposerStore(useShallow(state => ({
+    tracks: state.tracks, updateTrackVolume: state.updateTrackVolume, setTrackPan: state.setTrackPan, toggleTrackMute: state.toggleTrackMute, toggleTrackSolo: state.toggleTrackSolo,
+    masterVolume: state.masterVolume, setMasterVolume: state.setMasterVolume
+  })));
 
   const meterCanvasRef = useRef<HTMLCanvasElement>(null);
 

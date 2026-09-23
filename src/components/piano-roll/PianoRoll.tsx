@@ -3,10 +3,14 @@ import { Stage, Layer, Line, Text, Rect, Group } from 'react-konva';
 import { type KonvaEventObject } from 'konva/lib/Node';
 import { PIANO_ROLL, INSTRUMENT_DICT } from '@/utils/constants';
 import { useComposerStore, useComposerHistoryState } from '@/store/useComposerStore';
+import { useShallow } from 'zustand/react/shallow';
 import type { InstrumentType, Note } from '@/types';
 import { NoteBlock } from './NoteBlock';
 import { playFeedbackNote, playComposition } from '@/core/audio/ToneEngine';
 import * as Tone from 'tone';
+import { GridBackground } from './GridBackground';
+import { KeyboardVertical } from './KeyboardVertical';
+import { TimelineRuler } from './TimelineRuler';
 
 const generateNoteId = () => `note-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 
@@ -22,7 +26,12 @@ export function PianoRoll() {
     currentTool, selectedNoteIds, setSelectedNotes, deleteSelectedNotes,
     zoomX, zoomY, setZoomX, seekTick, setSeekTick,
     ghostNotesEnabled, toggleGhostNotes
-  } = useComposerStore();
+  } = useComposerStore(useShallow(state => ({
+    tracks: state.tracks, activeTrackId: state.activeTrackId, addNoteToTrack: state.addNoteToTrack, removeNoteFromTrack: state.removeNoteFromTrack, updateNoteInTrack: state.updateNoteInTrack, isPlaying: state.isPlaying, song: state.song, snapResolution: state.snapResolution,
+    currentTool: state.currentTool, selectedNoteIds: state.selectedNoteIds, setSelectedNotes: state.setSelectedNotes, deleteSelectedNotes: state.deleteSelectedNotes,
+    zoomX: state.zoomX, zoomY: state.zoomY, setZoomX: state.setZoomX, seekTick: state.seekTick, setSeekTick: state.setSeekTick,
+    ghostNotesEnabled: state.ghostNotesEnabled, toggleGhostNotes: state.toggleGhostNotes
+  })));
 
   const { undo, redo } = useComposerHistoryState();
   
@@ -396,14 +405,7 @@ export function PianoRoll() {
             <Rect x={PIANO_ROLL.KEYBOARD_WIDTH} y={0} width={totalWidth} height={totalHeight} fill="transparent" />
 
             {/* Culled Grid lines */}
-            <Group listening={false}>
-              {visibleGrid.pitchLines.map((line) => (
-                <Line key={line.key} points={[PIANO_ROLL.KEYBOARD_WIDTH, line.y, totalWidth, line.y]} stroke={colors.gridBeat} strokeWidth={1} />
-              ))}
-              {visibleGrid.beatLines.map((line) => (
-                <Line key={line.key} points={[line.x, 0, line.x, totalHeight]} stroke={line.isMeasure ? colors.gridMeasure : colors.gridBeat} strokeWidth={line.isMeasure ? 2 : 1} />
-              ))}
-            </Group>
+            <GridBackground visibleGrid={visibleGrid} totalWidth={totalWidth} totalHeight={totalHeight} colors={colors} />
 
             {/* Ghost Notes from other unmuted tracks */}
             {ghostNotesEnabled && (
@@ -483,42 +485,14 @@ export function PianoRoll() {
           </Group>
 
           {/* Left Vertical Keyboard */}
-          <Group x={0} y={-scroll.y + PIANO_ROLL.TIMELINE_HEIGHT} listening={false}>
-            {gridNotes.map((note, index) => {
-              const y = index * currentNoteHeight;
-              const isBlackKey = note.includes('#');
-              return (
-                <Group key={`key-${note}`} y={y}>
-                  <Rect x={0} y={0} width={PIANO_ROLL.KEYBOARD_WIDTH} height={currentNoteHeight} fill={isBlackKey ? colors.bgKeyboardBlack : colors.bgKeyboardWhite} stroke={colors.gridBeat} strokeWidth={1} />
-                  <Text text={note} x={6} y={Math.max(2, (currentNoteHeight - 10) / 2)} fontSize={10} fill={isBlackKey ? colors.textMuted : colors.textPrimary} fontFamily="sans-serif" fontStyle="bold" />
-                </Group>
-              );
-            })}
-            <Line points={[PIANO_ROLL.KEYBOARD_WIDTH, 0, PIANO_ROLL.KEYBOARD_WIDTH, totalHeight]} stroke={colors.gridMeasure} strokeWidth={2} />
-          </Group>
+          <KeyboardVertical gridNotes={gridNotes} currentNoteHeight={currentNoteHeight} scroll={scroll} totalHeight={totalHeight} colors={colors} />
 
           {/* Top Horizontal Timeline / Ruler with Click-to-Seek */}
-          <Group x={-scroll.x} y={0}>
-            <Rect 
-              x={PIANO_ROLL.KEYBOARD_WIDTH} 
-              y={0} 
-              width={totalWidth} 
-              height={PIANO_ROLL.TIMELINE_HEIGHT} 
-              fill={colors.timelineBg}
-              onClick={handleTimelineClick}
-              onTap={handleTimelineClick}
-            />
-            {Array.from({ length: totalMeasures }).map((_, index) => {
-              const x = PIANO_ROLL.KEYBOARD_WIDTH + (index * currentBeatWidth * beatsPerMeasure);
-              return (
-                <Group key={`measure-marker-${index}`} listening={false}>
-                  <Line points={[x, PIANO_ROLL.TIMELINE_HEIGHT - 6, x, PIANO_ROLL.TIMELINE_HEIGHT]} stroke={colors.gridMeasure} strokeWidth={2} />
-                  <Text text={`${index + 1}`} x={x + 6} y={PIANO_ROLL.TIMELINE_HEIGHT / 2 - 4} fontSize={10} fill={colors.textMuted} fontFamily="sans-serif" fontStyle="bold" />
-                </Group>
-              );
-            })}
-            <Line points={[PIANO_ROLL.KEYBOARD_WIDTH, PIANO_ROLL.TIMELINE_HEIGHT, totalWidth, PIANO_ROLL.TIMELINE_HEIGHT]} stroke={colors.gridMeasure} strokeWidth={2} listening={false} />
-          </Group>
+          <TimelineRuler 
+            scroll={scroll} totalWidth={totalWidth} totalMeasures={totalMeasures} 
+            currentBeatWidth={currentBeatWidth} beatsPerMeasure={beatsPerMeasure} 
+            colors={colors} onTimelineClick={handleTimelineClick} 
+          />
 
           {/* Top-Left Corner Box */}
           <Group x={0} y={0} listening={false}>

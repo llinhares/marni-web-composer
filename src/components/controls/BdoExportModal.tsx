@@ -8,8 +8,12 @@ interface BdoExportModalProps {
   onClose: () => void;
 }
 
+import { useShallow } from 'zustand/react/shallow';
+
 export function BdoExportModal({ onClose }: BdoExportModalProps) {
-  const { song, tracks, effectorSettings } = useComposerStore();
+  const { song, tracks, effectorSettings } = useComposerStore(useShallow(state => ({
+    song: state.song, tracks: state.tracks, effectorSettings: state.effectorSettings
+  })));
 
   const [charName, setCharName] = useState('MIDI');
   const [ownerId, setOwnerId] = useState('0');

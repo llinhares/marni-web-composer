@@ -4,6 +4,7 @@ import { type KonvaEventObject } from 'konva/lib/Node';
 import { type Note } from '@/types';
 import { PIANO_ROLL } from '@/utils/constants';
 import { useComposerStore } from '@/store/useComposerStore';
+import { useShallow } from 'zustand/react/shallow';
 
 interface NoteBlockProps {
   note: Note;
@@ -27,7 +28,9 @@ export function NoteBlock({
   const [dragWidth, setDragWidth] = useState<number | null>(null);
   const isDraggingRef = useRef(false);
 
-  const { currentTool, setSelectedNotes } = useComposerStore();
+  const { currentTool, setSelectedNotes } = useComposerStore(useShallow(state => ({
+    currentTool: state.currentTool, setSelectedNotes: state.setSelectedNotes
+  })));
 
   const snapWidth = (beatWidth * 4) / snapResolution;
 

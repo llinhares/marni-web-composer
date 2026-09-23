@@ -201,7 +201,7 @@ export function exportToBdo(tracks: Track[], song: SongContext, options: ExportO
         ...n,
         pitch: finalPitch,
         startTick: n.startTick * msFactor, 
-        durationTicks: Math.max(60, n.durationTicks * msFactor), // Ensure minimum duration floor against ghost notes
+        durationTicks: n.durationTicks * msFactor, 
         velocity: Math.max(1, Math.min(127, Math.round(n.velocity * scaleFactor)))
       };
     });
@@ -219,12 +219,23 @@ export function exportToBdo(tracks: Track[], song: SongContext, options: ExportO
   
   Object.entries(mergedNotesByInst).forEach(([idStr, groupData]) => {
     const instId = parseInt(idStr);
-    groupData.notes.sort((a, b) => a.startTick - b.startTick);
+    
+    // Remove duplicates (same pitch and startTick) taking the longest duration
+    const noteMap = new Map<string, Note>();
+    groupData.notes.forEach(note => {
+      const key = `${note.pitch}-${Math.round(note.startTick)}`;
+      const existing = noteMap.get(key);
+      if (!existing || note.durationTicks > existing.durationTicks) {
+        noteMap.set(key, note);
+      }
+    });
+    
+    const uniqueNotes = Array.from(noteMap.values()).sort((a, b) => a.startTick - b.startTick);
     
     const chunks: Note[][] = [];
     const chunkLimit = options.maxChunkNotes || 730;
-    for (let i = 0; i < groupData.notes.length; i += chunkLimit) {
-      chunks.push(groupData.notes.slice(i, i + chunkLimit));
+    for (let i = 0; i < uniqueNotes.length; i += chunkLimit) {
+      chunks.push(uniqueNotes.slice(i, i + chunkLimit));
     }
     processedGroups.push({ instId, volume: groupData.volume, tracks: chunks });
   });
