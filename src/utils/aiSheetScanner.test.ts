@@ -93,6 +93,39 @@ test('parseAiTranscription extracts notes, BPM, measures, and chords accurately'
   assert.strictEqual(parsed.chords[0].chord, 'Cm');
 });
 
+test('parseAiTranscription parses compact note tuples and separates right and left hands', () => {
+  const mockCompactOutput = {
+    title: 'Pegasus Fantasy (Piano Solo)',
+    bpm: 164,
+    timeSignature: '4/4',
+    keySignature: 'C minor',
+    notes: [
+      [72, 0, 480, 95, 'right'], // C5 Right hand
+      [48, 0, 960, 90, 'left'],  // C3 Left hand
+      [75, 480, 240, 92, 'right'], // Eb5 Right hand
+      [55, 480, 480, 88, 'left'],  // G3 Left hand
+    ],
+  };
+
+  const parsed = parseAiTranscription(mockCompactOutput, 'track-target-piano');
+
+  assert.strictEqual(parsed.title, 'Pegasus Fantasy (Piano Solo)');
+  assert.strictEqual(parsed.bpm, 164);
+  assert.strictEqual(parsed.notes.length, 4);
+  assert.strictEqual(parsed.rightHandNotes.length, 2);
+  assert.strictEqual(parsed.leftHandNotes.length, 2);
+  assert.strictEqual(parsed.stats.rightHandCount, 2);
+  assert.strictEqual(parsed.stats.leftHandCount, 2);
+
+  // Check right hand notes
+  assert.strictEqual(parsed.rightHandNotes[0].pitch, 72);
+  assert.strictEqual(parsed.rightHandNotes[1].pitch, 75);
+
+  // Check left hand notes
+  assert.strictEqual(parsed.leftHandNotes[0].pitch, 48);
+  assert.strictEqual(parsed.leftHandNotes[1].pitch, 55);
+});
+
 test('parseAiTranscription throws descriptive error on empty or invalid payload', () => {
   assert.throws(() => {
     parseAiTranscription(null, 't1');

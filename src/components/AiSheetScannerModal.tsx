@@ -15,6 +15,8 @@ import {
   RotateCw,
   Clock,
   Layers,
+  Split,
+  BookOpen,
 } from 'lucide-react';
 import type { Track, Note, InstrumentId, TimeSignature } from '../types/music.ts';
 import { BDO_INSTRUMENTS } from '../types/music.ts';
@@ -39,6 +41,13 @@ interface AiSheetScannerModalProps {
       name: string;
       instrumentId: InstrumentId;
     };
+    secondTrack?: {
+      trackId: string;
+      name: string;
+      instrumentId: InstrumentId;
+      notes: Note[];
+    };
+    appendMode?: boolean;
     bpm?: number;
     title?: string;
     timeSignature?: TimeSignature;
@@ -63,11 +72,16 @@ export const AiSheetScannerModal: React.FC<AiSheetScannerModalProps> = ({
   ]);
   const [selectedModel, setSelectedModel] = useState<string>('gemini-3.8-flash');
 
-  // Destination Options
-  const [destinationMode, setDestinationMode] = useState<'new' | 'existing'>('new');
+  // Destination & Track Options
+  const [destinationMode, setDestinationMode] = useState<'new-2tracks' | 'new-1track' | 'existing'>('new-2tracks');
   const [newTrackName, setNewTrackName] = useState('Partitura IA');
   const [newTrackInstrument, setNewTrackInstrument] = useState<InstrumentId>('grand-piano');
   const [targetTrackId, setTargetTrackId] = useState(activeTrackId);
+  const [isAppendMode, setIsAppendMode] = useState(false);
+
+  // Multi-page Range & Playback Options
+  const [pageRangeMode, setPageRangeMode] = useState<'all' | 'custom'>('all');
+  const [customPageRange, setCustomPageRange] = useState('');
   const [autoApplyBpm, setAutoApplyBpm] = useState(true);
 
   // Execution states
@@ -162,6 +176,17 @@ export const AiSheetScannerModal: React.FC<AiSheetScannerModalProps> = ({
     }
   };
 
+  // Compute start tick offset if user wants to append after existing notes
+  const targetTrackObj = tracks.find((t) => t.id === targetTrackId);
+  const existingNotesEnd =
+    targetTrackObj && targetTrackObj.notes.length > 0
+      ? Math.max(...targetTrackObj.notes.map((n) => n.startTick + n.durationTicks))
+      : 0;
+  const computedOffset =
+    isAppendMode && destinationMode === 'existing' && existingNotesEnd > 0
+      ? Math.ceil(existingNotesEnd / 1920) * 1920
+      : 0;
+
   const handleStartScan = async () => {
     if (!apiKey.trim()) {
       setErrorMessage('Por favor, insira sua chave de API do Gemini para continuar.');
@@ -179,10 +204,12 @@ export const AiSheetScannerModal: React.FC<AiSheetScannerModalProps> = ({
     handleSaveKey();
 
     try {
-      setStatusMessage('Decodificando pauta, notas, compassos e acidentes...');
+      setStatusMessage('Decodificando pauta dupla (Claves de Sol e Fá), notas e compassos...');
       const result = await transcribeSheetImageWithGemini(selectedFile, apiKey, {
         model: selectedModel,
         targetTrackId: destinationMode === 'existing' ? targetTrackId : `track-ai-${Date.now()}`,
+        pageRange: pageRangeMode === 'custom' && customPageRange.trim() ? customPageRange.trim() : 'all',
+        startTickOffset: computedOffset,
       });
 
       setScanResult(result);
@@ -198,14 +225,58 @@ export const AiSheetScannerModal: React.FC<AiSheetScannerModalProps> = ({
   const handleConfirmImport = () => {
     if (!scanResult) return;
 
-    if (destinationMode === 'new') {
+    const baseTitle = newTrackName || scanResult.title || 'Partitura IA';
+
+    if (destinationMode === 'new-2tracks') {
+      const rightTrackId = `track-ai-rh-${Date.now()}`;
+      const leftTrackId = `track-ai-lh-${Date.now() + 1}`;
+
+      const rightNotes = (
+        scanResult.rightHandNotes.length > 0 ? scanResult.rightHandNotes : scanResult.notes
+      ).map((n) => ({
+        ...n,
+        id: `note-${Date.now()}-${Math.random()}`,
+        trackId: rightTrackId,
+      }));
+
+      const leftNotes = scanResult.leftHandNotes.map((n) => ({
+        ...n,
+        id: `note-${Date.now() + 1}-${Math.random()}`,
+        trackId: leftTrackId,
+      }));
+
+      onImportScore({
+        notes: rightNotes,
+        targetTrackId: rightTrackId,
+        createNewTrack: {
+          name: `${baseTitle} (Mão Direita / Clave Sol)`,
+          instrumentId: newTrackInstrument,
+        },
+        secondTrack:
+          leftNotes.length > 0
+            ? {
+                trackId: leftTrackId,
+                name: `${baseTitle} (Mão Esquerda / Clave Fá)`,
+                instrumentId: newTrackInstrument,
+                notes: leftNotes,
+              }
+            : undefined,
+        bpm: autoApplyBpm ? scanResult.bpm : undefined,
+        title: scanResult.title,
+        timeSignature: scanResult.timeSignature,
+      });
+    } else if (destinationMode === 'new-1track') {
       const newId = `track-ai-${Date.now()}`;
-      const remappedNotes = scanResult.notes.map((n) => ({ ...n, trackId: newId }));
+      const remappedNotes = scanResult.notes.map((n) => ({
+        ...n,
+        id: `note-${Date.now()}-${Math.random()}`,
+        trackId: newId,
+      }));
       onImportScore({
         notes: remappedNotes,
         targetTrackId: newId,
         createNewTrack: {
-          name: newTrackName || scanResult.title || 'Partitura IA',
+          name: baseTitle,
           instrumentId: newTrackInstrument,
         },
         bpm: autoApplyBpm ? scanResult.bpm : undefined,
@@ -213,10 +284,15 @@ export const AiSheetScannerModal: React.FC<AiSheetScannerModalProps> = ({
         timeSignature: scanResult.timeSignature,
       });
     } else {
-      const remappedNotes = scanResult.notes.map((n) => ({ ...n, trackId: targetTrackId }));
+      const remappedNotes = scanResult.notes.map((n) => ({
+        ...n,
+        id: `note-${Date.now()}-${Math.random()}`,
+        trackId: targetTrackId,
+      }));
       onImportScore({
         notes: remappedNotes,
         targetTrackId,
+        appendMode: isAppendMode,
         bpm: autoApplyBpm ? scanResult.bpm : undefined,
         title: scanResult.title,
         timeSignature: scanResult.timeSignature,
@@ -436,105 +512,198 @@ export const AiSheetScannerModal: React.FC<AiSheetScannerModalProps> = ({
             )}
           </div>
 
-          {/* 3. Destination & Instrument Options */}
+          {/* 3. Destination, Hands & Multi-Page Options */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 p-3.5 rounded-xl bg-stone-900/60 border border-[#2d2722]">
             {/* Destination Selection */}
-            <div className="space-y-1.5">
+            <div className="space-y-2">
               <span className="font-semibold text-stone-300 flex items-center gap-1.5">
                 <Layers className="w-3.5 h-3.5 text-amber-400" />
-                Destino das Notas
+                Destino das Notas & Pauta
               </span>
-              <div className="flex items-center gap-2">
+
+              {/* 3 Mode Buttons */}
+              <div className="grid grid-cols-3 gap-1.5">
                 <button
                   type="button"
-                  onClick={() => setDestinationMode('new')}
-                  className={`flex-1 py-1.5 px-2.5 rounded-lg border text-xs font-semibold transition-all ${
-                    destinationMode === 'new'
+                  onClick={() => setDestinationMode('new-2tracks')}
+                  className={`py-1.5 px-2 rounded-lg border text-[11px] font-semibold leading-tight text-center transition-all flex flex-col items-center justify-center gap-0.5 ${
+                    destinationMode === 'new-2tracks'
+                      ? 'bg-amber-500 text-stone-950 border-amber-400 shadow-sm'
+                      : 'bg-stone-900 border-[#3e342b] text-stone-400 hover:text-stone-200'
+                  }`}
+                  title="Separa Clave de Sol (Mão Direita) e Clave de Fá (Mão Esquerda) em duas faixas"
+                >
+                  <Split className="w-3 h-3" />
+                  <span>2 Faixas (Piano)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setDestinationMode('new-1track')}
+                  className={`py-1.5 px-2 rounded-lg border text-[11px] font-semibold leading-tight text-center transition-all flex flex-col items-center justify-center gap-0.5 ${
+                    destinationMode === 'new-1track'
                       ? 'bg-amber-500 text-stone-950 border-amber-400 shadow-sm'
                       : 'bg-stone-900 border-[#3e342b] text-stone-400 hover:text-stone-200'
                   }`}
                 >
-                  + Criar Nova Faixa
+                  <Layers className="w-3 h-3" />
+                  <span>1 Faixa Única</span>
                 </button>
+
                 <button
                   type="button"
                   onClick={() => setDestinationMode('existing')}
-                  className={`flex-1 py-1.5 px-2.5 rounded-lg border text-xs font-semibold transition-all ${
+                  className={`py-1.5 px-2 rounded-lg border text-[11px] font-semibold leading-tight text-center transition-all flex flex-col items-center justify-center gap-0.5 ${
                     destinationMode === 'existing'
                       ? 'bg-amber-500 text-stone-950 border-amber-400 shadow-sm'
                       : 'bg-stone-900 border-[#3e342b] text-stone-400 hover:text-stone-200'
                   }`}
                 >
-                  Substituir na Faixa Atual
+                  <Music className="w-3 h-3" />
+                  <span>Faixa Atual</span>
                 </button>
               </div>
 
-              {destinationMode === 'new' ? (
-                <div className="flex items-center gap-2 pt-1">
-                  <input
-                    type="text"
-                    value={newTrackName}
-                    onChange={(e) => setNewTrackName(e.target.value)}
-                    placeholder="Nome da Faixa"
-                    className="flex-1 bg-[#141210] border border-[#3e342b] rounded-lg px-2.5 py-1 text-xs text-stone-200 focus:outline-none focus:border-amber-500"
-                  />
-                  <select
-                    value={newTrackInstrument}
-                    onChange={(e) => setNewTrackInstrument(e.target.value as InstrumentId)}
-                    className="bg-[#141210] border border-[#3e342b] rounded-lg px-2 py-1 text-xs text-stone-200 focus:outline-none focus:border-amber-500"
-                  >
-                    {BDO_INSTRUMENTS.map((inst) => (
-                      <option key={inst.id} value={inst.id}>
-                        {inst.name}
-                      </option>
-                    ))}
-                  </select>
+              {destinationMode !== 'existing' ? (
+                <div className="space-y-1.5 pt-0.5">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={newTrackName}
+                      onChange={(e) => setNewTrackName(e.target.value)}
+                      placeholder="Nome da Faixa / Música"
+                      className="flex-1 bg-[#141210] border border-[#3e342b] rounded-lg px-2.5 py-1 text-xs text-stone-200 focus:outline-none focus:border-amber-500"
+                    />
+                    <select
+                      value={newTrackInstrument}
+                      onChange={(e) => setNewTrackInstrument(e.target.value as InstrumentId)}
+                      className="bg-[#141210] border border-[#3e342b] rounded-lg px-2 py-1 text-xs text-stone-200 focus:outline-none focus:border-amber-500"
+                    >
+                      {BDO_INSTRUMENTS.map((inst) => (
+                        <option key={inst.id} value={inst.id}>
+                          {inst.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <p className="text-[10px] text-stone-400 leading-tight">
+                    {destinationMode === 'new-2tracks'
+                      ? '🎹 Separa a partitura em 2 trilhas: Clave de Sol (Mão Direita) e Clave de Fá (Mão Esquerda) para edição independente.'
+                      : 'Todas as notas de ambas as claves serão combinadas em uma única faixa.'}
+                  </p>
                 </div>
               ) : (
-                <div className="pt-1">
-                  <span className="text-[11px] text-stone-400">
-                    Trilha selecionada: <strong className="text-amber-400">{activeTrackObj?.name}</strong> (as notas atuais serão substituídas)
-                  </span>
+                <div className="space-y-2 pt-0.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] text-stone-400 whitespace-nowrap">Faixa:</span>
+                    <select
+                      value={targetTrackId}
+                      onChange={(e) => setTargetTrackId(e.target.value)}
+                      className="flex-1 bg-[#141210] border border-[#3e342b] rounded-lg px-2 py-1 text-xs text-stone-200 focus:outline-none focus:border-amber-500"
+                    >
+                      {tracks.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name} ({t.notes.length} notas)
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <label className="flex items-center gap-2 text-[11px] text-stone-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={isAppendMode}
+                      onChange={(e) => setIsAppendMode(e.target.checked)}
+                      className="rounded border-[#3e342b] accent-amber-500 w-3.5 h-3.5"
+                    />
+                    <span>Anexar ao final da faixa (modo continuação)</span>
+                  </label>
+
+                  {isAppendMode && existingNotesEnd > 0 && (
+                    <span className="block text-[10px] text-amber-400/90 bg-amber-950/30 px-2 py-0.5 rounded border border-amber-800/30">
+                      Iniciará a partir do compasso {Math.ceil(existingNotesEnd / 1920) + 1} (~tick {computedOffset})
+                    </span>
+                  )}
                 </div>
               )}
             </div>
 
-            {/* Model & BPM Options */}
-            <div className="space-y-1.5">
+            {/* Page Range, Model & BPM Options */}
+            <div className="space-y-2">
               <span className="font-semibold text-stone-300 flex items-center gap-1.5">
-                <Clock className="w-3.5 h-3.5 text-amber-400" />
-                Configurações do Andamento
+                <BookOpen className="w-3.5 h-3.5 text-amber-400" />
+                Páginas da Partitura
               </span>
 
-              <label className="flex items-center gap-2 pt-1 text-xs text-stone-300 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={autoApplyBpm}
-                  onChange={(e) => setAutoApplyBpm(e.target.checked)}
-                  className="rounded border-[#3e342b] accent-amber-500 w-3.5 h-3.5"
-                />
-                <span>Ajustar BPM do projeto automaticamente ao tempo detectado</span>
-              </label>
-
-              <div className="flex items-center gap-2 pt-1">
-                <span className="text-[11px] text-stone-400">Modelo IA:</span>
-                <select
-                  value={selectedModel}
-                  onChange={(e) => setSelectedModel(e.target.value)}
-                  className="bg-[#141210] border border-[#3e342b] rounded-lg px-2 py-1 text-xs text-stone-300 focus:outline-none"
+              {/* Page Range Selection */}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPageRangeMode('all')}
+                  className={`py-1 px-2.5 rounded-lg border text-xs font-semibold transition-all ${
+                    pageRangeMode === 'all'
+                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                      : 'bg-stone-900 border-[#3e342b] text-stone-400 hover:text-stone-200'
+                  }`}
                 >
-                  {availableModels.map((m) => (
-                    <option key={m} value={m}>
-                      {m === 'gemini-3.8-flash'
-                        ? 'Gemini 3.8 Flash (Recomendado)'
-                        : m === 'gemini-3.8-flash-lite'
-                        ? 'Gemini 3.8 Flash-Lite (Rápido)'
-                        : m === 'gemini-2.5-flash'
-                        ? 'Gemini 2.5 Flash'
-                        : m}
-                    </option>
-                  ))}
-                </select>
+                  Todas as Páginas
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPageRangeMode('custom')}
+                  className={`py-1 px-2.5 rounded-lg border text-xs font-semibold transition-all ${
+                    pageRangeMode === 'custom'
+                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                      : 'bg-stone-900 border-[#3e342b] text-stone-400 hover:text-stone-200'
+                  }`}
+                >
+                  Páginas Específicas
+                </button>
+
+                {pageRangeMode === 'custom' && (
+                  <input
+                    type="text"
+                    value={customPageRange}
+                    onChange={(e) => setCustomPageRange(e.target.value)}
+                    placeholder="ex: 1-4 ou 5-8"
+                    className="flex-1 bg-[#141210] border border-[#3e342b] rounded-lg px-2 py-1 text-xs text-stone-200 focus:outline-none focus:border-amber-500 font-mono"
+                  />
+                )}
+              </div>
+
+              {/* Model & BPM Options */}
+              <div className="pt-1 space-y-1.5 border-t border-[#2d2722]/80">
+                <label className="flex items-center gap-2 text-xs text-stone-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={autoApplyBpm}
+                    onChange={(e) => setAutoApplyBpm(e.target.checked)}
+                    className="rounded border-[#3e342b] accent-amber-500 w-3.5 h-3.5"
+                  />
+                  <span>Ajustar BPM do projeto automaticamente ao tempo</span>
+                </label>
+
+                <div className="flex items-center gap-2 pt-0.5">
+                  <span className="text-[11px] text-stone-400 whitespace-nowrap">Modelo IA:</span>
+                  <select
+                    value={selectedModel}
+                    onChange={(e) => setSelectedModel(e.target.value)}
+                    className="flex-1 bg-[#141210] border border-[#3e342b] rounded-lg px-2 py-1 text-xs text-stone-300 focus:outline-none"
+                  >
+                    {availableModels.map((m) => (
+                      <option key={m} value={m}>
+                        {m === 'gemini-3.8-flash'
+                          ? 'Gemini 3.8 Flash (Recomendado)'
+                          : m === 'gemini-3.8-flash-lite'
+                          ? 'Gemini 3.8 Flash-Lite (Rápido)'
+                          : m === 'gemini-2.5-flash'
+                          ? 'Gemini 2.5 Flash'
+                          : m}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
             </div>
           </div>
@@ -553,16 +722,22 @@ export const AiSheetScannerModal: React.FC<AiSheetScannerModalProps> = ({
           {/* Success Scan Result Card */}
           {scanResult && (
             <div className="p-4 rounded-xl bg-amber-950/20 border border-amber-500/40 space-y-3 animate-in fade-in">
-              <div className="flex items-center justify-between border-b border-amber-500/20 pb-2">
+              <div className="flex flex-wrap items-center justify-between border-b border-amber-500/20 pb-2 gap-2">
                 <div className="flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4 text-emerald-400" />
                   <span className="font-bold text-amber-300 text-sm">
                     {scanResult.title || 'Partitura Transcrita'}
                   </span>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-1.5">
                   <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono text-[11px] font-bold">
-                    {scanResult.stats.totalNotes} Notas
+                    {scanResult.stats.totalNotes} Notas no total
+                  </span>
+                  <span className="px-2 py-0.5 rounded bg-sky-950/60 text-sky-300 border border-sky-800/40 font-mono text-[11px]">
+                    Mão Dir: {scanResult.stats.rightHandCount}
+                  </span>
+                  <span className="px-2 py-0.5 rounded bg-purple-950/60 text-purple-300 border border-purple-800/40 font-mono text-[11px]">
+                    Mão Esq: {scanResult.stats.leftHandCount}
                   </span>
                   <span className="px-2 py-0.5 rounded bg-stone-800 text-stone-300 font-mono text-[11px]">
                     {scanResult.bpm} BPM
@@ -572,6 +747,15 @@ export const AiSheetScannerModal: React.FC<AiSheetScannerModalProps> = ({
                   </span>
                 </div>
               </div>
+
+              {destinationMode === 'new-2tracks' && scanResult.stats.leftHandCount > 0 && (
+                <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-300 flex items-center gap-2">
+                  <Split className="w-3.5 h-3.5 shrink-0" />
+                  <span>
+                    Serão criadas 2 faixas simultâneas: <strong>Mão Direita (Clave de Sol)</strong> com {scanResult.stats.rightHandCount} notas e <strong>Mão Esquerda (Clave de Fá)</strong> com {scanResult.stats.leftHandCount} notas.
+                  </span>
+                </div>
+              )}
 
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
                 <div className="p-2 rounded-lg bg-stone-900/60 border border-[#2d2722]">

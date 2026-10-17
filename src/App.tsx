@@ -621,6 +621,13 @@ export default function App() {
         name: string;
         instrumentId: InstrumentId;
       };
+      secondTrack?: {
+        trackId: string;
+        name: string;
+        instrumentId: InstrumentId;
+        notes: Note[];
+      };
+      appendMode?: boolean;
       bpm?: number;
       title?: string;
       timeSignature?: TimeSignature;
@@ -629,7 +636,7 @@ export default function App() {
       let nextActiveId = result.targetTrackId;
 
       if (result.createNewTrack) {
-        const newTrack: Track = {
+        const primaryTrack: Track = {
           id: result.targetTrackId,
           name: result.createNewTrack.name,
           instrumentId: result.createNewTrack.instrumentId,
@@ -641,12 +648,36 @@ export default function App() {
           auxSend: true,
           notes: result.notes,
         };
-        nextTracks = [...nextTracks, newTrack];
-        nextActiveId = newTrack.id;
+        nextTracks = [...nextTracks, primaryTrack];
+        nextActiveId = primaryTrack.id;
+
+        if (result.secondTrack && result.secondTrack.notes.length > 0) {
+          const secondTrack: Track = {
+            id: result.secondTrack.trackId,
+            name: result.secondTrack.name,
+            instrumentId: result.secondTrack.instrumentId,
+            color: '#a373d4',
+            volume: 75,
+            pan: 0,
+            isMuted: false,
+            isSolo: false,
+            auxSend: true,
+            notes: result.secondTrack.notes,
+          };
+          nextTracks = [...nextTracks, secondTrack];
+        }
       } else {
-        nextTracks = nextTracks.map((t) =>
-          t.id === result.targetTrackId ? { ...t, notes: result.notes } : t
-        );
+        if (result.appendMode) {
+          nextTracks = nextTracks.map((t) =>
+            t.id === result.targetTrackId
+              ? { ...t, notes: [...t.notes, ...result.notes] }
+              : t
+          );
+        } else {
+          nextTracks = nextTracks.map((t) =>
+            t.id === result.targetTrackId ? { ...t, notes: result.notes } : t
+          );
+        }
       }
 
       handleStop();
