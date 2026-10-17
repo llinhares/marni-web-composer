@@ -30,6 +30,7 @@ import { EffectorModal } from './components/EffectorModal.tsx';
 import { AddInstrumentModal } from './components/AddInstrumentModal.tsx';
 import { BdoExportModal } from './components/BdoExportModal.tsx';
 import { MidiSettingsModal } from './components/MidiSettingsModal.tsx';
+import { AiSheetScannerModal } from './components/AiSheetScannerModal.tsx';
 
 // Initial demo score inspired by Balenos Theme in Black Desert Online
 const INITIAL_TRACKS: Track[] = [
@@ -121,6 +122,7 @@ export default function App() {
   const [isExportingAudio, setIsExportingAudio] = useState(false);
   const [isSidebarOpenMobile, setIsSidebarOpenMobile] = useState(false);
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
+  const [isAiSheetScannerOpen, setIsAiSheetScannerOpen] = useState(false);
 
   // Hidden file input for importing MIDI / XML / JSON
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -611,6 +613,54 @@ export default function App() {
     }
   };
 
+  const handleImportAiScore = useCallback(
+    (result: {
+      notes: Note[];
+      targetTrackId: string;
+      createNewTrack?: {
+        name: string;
+        instrumentId: InstrumentId;
+      };
+      bpm?: number;
+      title?: string;
+      timeSignature?: TimeSignature;
+    }) => {
+      let nextTracks = [...tracks];
+      let nextActiveId = result.targetTrackId;
+
+      if (result.createNewTrack) {
+        const newTrack: Track = {
+          id: result.targetTrackId,
+          name: result.createNewTrack.name,
+          instrumentId: result.createNewTrack.instrumentId,
+          color: '#d4a373',
+          volume: 75,
+          pan: 0,
+          isMuted: false,
+          isSolo: false,
+          auxSend: true,
+          notes: result.notes,
+        };
+        nextTracks = [...nextTracks, newTrack];
+        nextActiveId = newTrack.id;
+      } else {
+        nextTracks = nextTracks.map((t) =>
+          t.id === result.targetTrackId ? { ...t, notes: result.notes } : t
+        );
+      }
+
+      handleStop();
+      setTracks(nextTracks);
+      setActiveTrackId(nextActiveId);
+      if (result.bpm) setBpm(result.bpm);
+      if (result.title) setTitle(result.title);
+      if (result.timeSignature) setTimeSignature(result.timeSignature);
+
+      pushHistory(nextTracks, nextActiveId);
+    },
+    [tracks, handleStop, pushHistory]
+  );
+
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-[#141210] text-stone-200 font-sans select-none">
       {/* Top Header Bar */}
@@ -651,6 +701,7 @@ export default function App() {
           }))
         }
         onOpenMidiModal={() => setIsMidiModalOpen(true)}
+        onOpenAiSheetScanner={() => setIsAiSheetScannerOpen(true)}
         hasMidiDevices={hasMidiDevices}
         scaleType={scaleType}
         onScaleChange={setScaleType}
@@ -680,6 +731,7 @@ export default function App() {
           onUpdateTrack={handleUpdateTrack}
           onResetAll={handleResetAll}
           onImportClick={() => fileInputRef.current?.click()}
+          onOpenAiSheetScanner={() => setIsAiSheetScannerOpen(true)}
           totalNotes={totalNotes}
           maxNotes={maxNotesAllowed}
           bdoGrade={bdoGrade}
@@ -756,6 +808,15 @@ export default function App() {
           midiManager={midiManagerRef.current}
         />
       )}
+
+      {/* AI Sheet Music Scanner Modal (Gemini OMR) */}
+      <AiSheetScannerModal
+        isOpen={isAiSheetScannerOpen}
+        onClose={() => setIsAiSheetScannerOpen(false)}
+        tracks={tracks}
+        activeTrackId={activeTrackId}
+        onImportScore={handleImportAiScore}
+      />
 
       {/* Reset All Confirmation Modal */}
       {isResetConfirmOpen && (

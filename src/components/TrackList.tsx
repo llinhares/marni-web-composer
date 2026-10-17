@@ -9,6 +9,7 @@ import {
   Trash2,
   Copy,
   Music,
+  Sparkles,
 } from 'lucide-react';
 import type { Track, InstrumentId } from '../types/music.ts';
 import { BDO_INSTRUMENTS } from '../types/music.ts';
@@ -23,6 +24,7 @@ interface TrackListProps {
   onUpdateTrack: (trackId: string, updates: Partial<Track>) => void;
   onResetAll: () => void;
   onImportClick: () => void;
+  onOpenAiSheetScanner?: () => void;
   totalNotes: number;
   maxNotes: number;
   bdoGrade: string;
@@ -39,6 +41,7 @@ export const TrackList: React.FC<TrackListProps> = ({
   onUpdateTrack,
   onResetAll,
   onImportClick,
+  onOpenAiSheetScanner,
   totalNotes,
   maxNotes,
   bdoGrade,
@@ -245,6 +248,18 @@ export const TrackList: React.FC<TrackListProps> = ({
           >
             <Upload className="w-4 h-4" />
           </button>
+
+          {/* AI Sheet Music Scanner Button */}
+          {onOpenAiSheetScanner && (
+            <button
+              onClick={onOpenAiSheetScanner}
+              className="p-2 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/40 hover:border-amber-400 text-amber-300 transition-colors flex items-center justify-center shadow-sm"
+              title="Ler Partitura por Imagem com IA (Gemini OMR)"
+              aria-label="Ler Partitura com IA"
+            >
+              <Sparkles className="w-4 h-4 text-amber-400" />
+            </button>
+          )}
         </div>
 
         {/* Reset All Button */}

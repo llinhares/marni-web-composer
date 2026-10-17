@@ -16,6 +16,7 @@ import {
   Undo2,
   Redo2,
   Hand,
+  Sparkles,
 } from 'lucide-react';
 import type { ToolMode, GridSnap, TimeSignature, EffectorSettings } from '../types/music.ts';
 import { formatTimecode, ticksToSeconds } from '../utils/musicMath.ts';
@@ -54,6 +55,7 @@ interface HeaderProps {
   canRedo?: boolean;
   onUndo?: () => void;
   onRedo?: () => void;
+  onOpenAiSheetScanner?: () => void;
   onToggleSidebar?: () => void;
   isSidebarOpen?: boolean;
 }
@@ -83,6 +85,7 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleDelay,
   onToggleChorus,
   onOpenMidiModal,
+  onOpenAiSheetScanner,
   hasMidiDevices,
   scaleType,
   onScaleChange,
@@ -391,6 +394,19 @@ export const Header: React.FC<HeaderProps> = ({
           <Radio className="w-3.5 h-3.5" />
           <span className="hidden xl:inline text-[11px]">MIDI</span>
         </button>
+
+        {/* AI Sheet Scanner Button */}
+        {onOpenAiSheetScanner && (
+          <button
+            onClick={onOpenAiSheetScanner}
+            className="p-1.5 rounded-md border text-xs transition-colors flex items-center gap-1.5 bg-stone-900 border-[#2d2722] hover:border-amber-500/50 text-stone-300 hover:text-amber-400 shadow-sm"
+            title="Importar Partitura por Imagem com IA (Gemini Vision OMR)"
+            aria-label="Importar Partitura com IA"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+            <span className="hidden lg:inline text-[11px] font-medium">Partitura IA</span>
+          </button>
+        )}
 
         {/* Zoom Controls */}
         <div className="hidden xl:flex items-center rounded-lg bg-stone-900/80 p-0.5 border border-[#2d2722]">
