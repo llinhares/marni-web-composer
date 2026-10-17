@@ -41,7 +41,7 @@ const BDO_DRUM_PADS = [
 interface PianoRollProps {
   tracks: Track[];
   activeTrackId: string;
-  onUpdateNotes: (trackId: string, notes: Note[]) => void;
+  onUpdateNotes: (trackId: string, notes: Note[], commitHistory?: boolean) => void;
   onAuditionPitch: (pitch: number) => void;
   toolMode: ToolMode;
   gridSnap: GridSnap;
@@ -53,6 +53,7 @@ interface PianoRollProps {
   isPlaying?: boolean;
   onSeek: (tick: number) => void;
   zoomLevel: number;
+  onZoomChange?: (delta: number) => void;
   scaleType: string;
 }
 
@@ -77,6 +78,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
   isPlaying = false,
   onSeek,
   zoomLevel,
+  onZoomChange,
   scaleType,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -159,6 +161,23 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
     observer.observe(container);
     return () => observer.disconnect();
   }, []);
+
+  // Prevent browser page zoom on Ctrl+Wheel and trigger Piano Roll zoom instead
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const onNativeWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const delta = e.deltaY < 0 ? 0.1 : -0.1;
+        onZoomChange?.(delta);
+      }
+    };
+
+    container.addEventListener('wheel', onNativeWheel, { passive: false });
+    return () => container.removeEventListener('wheel', onNativeWheel);
+  }, [onZoomChange]);
 
   const visibleWidth = Math.max(100, containerWidth - keyboardWidth);
   const maxScrollX = Math.max(0, totalGridWidth - visibleWidth);
@@ -270,20 +289,23 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
         e.preventDefault();
         onUpdateNotes(
           activeTrack.id,
-          activeNotes.map((n) => ({ ...n, selected: true }))
+          activeNotes.map((n) => ({ ...n, selected: true })),
+          false
         );
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedNoteIds.size > 0) {
           e.preventDefault();
           onUpdateNotes(
             activeTrack.id,
-            activeNotes.filter((n) => !selectedNoteIds.has(n.id))
+            activeNotes.filter((n) => !selectedNoteIds.has(n.id)),
+            true
           );
         }
       } else if (e.key === 'Escape') {
         onUpdateNotes(
           activeTrack.id,
-          activeNotes.map((n) => ({ ...n, selected: false }))
+          activeNotes.map((n) => ({ ...n, selected: false })),
+          false
         );
       } else if ((e.ctrlKey || e.metaKey) && (e.key === 'd' || e.key === 'D')) {
         // Duplicate selected notes shifted by 1 beat
@@ -300,7 +322,8 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
             }));
           onUpdateNotes(
             activeTrack.id,
-            activeNotes.map((n) => ({ ...n, selected: false })).concat(duplicated)
+            activeNotes.map((n) => ({ ...n, selected: false })).concat(duplicated),
+            true
           );
         }
       }
@@ -376,7 +399,8 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
   const handleDeselectAll = useCallback(() => {
     onUpdateNotes(
       activeTrack.id,
-      activeNotes.map((n) => ({ ...n, selected: false }))
+      activeNotes.map((n) => ({ ...n, selected: false })),
+      false
     );
   }, [activeNotes, activeTrack.id, onUpdateNotes]);
 
@@ -935,7 +959,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
         );
       }
 
-      onUpdateNotes(activeTrack.id, newActiveNotes);
+      onUpdateNotes(activeTrack.id, newActiveNotes, false);
       onAuditionPitch(clickedNote.pitch);
 
       // Snapshot initial state of all currently selected notes for proportional resize/move
@@ -974,7 +998,8 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
           // Deselect all
           onUpdateNotes(
             activeTrack.id,
-            activeNotes.map((n) => ({ ...n, selected: false }))
+            activeNotes.map((n) => ({ ...n, selected: false })),
+            false
           );
         }
         setDragAction({
@@ -1125,7 +1150,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
         return { ...note, selected: intersects };
       });
 
-      onUpdateNotes(activeTrack.id, updated);
+      onUpdateNotes(activeTrack.id, updated, false);
     } else if (dragAction.type === 'resize' && dragAction.targetNoteId && dragAction.initialNotes) {
       const targetInitial = dragAction.initialNotes.get(dragAction.targetNoteId);
       if (!targetInitial) return;
@@ -1158,7 +1183,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
         return note;
       });
 
-      onUpdateNotes(activeTrack.id, updated);
+      onUpdateNotes(activeTrack.id, updated, false);
     } else if (dragAction.type === 'move' && dragAction.initialNotes) {
       const dxTicks = snapTickToGrid(xToTick(x) - xToTick(dragAction.startX), gridSnap);
       const dyPitch = Math.round(yToPitch(y) - dragAction.startPitch);
@@ -1176,7 +1201,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
         return note;
       });
 
-      onUpdateNotes(activeTrack.id, updated);
+      onUpdateNotes(activeTrack.id, updated, false);
     }
   };
 
@@ -1187,12 +1212,20 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
       } catch {
         // ignore
       }
+    } else if (dragAction?.type === 'resize' || dragAction?.type === 'move') {
+      // Commit once upon gesture completion
+      onUpdateNotes(activeTrack.id, activeNotes, true);
     }
     setDragAction(null);
   };
 
   const handleWheel = (e: React.WheelEvent) => {
     e.preventDefault();
+    if (e.ctrlKey || e.metaKey) {
+      const zoomDelta = e.deltaY < 0 ? 0.1 : -0.1;
+      onZoomChange?.(zoomDelta);
+      return;
+    }
     const maxScrollY = Math.max(0, totalGridHeight - 200);
 
     if (e.shiftKey) {

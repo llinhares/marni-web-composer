@@ -22,6 +22,7 @@ import { createStandardMidiFile, triggerFileDownload } from './midi/midiEncoder.
 import { parseStandardMidiFile } from './midi/midiDecoder.ts';
 import { exportWavFile } from './export/audioExporter.ts';
 import { isBlackKey } from './utils/musicMath.ts';
+import { isMusicXmlContent, parseMusicXml } from './musicxml/musicXmlDecoder.ts';
 import { Header } from './components/Header.tsx';
 import { TrackList } from './components/TrackList.tsx';
 import { PianoRoll } from './components/PianoRoll.tsx';
@@ -193,6 +194,46 @@ export default function App() {
       return;
     }
 
+    // Ignore snapshots where only selection flags changed without musical differences
+    if (currentSnap && currentSnap.activeTrackId === activeId) {
+      const prevT = currentSnap.tracks;
+      if (prevT.length === newTracks.length) {
+        let isIdentical = true;
+        for (let i = 0; i < prevT.length; i++) {
+          const tA = prevT[i];
+          const tB = newTracks[i];
+          if (
+            tA.id !== tB.id ||
+            tA.instrumentId !== tB.instrumentId ||
+            tA.volume !== tB.volume ||
+            tA.pan !== tB.pan ||
+            tA.isMuted !== tB.isMuted ||
+            tA.isSolo !== tB.isSolo ||
+            tA.notes.length !== tB.notes.length
+          ) {
+            isIdentical = false;
+            break;
+          }
+          for (let j = 0; j < tA.notes.length; j++) {
+            const nA = tA.notes[j];
+            const nB = tB.notes[j];
+            if (
+              nA.id !== nB.id ||
+              nA.pitch !== nB.pitch ||
+              nA.startTick !== nB.startTick ||
+              nA.durationTicks !== nB.durationTicks ||
+              nA.velocity !== nB.velocity
+            ) {
+              isIdentical = false;
+              break;
+            }
+          }
+          if (!isIdentical) break;
+        }
+        if (isIdentical) return;
+      }
+    }
+
     setHistory((prev) => {
       const sliced = prev.slice(0, historyIndexRef.current + 1);
       const updated = [...sliced, { tracks: newTracks, activeTrackId: activeId }];
@@ -335,13 +376,18 @@ export default function App() {
   );
 
   // Track manipulation
-  const handleUpdateNotes = (trackId: string, updatedNotes: Note[]) => {
-    setTracks((prev) => {
-      const updated = prev.map((t) => (t.id === trackId ? { ...t, notes: updatedNotes } : t));
-      pushHistory(updated, trackId);
-      return updated;
-    });
-  };
+  const handleUpdateNotes = useCallback(
+    (trackId: string, updatedNotes: Note[], commitHistory: boolean = true) => {
+      setTracks((prev) => {
+        const updated = prev.map((t) => (t.id === trackId ? { ...t, notes: updatedNotes } : t));
+        if (commitHistory) {
+          pushHistory(updated, trackId);
+        }
+        return updated;
+      });
+    },
+    [pushHistory]
+  );
 
   const handleAddTrack = (instrumentId: InstrumentId) => {
     const inst = BDO_INSTRUMENTS.find((i) => i.id === instrumentId);
@@ -540,10 +586,26 @@ export default function App() {
         return;
       }
 
-      // 2. Decode text for XML / JSON
+      // 2. Decode text for MusicXML / XML / JSON
       const text = new TextDecoder().decode(buffer);
 
-      if (text.includes('<MarniScore') || text.includes('<?xml')) {
+      if (isMusicXmlContent(text) || file.name.toLowerCase().endsWith('.musicxml')) {
+        const decoded = parseMusicXml(text);
+        if (decoded.tracks.length > 0) {
+          handleStop();
+          setTracks(decoded.tracks);
+          setActiveTrackId(decoded.tracks[0].id);
+          if (decoded.bpm) setBpm(decoded.bpm);
+          if (decoded.title) setTitle(decoded.title);
+          if (decoded.timeSignature) setTimeSignature(decoded.timeSignature);
+          pushHistory(decoded.tracks, decoded.tracks[0].id);
+        } else {
+          alert('O arquivo MusicXML foi lido, mas nenhuma nota foi encontrada.');
+        }
+        return;
+      }
+
+      if (text.includes('<MarniScore') || (text.includes('<?xml') && text.includes('<Tracks>'))) {
         // Parse BDO XML
         const parser = new DOMParser();
         const xmlDoc = parser.parseFromString(text, 'text/xml');
@@ -783,6 +845,7 @@ export default function App() {
           isPlaying={isPlaying}
           onSeek={handleSeek}
           zoomLevel={zoomLevel}
+          onZoomChange={(delta) => setZoomLevel((prev) => Math.max(0.5, Math.min(2.5, prev + delta)))}
           scaleType={scaleType}
         />
       </div>
@@ -802,7 +865,7 @@ export default function App() {
         type="file"
         ref={fileInputRef}
         onChange={handleFileImport}
-        accept=".xml,.bdo,.mid,.json"
+        accept=".xml,.bdo,.mid,.midi,.musicxml,.mxl,.json"
         className="hidden"
         aria-hidden="true"
       />
