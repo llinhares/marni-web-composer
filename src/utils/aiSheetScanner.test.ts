@@ -126,6 +126,80 @@ test('parseAiTranscription parses compact note tuples and separates right and le
   assert.strictEqual(parsed.leftHandNotes[1].pitch, 55);
 });
 
+test('parseAiTranscription parses measure-beat tuples correctly', () => {
+  const mockMeasureOutput = {
+    title: 'Pegasus Fantasy (Measure-Beat)',
+    bpm: 164,
+    timeSignature: '4/4',
+    keySignature: 'C minor',
+    notes: [
+      [72, 1, 1.0, 1.0, 'right'], // C5: Compasso 1, tempo 1, duração 1 tempo (480 ticks) -> startTick 0
+      [48, 1, 1.0, 2.0, 'left'],  // C3: Compasso 1, tempo 1, duração 2 tempos (960 ticks) -> startTick 0
+      [75, 1, 2.0, 0.5, 'right'], // Eb5: Compasso 1, tempo 2, duração 0.5 tempos (240 ticks) -> startTick 480
+      [74, 1, 2.5, 0.5, 'right'], // D5: Compasso 1, tempo 2.5 -> startTick 720
+      [55, 2, 1.0, 1.0, 'left'],  // G3: Compasso 2, tempo 1 -> startTick 1920
+    ],
+  };
+
+  const parsed = parseAiTranscription(mockMeasureOutput, 'track-test');
+  assert.strictEqual(parsed.notes.length, 5);
+  // Note with pitch 48 comes first at startTick 0
+  assert.strictEqual(parsed.notes[0].pitch, 48);
+  assert.strictEqual(parsed.notes[0].startTick, 0);
+  assert.strictEqual(parsed.notes[0].durationTicks, 960);
+
+  // Note with pitch 72 comes second at startTick 0
+  assert.strictEqual(parsed.notes[1].pitch, 72);
+  assert.strictEqual(parsed.notes[1].startTick, 0);
+  assert.strictEqual(parsed.notes[1].durationTicks, 480);
+
+  // Note with pitch 75 at startTick 480
+  assert.strictEqual(parsed.notes[2].pitch, 75);
+  assert.strictEqual(parsed.notes[2].startTick, 480);
+  assert.strictEqual(parsed.notes[2].durationTicks, 240);
+
+  assert.strictEqual(parsed.notes[3].startTick, 720);
+  assert.strictEqual(parsed.notes[4].startTick, 1920);
+});
+
+test('parseAiTranscription compacts excessive hallucinated gaps down to 1 measure', () => {
+  const mockWithGiganticGap = {
+    title: 'Score With Gap',
+    bpm: 120,
+    timeSignature: '4/4',
+    notes: [
+      [60, 1, 1.0, 1.0, 'right'], // Compasso 1 -> startTick 0, ends 480
+      [64, 40, 1.0, 1.0, 'right'], // Hallucinated Compasso 40 (tick 74880)!
+    ],
+  };
+
+  const parsed = parseAiTranscription(mockWithGiganticGap, 'track-test');
+  assert.strictEqual(parsed.notes.length, 2);
+  assert.strictEqual(parsed.notes[0].startTick, 0);
+  // Instead of starting at tick 74880 (~40 measures gap), note 2 should be compacted
+  // down to 1 measure after note 1 (startTick = 480 + 1920 = 2400)
+  assert.strictEqual(parsed.notes[1].startTick, 2400);
+});
+
+test('parseAiTranscription aligns append offset cleanly without double-offset gap', () => {
+  const mockPage2 = {
+    title: 'Page 2 Notes',
+    bpm: 120,
+    timeSignature: '4/4',
+    notes: [
+      [67, 15, 1.0, 1.0, 'right'], // Page 2 starts at measure 15 (tick 26880)
+      [69, 15, 2.0, 1.0, 'right'],
+    ],
+  };
+
+  // Suppose existing track notes ended at tick 26880 (14 measures)
+  const existingEnd = 26880;
+  const parsed = parseAiTranscription(mockPage2, 'track-test', { startTickOffset: existingEnd });
+
+  assert.strictEqual(parsed.notes[0].startTick, 26880);
+  assert.strictEqual(parsed.notes[1].startTick, 26880 + 480);
+});
+
 test('parseAiTranscription throws descriptive error on empty or invalid payload', () => {
   assert.throws(() => {
     parseAiTranscription(null, 't1');

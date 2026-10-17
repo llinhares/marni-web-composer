@@ -233,53 +233,48 @@ export async function fileToBase64(file: File): Promise<{ mimeType: string; data
   });
 }
 
-const OMR_SYSTEM_PROMPT = `Você é um especialista de classe mundial em transcrição musical e OMR (Optical Music Recognition) de partituras para piano e instrumentos.
-Analise detalhadamente o documento fornecido (imagem ou PDF de múltiplas páginas) e transcreva rigorosamente as notas musicais para ticks MIDI.
+const OMR_SYSTEM_PROMPT = `Você é um especialista em transcrição de partituras para piano (Optical Music Recognition - OMR).
+Analise com máxima atenção a imagem ou PDF da partitura e transcreva as notas musicais para a grade do Piano Roll.
 
-DIRETRIZES CRÍTICAS PARA TRANSCRIÇÃO COMPLETA:
-1. PENTAGRAMA DUPLO / PIANO SOLO (Mão Direita e Mão Esquerda):
-   - Partituras de piano possuem DUAS pautas por sistema:
-     * Pauta Superior: Clave de Sol (Mão Direita / Treble Clef) - notas melódicas e acordes agudos. Linhas: E4(64), G4(67), B4(71), D5(74), F5(77). Espaços: F4(65), A4(69), C5(72), E5(76). Dó Central = C4 (60).
-     * Pauta Inferior: Clave de Fá (Mão Esquerda / Bass Clef) - baixos, arpejos e acompanhamento. Linhas: G2(43), B2(47), D3(50), F3(53), A3(57). Espaços: A2(45), C3(48), E3(52), G3(55). Dó Central = C4 (60).
-   - VOCÊ DEVE TRANSCREVER AMBAS AS MÃOS SIMULTANEAMENTE!
+[DIRETRIZES CRÍTICAS DE TRANSCRIÇÃO]:
+1. PENTAGRAMA DUPLO / GRAND STAFF (Mão Direita e Mão Esquerda):
+   - Pauta Superior: Clave de Sol (Mão Direita / Treble Clef). Linhas: E4(64), G4(67), B4(71), D5(74), F5(77). Espaços: F4(65), A4(69), C5(72), E5(76). Dó Central = C4 (MIDI 60).
+   - Pauta Inferior: Clave de Fá (Mão Esquerda / Bass Clef). Linhas: G2(43), B2(47), D3(50), F3(53), A3(57). Espaços: A2(45), C3(48), E3(52), G3(55). Dó Central = C4 (MIDI 60).
+   - Transcreva AMBAS as mãos simultaneamente!
 
-2. TRANSCRIÇÃO MULTIPÁGINAS COMPLETA (NÃO PARE NA PRIMEIRA PÁGINA):
-   - Se o documento tiver múltiplas páginas (ex: 8 páginas), TRANSCREVA TODAS AS PÁGINAS DO INÍCIO AO FIM!
-   - Progrida compasso a compasso, da Página 1 até a última página (compasso 1 até o compasso final da música).
-   - Acumule o tempo (startTick) continuamente através de todos os compassos e de todas as páginas.
+2. ARMADURA DE CLAVE (Key Signature) E ACIDENTES:
+   - Identifique os acidentes (bemóis ou sustenidos) no início da pauta.
+   - Aplique os acidentes a todas as notas correspondentes em toda a música, a menos que haja um bequadro.
 
-3. TEMPORIZAÇÃO EM TICKS (PPQ = 480 ticks por semínima):
-   - Semínima (Quarter note 1/4): 480 ticks
-   - Colcheia (Eighth note 1/8): 240 ticks
-   - Semicolcheia (Sixteenth note 1/16): 120 ticks
-   - Mínima (Half note 1/2): 960 ticks
-   - Semibreve (Whole note 1/1): 1920 ticks
-   - Ponto de aumento: adiciona 50% (ex: semínima pontuada = 720 ticks, colcheia pontuada = 360 ticks).
-   - Em compasso 4/4, cada compasso tem exatamente 1920 ticks (4 * 480). Compasso 1 começa no tick 0.
-   - Compassos de espera (ex: "(Intro) 8" compassos): compassos 1 a 8 são vazios, melodia entra no compasso 9 (tick 15360 = 8 * 1920).
+3. CONTINUIDADE E COMPASSOS (NUNCA PULE COMPASSOS):
+   - Transcreva todos os compassos em ordem sequencial (1, 2, 3, 4...).
+   - NUNCA deixe saltos ou buracos de compassos vazios entre as seções.
+   - Para acordes, liste todas as notas que soam juntas com o mesmo compasso e mesmo beat.
 
-4. FORMATO ULTRA-COMPACTO DE NOTAS (OBRIGATÓRIO para permitir transcrever a música inteira):
-   Para economizar tokens e evitar que a resposta seja cortada, cada nota no array "notes" DEVE ser uma lista/array compacta com 5 itens:
-   [pitch, startTick, durationTicks, velocity, "right" ou "left"]
-   - pitch: número MIDI (35 a 108)
-   - startTick: tick absoluto do início da nota na música (0, 480, 960...)
-   - durationTicks: duração em ticks (120, 240, 480, 960, 1920...)
-   - velocity: volume 1 a 127 (padrão 95)
-   - mão: "right" para mão direita (clave de sol) ou "left" para mão esquerda (clave de fá)
+4. FORMATO DE NOTAS (ARRAY COM 5 ELEMENTOS):
+   Cada nota no array "notes" DEVE ser uma lista compacta:
+   [pitch, measure, beat, durationBeats, hand]
 
-Responda APENAS em JSON estrito com o seguinte esquema:
+   - pitch: número MIDI da nota (35 a 108).
+   - measure: número do compasso na partitura (1, 2, 3, 4...).
+   - beat: tempo dentro do compasso onde a nota inicia (1.0 = início do compasso, 1.5 = meio do primeiro tempo, 2.0 = segundo tempo, etc.).
+   - durationBeats: duração em tempos (1.0 = semínima / quarter note, 0.5 = colcheia / eighth note, 0.25 = semicolcheia / sixteenth note, 2.0 = mínima / half note, 4.0 = semibreve / whole note, 1.5 = semínima pontuada).
+   - hand: "right" para mão direita (Clave de Sol) ou "left" para mão esquerda (Clave de Fá).
+
+Responda APENAS em JSON estrito:
 {
   "title": "Nome da Música",
-  "bpm": 164,
+  "bpm": 140,
   "timeSignature": "4/4",
   "keySignature": "C minor (3 flats: Bb, Eb, Ab)",
   "chords": [
     { "measure": 1, "chord": "Cm" }
   ],
   "notes": [
-    [72, 0, 480, 95, "right"],
-    [48, 0, 960, 90, "left"],
-    [76, 480, 480, 92, "right"]
+    [72, 1, 1.0, 1.0, "right"],
+    [48, 1, 1.0, 2.0, "left"],
+    [75, 1, 2.0, 0.5, "right"],
+    [74, 1, 2.5, 0.5, "right"]
   ]
 }`;
 
@@ -443,28 +438,43 @@ export function parseAiTranscription(
   const ticksPerBeat = timeSignature === '6/8' || timeSignature === '12/8' ? 240 : 480;
   const ticksPerMeasure = beatsPerMeasure * ticksPerBeat;
 
-  let highestPitch = 0;
-  let lowestPitch = 127;
-  let maxEndTick = offset;
+  const rawParsedNotes: Array<{
+    pitch: number;
+    rawStartTick: number;
+    durationTicks: number;
+    velocity: number;
+    hand: 'right' | 'left';
+  }> = [];
 
-  const validNotes: Note[] = [];
-  const rightHandNotes: Note[] = [];
-  const leftHandNotes: Note[] = [];
-
-  rawNotes.forEach((n, idx) => {
+  rawNotes.forEach((n) => {
     let pitch = 60;
-    let startTick = offset;
+    let rawStartTick = 0;
     let durationTicks = 480;
     let velocity = 95;
     let hand: 'right' | 'left' = 'right';
 
     if (Array.isArray(n)) {
-      // Compact array format: [pitch, startTick, durationTicks, velocity?, hand?]
       pitch = typeof n[0] === 'number' ? Math.max(35, Math.min(108, Math.round(n[0]))) : 60;
-      startTick = typeof n[1] === 'number' && n[1] >= 0 ? Math.round(n[1]) + offset : maxEndTick;
-      durationTicks = typeof n[2] === 'number' && n[2] > 0 ? Math.max(60, Math.min(19200, Math.round(n[2]))) : 480;
-      velocity = typeof n[3] === 'number' ? Math.max(1, Math.min(127, Math.round(n[3]))) : 95;
-      hand = n[4] === 'left' || n[4] === 1 ? 'left' : n[4] === 'right' || n[4] === 0 ? 'right' : (pitch < 57 ? 'left' : 'right');
+
+      // Distinguish between Format B: [pitch, measure, beat, durationBeats, hand]
+      // and Format A: [pitch, startTick, durationTicks, velocity?, hand?]
+      // In Format B, n[2] is beat (<= 16) and n[3] is duration in beats (<= 16)
+      const isMeasureFormat = typeof n[2] === 'number' && n[2] <= 16;
+      if (isMeasureFormat) {
+        const measure = typeof n[1] === 'number' && n[1] >= 1 ? Math.round(n[1]) : 1;
+        const beat = typeof n[2] === 'number' && n[2] >= 1 ? n[2] : 1;
+        const durationBeats = typeof n[3] === 'number' && n[3] > 0 ? n[3] : 1;
+
+        rawStartTick = (measure - 1) * ticksPerMeasure + Math.round((beat - 1) * ticksPerBeat);
+        durationTicks = Math.max(60, Math.round(durationBeats * ticksPerBeat));
+        velocity = 95;
+        hand = n[4] === 'left' || n[4] === 1 ? 'left' : n[4] === 'right' || n[4] === 0 ? 'right' : (pitch < 57 ? 'left' : 'right');
+      } else {
+        rawStartTick = typeof n[1] === 'number' && n[1] >= 0 ? Math.round(n[1]) : 0;
+        durationTicks = typeof n[2] === 'number' && n[2] > 0 ? Math.max(60, Math.min(19200, Math.round(n[2]))) : 480;
+        velocity = typeof n[3] === 'number' ? Math.max(1, Math.min(127, Math.round(n[3]))) : 95;
+        hand = n[4] === 'left' || n[4] === 1 ? 'left' : n[4] === 'right' || n[4] === 0 ? 'right' : (pitch < 57 ? 'left' : 'right');
+      }
     } else if (n && typeof n === 'object') {
       const obj = n as SheetTranscriptionNoteObject;
       if (typeof obj.pitch === 'number' && obj.pitch >= 35 && obj.pitch <= 108) {
@@ -474,12 +484,12 @@ export function parseAiTranscription(
       }
 
       if (typeof obj.startTick === 'number' && obj.startTick >= 0) {
-        startTick = Math.round(obj.startTick) + offset;
+        rawStartTick = Math.round(obj.startTick);
       } else if (typeof obj.measure === 'number' && obj.measure >= 1) {
         const beatOffset = typeof obj.beat === 'number' && obj.beat >= 1 ? (obj.beat - 1) * ticksPerBeat : 0;
-        startTick = (obj.measure - 1) * ticksPerMeasure + Math.round(beatOffset) + offset;
+        rawStartTick = (obj.measure - 1) * ticksPerMeasure + Math.round(beatOffset);
       } else {
-        startTick = maxEndTick;
+        rawStartTick = 0;
       }
 
       if (typeof obj.durationTicks === 'number' && obj.durationTicks > 0) {
@@ -493,39 +503,83 @@ export function parseAiTranscription(
       hand = obj.hand === 'left' ? 'left' : obj.hand === 'right' ? 'right' : (pitch < 57 ? 'left' : 'right');
     }
 
-    if (pitch < lowestPitch) lowestPitch = pitch;
-    if (pitch > highestPitch) highestPitch = pitch;
+    rawParsedNotes.push({ pitch, rawStartTick, durationTicks, velocity, hand });
+  });
 
-    const endTick = startTick + durationTicks;
+  if (rawParsedNotes.length === 0) {
+    throw new Error('Nenhuma nota musical foi detectada no documento.');
+  }
+
+  // Sort notes chronologically by rawStartTick
+  rawParsedNotes.sort((a, b) => a.rawStartTick - b.rawStartTick || a.pitch - b.pitch);
+
+  // 1. Compact interior excessive gaps of dead silence (> 2 measures) down to 1 measure
+  // This eliminates the bug where the AI hallucinates a jump between sections or pages
+  const maxSilenceGap = ticksPerMeasure * 2;
+  let accumulatedGapReduction = 0;
+  let prevEndTick = rawParsedNotes[0].rawStartTick + rawParsedNotes[0].durationTicks;
+
+  for (let i = 1; i < rawParsedNotes.length; i++) {
+    const n = rawParsedNotes[i];
+    const currentStart = n.rawStartTick - accumulatedGapReduction;
+    const silence = currentStart - prevEndTick;
+
+    if (silence > maxSilenceGap) {
+      const gapToTrim = silence - ticksPerMeasure;
+      accumulatedGapReduction += gapToTrim;
+    }
+
+    n.rawStartTick -= accumulatedGapReduction;
+    const currentEnd = n.rawStartTick + n.durationTicks;
+    if (currentEnd > prevEndTick) {
+      prevEndTick = currentEnd;
+    }
+  }
+
+  // 2. Align startTickOffset for append mode:
+  // If offset > 0 (appending to existing track), align incoming notes so they seamlessly start
+  // immediately after the existing notes, without any double-offset or empty gap!
+  if (offset > 0) {
+    const minIncomingStart = Math.min(...rawParsedNotes.map((n) => n.rawStartTick));
+    const shiftToTarget = offset - minIncomingStart;
+    rawParsedNotes.forEach((n) => {
+      n.rawStartTick += shiftToTarget;
+    });
+  }
+
+  // 3. Construct final Note objects and distribute to hands
+  const validNotes: Note[] = [];
+  const rightHandNotes: Note[] = [];
+  const leftHandNotes: Note[] = [];
+
+  let highestPitch = 0;
+  let lowestPitch = 127;
+  let maxEndTick = offset;
+
+  rawParsedNotes.forEach((item, idx) => {
+    if (item.pitch < lowestPitch) lowestPitch = item.pitch;
+    if (item.pitch > highestPitch) highestPitch = item.pitch;
+
+    const endTick = item.rawStartTick + item.durationTicks;
     if (endTick > maxEndTick) maxEndTick = endTick;
 
     const noteObj: Note = {
       id: `ai-note-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 7)}`,
       trackId: targetTrackId,
-      pitch,
-      startTick,
-      durationTicks,
-      velocity,
+      pitch: item.pitch,
+      startTick: item.rawStartTick,
+      durationTicks: item.durationTicks,
+      velocity: item.velocity,
       selected: false,
     };
 
     validNotes.push(noteObj);
-    if (hand === 'left') {
+    if (item.hand === 'left') {
       leftHandNotes.push({ ...noteObj });
     } else {
       rightHandNotes.push({ ...noteObj });
     }
   });
-
-  // Sort notes chronologically
-  const noteSorter = (a: Note, b: Note) => {
-    if (a.startTick !== b.startTick) return a.startTick - b.startTick;
-    return a.pitch - b.pitch;
-  };
-
-  validNotes.sort(noteSorter);
-  rightHandNotes.sort(noteSorter);
-  leftHandNotes.sort(noteSorter);
 
   const totalMeasures = Math.max(1, Math.ceil(maxEndTick / ticksPerMeasure));
 

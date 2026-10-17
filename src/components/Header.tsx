@@ -395,16 +395,19 @@ export const Header: React.FC<HeaderProps> = ({
           <span className="hidden xl:inline text-[11px]">MIDI</span>
         </button>
 
-        {/* AI Sheet Scanner Button */}
+        {/* AI Sheet Scanner Button (BETA) */}
         {onOpenAiSheetScanner && (
           <button
             onClick={onOpenAiSheetScanner}
             className="p-1.5 rounded-md border text-xs transition-colors flex items-center gap-1.5 bg-stone-900 border-[#2d2722] hover:border-amber-500/50 text-stone-300 hover:text-amber-400 shadow-sm"
-            title="Importar Partitura por Imagem com IA (Gemini Vision OMR)"
-            aria-label="Importar Partitura com IA"
+            title="Importar Partitura por Imagem com IA (Gemini Vision OMR) - Recurso Experimental em Desenvolvimento"
+            aria-label="Importar Partitura com IA (BETA)"
           >
             <Sparkles className="w-3.5 h-3.5 text-amber-400" />
             <span className="hidden lg:inline text-[11px] font-medium">Partitura IA</span>
+            <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-amber-500/20 text-amber-400 border border-amber-500/40">
+              BETA
+            </span>
           </button>
         )}
 

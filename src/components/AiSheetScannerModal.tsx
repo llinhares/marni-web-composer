@@ -327,7 +327,10 @@ export const AiSheetScannerModal: React.FC<AiSheetScannerModalProps> = ({
                 <h2 id="omr-title" className="text-lg font-bold tracking-wide text-amber-400 font-serif">
                   Importar Partitura por Imagem (IA OMR)
                 </h2>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-amber-500/25 text-amber-300 border border-amber-500/50 shadow-sm">
+                  BETA
+                </span>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-stone-800 text-stone-300 border border-[#3e342b]">
                   {selectedModel}
                 </span>
               </div>
@@ -347,6 +350,30 @@ export const AiSheetScannerModal: React.FC<AiSheetScannerModalProps> = ({
 
         {/* Modal Body */}
         <div className="overflow-y-auto pr-1 py-4 space-y-4 flex-1 text-xs">
+          {/* BETA Disclaimer & Recommendation Banner */}
+          <div className="p-3 rounded-xl bg-amber-950/30 border border-amber-500/40 text-amber-200/90 space-y-1.5 animate-in fade-in">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-500 text-stone-950">
+                  RECURSO BETA
+                </span>
+                <span className="font-semibold text-xs text-amber-300">
+                  Transcrição por Visão Computacional em Desenvolvimento
+                </span>
+              </div>
+              <span className="text-[10px] text-amber-400/80 font-mono">Experimental</span>
+            </div>
+            <p className="text-[11px] text-stone-300 leading-relaxed">
+              O leitor de partituras utiliza visão computacional do Gemini para estimar pautas, claves e notas. Em partituras densas, polifônicas ou muito longas (como arranjos complexos de piano), imprecisões melódicas e rítmicas podem ocorrer.
+            </p>
+            <div className="text-[11px] text-amber-300/95 bg-amber-950/40 p-2 rounded-lg border border-amber-500/20 flex items-start gap-1.5">
+              <span className="text-sm shrink-0">💡</span>
+              <span>
+                <strong>Dica para fidelidade de 100%:</strong> Para partituras completas e perfeitas (como as do MuseScore), prefira sempre baixar o arquivo <strong>MIDI (.mid)</strong> e importá-lo diretamente na DAW. Todas as notas, tempos e mãos entrarão idênticos ao original.
+              </span>
+            </div>
+          </div>
+
           {/* 1. Gemini API Key Configuration Box */}
           <div className="p-3.5 rounded-xl bg-stone-900/80 border border-[#2d2722] space-y-2.5">
             <div className="flex items-center justify-between">
