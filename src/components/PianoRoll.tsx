@@ -50,6 +50,7 @@ interface PianoRollProps {
   sustenidoActive?: boolean;
   onToggleSustenido?: () => void;
   currentPlayheadTick: number;
+  isPlaying?: boolean;
   onSeek: (tick: number) => void;
   zoomLevel: number;
   scaleType: string;
@@ -73,6 +74,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
   sustenidoActive = true,
   onToggleSustenido,
   currentPlayheadTick,
+  isPlaying = false,
   onSeek,
   zoomLevel,
   scaleType,
@@ -101,13 +103,34 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
     [activeNotes]
   );
 
-  // Metrics based on zoom
+  // Metrics based on zoom & dynamic song length
   const pixelsPerTick = 0.2 * zoomLevel;
   const keyHeight = Math.max(16, Math.min(36, Math.round(DEFAULT_KEY_HEIGHT * Math.sqrt(zoomLevel))));
   const totalGridHeight = TOTAL_PITCHES * keyHeight;
   const beatsPerMeasure = getBeatsPerMeasure(timeSignature);
   const ticksPerMeasure = beatsPerMeasure * 480;
-  const totalGridWidth = 64 * ticksPerMeasure * pixelsPerTick + 800;
+
+  // Find furthest note or playhead to dynamically extend grid width
+  const maxSongTick = useMemo(() => {
+    let max = 0;
+    tracks.forEach((t) => {
+      t.notes.forEach((n) => {
+        const end = n.startTick + n.durationTicks;
+        if (end > max) max = end;
+      });
+    });
+    return Math.max(max, currentPlayheadTick);
+  }, [tracks, currentPlayheadTick]);
+
+  // Guarantee at least 64 bars, and expand 48 bars beyond the furthest note
+  const totalGridBars = useMemo(() => {
+    const minBars = 64;
+    const songBars = Math.ceil(maxSongTick / ticksPerMeasure);
+    return Math.max(minBars, songBars + 48);
+  }, [maxSongTick, ticksPerMeasure]);
+
+  const totalGridTicks = totalGridBars * ticksPerMeasure;
+  const totalGridWidth = totalGridTicks * pixelsPerTick;
 
   // Auto-focus drum kit range (pitches 48 to 62) when switching to percussion track
   useEffect(() => {
@@ -118,7 +141,29 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
     }
   }, [isPercussion, activeTrackId, keyHeight]);
 
-  // Drag interaction states
+  // Container resize observer for responsive scrollbars and layout
+  const [containerWidth, setContainerWidth] = useState(1000);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const updateSize = () => {
+      if (container.clientWidth > 0) {
+        setContainerWidth(container.clientWidth);
+      }
+    };
+
+    updateSize();
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+
+  const visibleWidth = Math.max(100, containerWidth - keyboardWidth);
+  const maxScrollX = Math.max(0, totalGridWidth - visibleWidth);
+
+  // Drag interaction states (including Pan with middle-click or pan tool)
   const [dragAction, setDragAction] = useState<{
     type: 'create' | 'move' | 'resize' | 'pan' | 'selectBox';
     targetNoteId?: string;
@@ -129,7 +174,56 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
     currentY?: number;
     startTick: number;
     startPitch: number;
+    startScrollX?: number;
+    startScrollY?: number;
   } | null>(null);
+
+  // Horizontal Scrollbar dragging state
+  const [isDraggingScrollbar, setIsDraggingScrollbar] = useState(false);
+  const scrollbarDragStart = useRef<{ startX: number; startScrollX: number }>({ startX: 0, startScrollX: 0 });
+
+  const scrollbarThumbWidth = Math.max(
+    36,
+    Math.min(visibleWidth, (visibleWidth / Math.max(1, totalGridWidth)) * visibleWidth)
+  );
+  const scrollbarTrackDistance = Math.max(1, visibleWidth - scrollbarThumbWidth);
+  const scrollbarThumbLeft =
+    maxScrollX > 0
+      ? (Math.min(maxScrollX, Math.max(0, scrollX)) / maxScrollX) * scrollbarTrackDistance
+      : 0;
+
+  // Auto-scroll to follow playhead smoothly during playback
+  useEffect(() => {
+    if (!isPlaying || dragAction?.type === 'pan' || isDraggingScrollbar) return;
+
+    const playheadX = keyboardWidth + currentPlayheadTick * pixelsPerTick - scrollX;
+
+    // Advance view when playhead approaches the right 85% of screen
+    if (playheadX > keyboardWidth + visibleWidth * 0.85) {
+      const targetScrollX = Math.max(
+        0,
+        Math.min(maxScrollX, currentPlayheadTick * pixelsPerTick - visibleWidth * 0.2)
+      );
+      setScrollX(targetScrollX);
+    } else if (playheadX < keyboardWidth) {
+      // Reposition if playhead looped back before view
+      const targetScrollX = Math.max(
+        0,
+        Math.min(maxScrollX, currentPlayheadTick * pixelsPerTick - visibleWidth * 0.2)
+      );
+      setScrollX(targetScrollX);
+    }
+  }, [
+    currentPlayheadTick,
+    isPlaying,
+    dragAction?.type,
+    isDraggingScrollbar,
+    pixelsPerTick,
+    scrollX,
+    keyboardWidth,
+    visibleWidth,
+    maxScrollX,
+  ]);
 
   // Coordinate transformations
   const pitchToY = useCallback(
@@ -713,8 +807,74 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
     beatsPerMeasure,
   ]);
 
-  // Pointer Interaction (Selection, Proportional Resize, Move)
+  // Scrollbar Dragging and Clicking Handlers
+  const handleScrollbarThumbPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+    setIsDraggingScrollbar(true);
+    scrollbarDragStart.current = {
+      startX: e.clientX,
+      startScrollX: scrollX,
+    };
+  };
+
+  const handleScrollbarThumbPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDraggingScrollbar) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const dx = e.clientX - scrollbarDragStart.current.startX;
+    const scrollDelta = (dx / scrollbarTrackDistance) * maxScrollX;
+    setScrollX(Math.max(0, Math.min(maxScrollX, scrollbarDragStart.current.startScrollX + scrollDelta)));
+  };
+
+  const handleScrollbarThumbPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (isDraggingScrollbar) {
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {
+        // ignore
+      }
+      setIsDraggingScrollbar(false);
+    }
+  };
+
+  const handleScrollbarTrackClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const targetThumbLeft = clickX - scrollbarThumbWidth / 2;
+    const ratio = Math.max(0, Math.min(1, targetThumbLeft / scrollbarTrackDistance));
+    setScrollX(ratio * maxScrollX);
+  };
+
+  // Pointer Interaction (Selection, Proportional Resize, Move, Pan)
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    // 0. Middle Click (Button 1) or Hand/Pan Tool
+    if (e.button === 1 || toolMode === 'pan') {
+      e.preventDefault();
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        // ignore
+      }
+      setDragAction({
+        type: 'pan',
+        startX: e.clientX,
+        startY: e.clientY,
+        startScrollX: scrollX,
+        startScrollY: scrollY,
+        startTick: 0,
+        startPitch: 0,
+      });
+      return;
+    }
+
+    if (e.button !== 0) return;
+
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
@@ -878,7 +1038,26 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
+    // 0. Pan Dragging
+    if (dragAction?.type === 'pan') {
+      e.currentTarget.style.cursor = 'grabbing';
+      const dx = e.clientX - dragAction.startX;
+      const dy = e.clientY - dragAction.startY;
+      const startX = dragAction.startScrollX ?? scrollX;
+      const startY = dragAction.startScrollY ?? scrollY;
+
+      const maxScrollY = Math.max(0, totalGridHeight - 200);
+
+      setScrollX(Math.max(0, Math.min(maxScrollX, startX - dx)));
+      setScrollY(Math.max(0, Math.min(maxScrollY, startY - dy)));
+      return;
+    }
+
     if (!dragAction) {
+      if (toolMode === 'pan') {
+        e.currentTarget.style.cursor = 'grab';
+        return;
+      }
       if (x < keyboardWidth) {
         e.currentTarget.style.cursor = 'pointer';
         return;
@@ -1001,18 +1180,27 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
     }
   };
 
-  const handlePointerUp = () => {
+  const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (dragAction?.type === 'pan') {
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {
+        // ignore
+      }
+    }
     setDragAction(null);
   };
 
   const handleWheel = (e: React.WheelEvent) => {
     e.preventDefault();
+    const maxScrollY = Math.max(0, totalGridHeight - 200);
+
     if (e.shiftKey) {
-      setScrollX((prev) => Math.max(0, Math.min(totalGridWidth, prev + e.deltaY)));
+      setScrollX((prev) => Math.max(0, Math.min(maxScrollX, prev + e.deltaY)));
     } else {
-      setScrollY((prev) => Math.max(0, Math.min(totalGridHeight - 300, prev + e.deltaY)));
+      setScrollY((prev) => Math.max(0, Math.min(maxScrollY, prev + e.deltaY)));
       if (Math.abs(e.deltaX) > 0) {
-        setScrollX((prev) => Math.max(0, Math.min(totalGridWidth, prev + e.deltaX)));
+        setScrollX((prev) => Math.max(0, Math.min(maxScrollX, prev + e.deltaX)));
       }
     }
   };
@@ -1020,7 +1208,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
   return (
     <div
       ref={containerRef}
-      className="flex-1 h-full w-full relative overflow-hidden bg-[#141210] cursor-crosshair touch-none select-none"
+      className="flex-1 h-full w-full relative overflow-hidden bg-[#141210] touch-none select-none"
       onWheel={handleWheel}
     >
       <canvas
@@ -1029,6 +1217,12 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
+        onMouseDown={(e) => {
+          if (e.button === 1) e.preventDefault();
+        }}
+        onAuxClick={(e) => {
+          if (e.button === 1) e.preventDefault();
+        }}
         className="w-full h-full block"
       />
 
@@ -1061,7 +1255,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
 
       {/* Floating Multi-Selection & Proportional Transform Toolbar */}
       {selectedNoteIds.size > 0 && (
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 p-1.5 px-3 rounded-xl bg-[#1c1917]/95 border border-amber-500/70 shadow-2xl backdrop-blur-md z-40 text-xs">
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 p-1.5 px-3 rounded-xl bg-[#1c1917]/95 border border-amber-500/70 shadow-2xl backdrop-blur-md z-40 text-xs">
           <div className="flex items-center gap-2 pr-2 border-r border-[#3e342b]">
             <span className="px-2 py-0.5 rounded-md bg-amber-500 text-stone-950 font-bold text-xs shadow-sm">
               {selectedNoteIds.size} notas
@@ -1158,10 +1352,33 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
         </div>
       )}
 
+      {/* Horizontal Scrollbar */}
+      <div
+        className="absolute bottom-0 right-0 h-3 bg-[#181513]/90 border-t border-[#2d2722] z-30 flex items-center select-none cursor-pointer"
+        style={{ left: `${keyboardWidth}px` }}
+        onClick={handleScrollbarTrackClick}
+      >
+        <div
+          className={`h-2 rounded-full transition-colors cursor-grab active:cursor-grabbing ${
+            isDraggingScrollbar
+              ? 'bg-amber-500 shadow-md shadow-amber-500/30'
+              : 'bg-[#443a32] hover:bg-amber-600/70'
+          }`}
+          style={{
+            width: `${scrollbarThumbWidth}px`,
+            transform: `translateX(${scrollbarThumbLeft}px)`,
+          }}
+          onPointerDown={handleScrollbarThumbPointerDown}
+          onPointerMove={handleScrollbarThumbPointerMove}
+          onPointerUp={handleScrollbarThumbPointerUp}
+          onPointerCancel={handleScrollbarThumbPointerUp}
+        />
+      </div>
+
       {/* Subtle Bottom Instruction Hint */}
-      <div className="absolute bottom-2 left-4 pointer-events-none hidden lg:block">
+      <div className="absolute bottom-4 left-4 pointer-events-none hidden lg:block z-20">
         <span className="text-[10px] text-stone-500 font-mono">
-          Dica: Puxe a borda direita de qualquer nota para esticar proporcionalmente • Clique e arraste na área vazia para seleção em caixa
+          Dica: Use a ferramenta Mover (H) ou o clique da rodinha do mouse para mover a tela • Shift + Scroll para rolar horizontalmente
         </span>
       </div>
     </div>

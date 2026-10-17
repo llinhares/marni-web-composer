@@ -15,6 +15,7 @@ import {
   ZoomOut,
   Undo2,
   Redo2,
+  Hand,
 } from 'lucide-react';
 import type { ToolMode, GridSnap, TimeSignature, EffectorSettings } from '../types/music.ts';
 import { formatTimecode, ticksToSeconds } from '../utils/musicMath.ts';
@@ -104,11 +105,10 @@ export const Header: React.FC<HeaderProps> = ({
         {onToggleSidebar && (
           <button
             onClick={onToggleSidebar}
-            className={`md:hidden p-1.5 rounded-lg border transition-colors ${
-              isSidebarOpen
-                ? 'bg-amber-500/20 border-amber-500/60 text-amber-300'
-                : 'bg-stone-900 border-[#2d2722] text-stone-400'
-            }`}
+            className={`md:hidden p-1.5 rounded-lg border transition-colors ${isSidebarOpen
+              ? 'bg-amber-500/20 border-amber-500/60 text-amber-300'
+              : 'bg-stone-900 border-[#2d2722] text-stone-400'
+              }`}
             title="Alternar Faixas / Painel"
             aria-label="Alternar Painel de Faixas"
           >
@@ -116,25 +116,14 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
         )}
 
-        {/* Brand Feather Logo */}
-        <div className="flex items-center gap-1.5 font-serif font-bold text-amber-400 tracking-wide mr-0.5 group">
-          <div className="w-7 h-7 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shadow-sm shrink-0">
-            <Feather className="w-4 h-4 transform -rotate-45" />
-          </div>
-          <span className="hidden xl:inline text-sm font-semibold tracking-wider text-amber-400/90 font-serif">
-            Marni
-          </span>
-        </div>
-
         {/* Edit Tools */}
         <div className="flex items-center rounded-lg bg-stone-900/90 p-0.5 border border-[#2d2722]">
           <button
             onClick={() => onSetToolMode('pointer')}
-            className={`p-1.5 rounded-md transition-colors ${
-              toolMode === 'pointer'
-                ? 'bg-amber-500 text-stone-950 font-bold shadow'
-                : 'text-stone-400 hover:text-stone-200'
-            }`}
+            className={`p-1.5 rounded-md transition-colors ${toolMode === 'pointer'
+              ? 'bg-amber-500 text-stone-950 font-bold shadow'
+              : 'text-stone-400 hover:text-stone-200'
+              }`}
             title="Mover e Ajustar Notas (V)"
             aria-label="Ferramenta Ponteiro"
           >
@@ -142,11 +131,10 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
           <button
             onClick={() => onSetToolMode('select')}
-            className={`p-1.5 rounded-md transition-colors ${
-              toolMode === 'select'
-                ? 'bg-amber-500 text-stone-950 font-bold shadow'
-                : 'text-stone-400 hover:text-stone-200'
-            }`}
+            className={`p-1.5 rounded-md transition-colors ${toolMode === 'select'
+              ? 'bg-amber-500 text-stone-950 font-bold shadow'
+              : 'text-stone-400 hover:text-stone-200'
+              }`}
             title="Seleção Múltipla em Caixa / Marquee (M)"
             aria-label="Ferramenta Seleção Múltipla"
           >
@@ -154,11 +142,10 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
           <button
             onClick={() => onSetToolMode('pencil')}
-            className={`p-1.5 rounded-md transition-colors ${
-              toolMode === 'pencil'
-                ? 'bg-amber-500 text-stone-950 font-bold shadow'
-                : 'text-stone-400 hover:text-stone-200'
-            }`}
+            className={`p-1.5 rounded-md transition-colors ${toolMode === 'pencil'
+              ? 'bg-amber-500 text-stone-950 font-bold shadow'
+              : 'text-stone-400 hover:text-stone-200'
+              }`}
             title="Inserir Notas (B)"
             aria-label="Ferramenta Lápis"
           >
@@ -166,15 +153,25 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
           <button
             onClick={() => onSetToolMode('eraser')}
-            className={`p-1.5 rounded-md transition-colors ${
-              toolMode === 'eraser'
-                ? 'bg-amber-500 text-stone-950 font-bold shadow'
-                : 'text-stone-400 hover:text-stone-200'
-            }`}
+            className={`p-1.5 rounded-md transition-colors ${toolMode === 'eraser'
+              ? 'bg-amber-500 text-stone-950 font-bold shadow'
+              : 'text-stone-400 hover:text-stone-200'
+              }`}
             title="Apagar Notas (E)"
             aria-label="Ferramenta Borracha"
           >
             <Eraser className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={() => onSetToolMode('pan')}
+            className={`p-1.5 rounded-md transition-colors ${toolMode === 'pan'
+              ? 'bg-amber-500 text-stone-950 font-bold shadow'
+              : 'text-stone-400 hover:text-stone-200'
+              }`}
+            title="Mover Grade / Panorâmica (H)"
+            aria-label="Ferramenta Mover / Panorâmica"
+          >
+            <Hand className="w-3.5 h-3.5" />
           </button>
         </div>
 
@@ -183,11 +180,10 @@ export const Header: React.FC<HeaderProps> = ({
           <button
             onClick={onUndo}
             disabled={!canUndo}
-            className={`p-1.5 rounded-md transition-colors ${
-              canUndo
-                ? 'text-stone-300 hover:text-amber-400 hover:bg-stone-800'
-                : 'text-stone-600 cursor-not-allowed'
-            }`}
+            className={`p-1.5 rounded-md transition-colors ${canUndo
+              ? 'text-stone-300 hover:text-amber-400 hover:bg-stone-800'
+              : 'text-stone-600 cursor-not-allowed'
+              }`}
             title="Desfazer (Ctrl+Z)"
             aria-label="Desfazer Ação"
           >
@@ -196,11 +192,10 @@ export const Header: React.FC<HeaderProps> = ({
           <button
             onClick={onRedo}
             disabled={!canRedo}
-            className={`p-1.5 rounded-md transition-colors ${
-              canRedo
-                ? 'text-stone-300 hover:text-amber-400 hover:bg-stone-800'
-                : 'text-stone-600 cursor-not-allowed'
-            }`}
+            className={`p-1.5 rounded-md transition-colors ${canRedo
+              ? 'text-stone-300 hover:text-amber-400 hover:bg-stone-800'
+              : 'text-stone-600 cursor-not-allowed'
+              }`}
             title="Refazer (Ctrl+Y / Ctrl+Shift+Z)"
             aria-label="Refazer Ação"
           >
@@ -212,51 +207,45 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="hidden lg:flex items-center gap-1.5">
           <button
             onClick={onToggleReverb}
-            className={`flex items-center gap-1 px-2 py-1 rounded-md border text-[11px] transition-colors ${
-              effectorSettings.reverb.enabled
-                ? 'bg-amber-950/40 border-amber-500/60 text-amber-300'
-                : 'bg-stone-900/50 border-[#2d2722] text-stone-400 hover:text-stone-300'
-            }`}
+            className={`flex items-center gap-1 px-2 py-1 rounded-md border text-[11px] transition-colors ${effectorSettings.reverb.enabled
+              ? 'bg-amber-950/40 border-amber-500/60 text-amber-300'
+              : 'bg-stone-900/50 border-[#2d2722] text-stone-400 hover:text-stone-300'
+              }`}
             title="Alternar Reverb"
           >
             <span
-              className={`w-1.5 h-1.5 rounded-full ${
-                effectorSettings.reverb.enabled ? 'bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.9)]' : 'bg-stone-600'
-              }`}
+              className={`w-1.5 h-1.5 rounded-full ${effectorSettings.reverb.enabled ? 'bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.9)]' : 'bg-stone-600'
+                }`}
             />
             Reverb
           </button>
 
           <button
             onClick={onToggleDelay}
-            className={`flex items-center gap-1 px-2 py-1 rounded-md border text-[11px] transition-colors ${
-              effectorSettings.delay.enabled
-                ? 'bg-amber-950/40 border-amber-500/60 text-amber-300'
-                : 'bg-stone-900/50 border-[#2d2722] text-stone-400 hover:text-stone-300'
-            }`}
+            className={`flex items-center gap-1 px-2 py-1 rounded-md border text-[11px] transition-colors ${effectorSettings.delay.enabled
+              ? 'bg-amber-950/40 border-amber-500/60 text-amber-300'
+              : 'bg-stone-900/50 border-[#2d2722] text-stone-400 hover:text-stone-300'
+              }`}
             title="Alternar Delay"
           >
             <span
-              className={`w-1.5 h-1.5 rounded-full ${
-                effectorSettings.delay.enabled ? 'bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.9)]' : 'bg-stone-600'
-              }`}
+              className={`w-1.5 h-1.5 rounded-full ${effectorSettings.delay.enabled ? 'bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.9)]' : 'bg-stone-600'
+                }`}
             />
             Delay
           </button>
 
           <button
             onClick={onToggleChorus}
-            className={`flex items-center gap-1 px-2 py-1 rounded-md border text-[11px] transition-colors ${
-              effectorSettings.chorus.enabled
-                ? 'bg-amber-950/40 border-amber-500/60 text-amber-300'
-                : 'bg-stone-900/50 border-[#2d2722] text-stone-400 hover:text-stone-300'
-            }`}
+            className={`flex items-center gap-1 px-2 py-1 rounded-md border text-[11px] transition-colors ${effectorSettings.chorus.enabled
+              ? 'bg-amber-950/40 border-amber-500/60 text-amber-300'
+              : 'bg-stone-900/50 border-[#2d2722] text-stone-400 hover:text-stone-300'
+              }`}
             title="Alternar Chorus"
           >
             <span
-              className={`w-1.5 h-1.5 rounded-full ${
-                effectorSettings.chorus.enabled ? 'bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.9)]' : 'bg-stone-600'
-              }`}
+              className={`w-1.5 h-1.5 rounded-full ${effectorSettings.chorus.enabled ? 'bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.9)]' : 'bg-stone-600'
+                }`}
             />
             Chorus
           </button>
@@ -359,19 +348,18 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Sustenido (#) Toggle */}
         <button
           onClick={onToggleAccidentals}
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-[11px] font-semibold transition-all ${
-            (hasSelectedNotes ? isSelectionSharp : sustenidoActive)
-              ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-[0_0_8px_rgba(245,158,11,0.3)]'
-              : 'bg-stone-900/60 border-[#2d2722] text-stone-400 hover:text-stone-200'
-          }`}
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-[11px] font-semibold transition-all ${(hasSelectedNotes ? isSelectionSharp : sustenidoActive)
+            ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-[0_0_8px_rgba(245,158,11,0.3)]'
+            : 'bg-stone-900/60 border-[#2d2722] text-stone-400 hover:text-stone-200'
+            }`}
           title={
             hasSelectedNotes
               ? isSelectionSharp
                 ? 'Desligar Sustenido da(s) nota(s) selecionada(s) (-1 semitom para natural)'
                 : 'Ligar Sustenido na(s) nota(s) selecionada(s) (+1 semitom para sustenido)'
               : sustenidoActive
-              ? 'Sustenido ativo: novas notas recebem sustenido (#). Clique para desativar.'
-              : 'Sustenido inativo: novas notas serão naturais. Clique para ativar (#).'
+                ? 'Sustenido ativo: novas notas recebem sustenido (#). Clique para desativar.'
+                : 'Sustenido inativo: novas notas serão naturais. Clique para ativar (#).'
           }
         >
           <span className="font-mono text-sm leading-none font-bold">#</span>
@@ -383,22 +371,20 @@ export const Header: React.FC<HeaderProps> = ({
               : 'Sustenido'}
           </span>
           <span
-            className={`w-2 h-2 rounded-full transition-colors ${
-              (hasSelectedNotes ? isSelectionSharp : sustenidoActive)
-                ? 'bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.9)]'
-                : 'bg-stone-600'
-            }`}
+            className={`w-2 h-2 rounded-full transition-colors ${(hasSelectedNotes ? isSelectionSharp : sustenidoActive)
+              ? 'bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.9)]'
+              : 'bg-stone-600'
+              }`}
           />
         </button>
 
         {/* MIDI Controller Connect */}
         <button
           onClick={onOpenMidiModal}
-          className={`p-1.5 rounded-md border text-xs transition-colors flex items-center gap-1 ${
-            hasMidiDevices
-              ? 'bg-emerald-950/40 border-emerald-500/50 text-emerald-400'
-              : 'bg-stone-900 border-[#2d2722] text-stone-400 hover:text-amber-400'
-          }`}
+          className={`p-1.5 rounded-md border text-xs transition-colors flex items-center gap-1 ${hasMidiDevices
+            ? 'bg-emerald-950/40 border-emerald-500/50 text-emerald-400'
+            : 'bg-stone-900 border-[#2d2722] text-stone-400 hover:text-amber-400'
+            }`}
           title="Interface Web MIDI"
           aria-label="Configurar MIDI"
         >

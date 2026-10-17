@@ -91,7 +91,7 @@ export default function App() {
   // Core DAW State
   const [tracks, setTracks] = useState<Track[]>(INITIAL_TRACKS);
   const [activeTrackId, setActiveTrackId] = useState<string>('track-piano');
-  const [title, setTitle] = useState<string>('Tema de Balenos - Shai & Marni');
+  const [title, setTitle] = useState<string>('Marni Web Composer - Example');
   const [bpm, setBpm] = useState<number>(120);
   const [timeSignature, setTimeSignature] = useState<TimeSignature>('4/4');
   const [gridSnap, setGridSnap] = useState<GridSnap>('1/4');
@@ -428,7 +428,7 @@ export default function App() {
     setTracks(resetTracks);
     setActiveTrackId('track-piano');
     setCurrentPlayheadTick(0);
-    setTitle('Tema de Balenos - Shai & Marni');
+    setTitle('Marni Web Composer - Example');
     setIsResetConfirmOpen(false);
     pushHistory(resetTracks, 'track-piano');
   };
@@ -494,6 +494,8 @@ export default function App() {
         setToolMode('pencil');
       } else if (e.key === 'e' || e.key === 'E') {
         setToolMode('eraser');
+      } else if (e.key === 'h' || e.key === 'H') {
+        setToolMode('pan');
       }
     };
 
@@ -695,6 +697,7 @@ export default function App() {
           timeSignature={timeSignature}
           accidentals={accidentals}
           currentPlayheadTick={currentPlayheadTick}
+          isPlaying={isPlaying}
           onSeek={handleSeek}
           zoomLevel={zoomLevel}
           scaleType={scaleType}

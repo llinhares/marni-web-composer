@@ -45,9 +45,9 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
   const [copied, setCopied] = useState(false);
 
   // Binary Exporter State (from Lucas Linhares v2)
-  const [charName, setCharName] = useState<string>('Tchepper');
-  const [ownerId, setOwnerId] = useState<string>('1009649'); // Default or extracted ID
-  const [idStatus, setIdStatus] = useState<string>('0xf67f1 (Tchepper)');
+  const [charName, setCharName] = useState<string>('');
+  const [ownerId, setOwnerId] = useState<string>(''); // Default or extracted ID
+  const [idStatus, setIdStatus] = useState<string>('');
   const [transpose, setTranspose] = useState<string>('0');
   const [maxChunkNotes, setMaxChunkNotes] = useState<string>('730');
 
@@ -146,7 +146,7 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
     };
 
     const options: ExportOptions = {
-      charName: charName || 'Tchepper',
+      charName: charName || '',
       ownerId: parseInt(ownerId, 10) || 0,
       transpose: parseInt(transpose, 10) || 0,
       velMode,
@@ -187,7 +187,7 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
       await navigator.clipboard.writeText(textToCopy);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch {}
+    } catch { }
   };
 
   const handleDownloadXml = () => {
@@ -259,21 +259,19 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
         <div className="flex items-center px-5 sm:px-6 pt-3 border-b border-[#2a2a2a] bg-[#171515] shrink-0 gap-2">
           <button
             onClick={() => setActiveTab('binary')}
-            className={`px-3.5 py-2 text-xs font-semibold rounded-t-lg transition-colors border-t border-x ${
-              activeTab === 'binary'
-                ? 'bg-[#1c1a1a] border-[#3e3832] text-amber-400 border-b-transparent'
-                : 'border-transparent text-[#8b847a] hover:text-[#e0d4c8]'
-            }`}
+            className={`px-3.5 py-2 text-xs font-semibold rounded-t-lg transition-colors border-t border-x ${activeTab === 'binary'
+              ? 'bg-[#1c1a1a] border-[#3e3832] text-amber-400 border-b-transparent'
+              : 'border-transparent text-[#8b847a] hover:text-[#e0d4c8]'
+              }`}
           >
             🎮 Arquivo do Jogo (.bms / Criptografado ICE)
           </button>
           <button
             onClick={() => setActiveTab('xml')}
-            className={`px-3.5 py-2 text-xs font-semibold rounded-t-lg transition-colors border-t border-x ${
-              activeTab === 'xml'
-                ? 'bg-[#1c1a1a] border-[#3e3832] text-amber-400 border-b-transparent'
-                : 'border-transparent text-[#8b847a] hover:text-[#e0d4c8]'
-            }`}
+            className={`px-3.5 py-2 text-xs font-semibold rounded-t-lg transition-colors border-t border-x ${activeTab === 'xml'
+              ? 'bg-[#1c1a1a] border-[#3e3832] text-amber-400 border-b-transparent'
+              : 'border-transparent text-[#8b847a] hover:text-[#e0d4c8]'
+              }`}
           >
             📄 Código XML / MML (Visualização)
           </button>
@@ -560,21 +558,19 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => setXmlSubTab('xml')}
-                    className={`px-3 py-1.5 rounded text-xs font-semibold transition-colors ${
-                      xmlSubTab === 'xml'
-                        ? 'bg-amber-500 text-stone-950 shadow'
-                        : 'bg-stone-900 border border-[#3e3832] text-stone-300 hover:text-stone-100'
-                    }`}
+                    className={`px-3 py-1.5 rounded text-xs font-semibold transition-colors ${xmlSubTab === 'xml'
+                      ? 'bg-amber-500 text-stone-950 shadow'
+                      : 'bg-stone-900 border border-[#3e3832] text-stone-300 hover:text-stone-100'
+                      }`}
                   >
                     XML Estruturado (BDO Marni)
                   </button>
                   <button
                     onClick={() => setXmlSubTab('mml')}
-                    className={`px-3 py-1.5 rounded text-xs font-semibold transition-colors ${
-                      xmlSubTab === 'mml'
-                        ? 'bg-amber-500 text-stone-950 shadow'
-                        : 'bg-stone-900 border border-[#3e3832] text-stone-300 hover:text-stone-100'
-                    }`}
+                    className={`px-3 py-1.5 rounded text-xs font-semibold transition-colors ${xmlSubTab === 'mml'
+                      ? 'bg-amber-500 text-stone-950 shadow'
+                      : 'bg-stone-900 border border-[#3e3832] text-stone-300 hover:text-stone-100'
+                      }`}
                   >
                     MML Código Direto
                   </button>

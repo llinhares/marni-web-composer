@@ -55,7 +55,7 @@ export type GridSnap = '1/1' | '1/2' | '1/4' | '1/8' | '1/16' | '1/32' | '1/64' 
 
 export type TimeSignature = '4/4' | '3/4' | '6/8' | '2/4' | '12/8';
 
-export type ToolMode = 'pointer' | 'pencil' | 'eraser' | 'select';
+export type ToolMode = 'pointer' | 'pencil' | 'eraser' | 'select' | 'pan';
 
 export interface EffectorSettings {
   reverb: {
