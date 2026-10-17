@@ -36,11 +36,53 @@ export interface ParsedScoreResult {
 }
 
 export interface ScanOptions {
-  model?: 'gemini-2.5-flash' | 'gemini-1.5-flash';
+  model?: string;
   targetTrackId?: string;
 }
 
 const STORAGE_KEY = 'mwc_gemini_api_key';
+
+/**
+ * Discovers available Gemini models for generateContent on the provided API key.
+ */
+export async function fetchAvailableGeminiModels(apiKey: string): Promise<string[]> {
+  const fallbackList = ['gemini-3.8-flash', 'gemini-3.8-flash-lite', 'gemini-2.5-flash'];
+  if (!apiKey || !apiKey.trim()) return fallbackList;
+
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey.trim()}`);
+    if (!res.ok) return fallbackList;
+    const data = await res.json();
+    if (Array.isArray(data.models)) {
+      const flashModels: string[] = [];
+      const otherModels: string[] = [];
+
+      data.models.forEach((m: { name: string; supportedGenerationMethods?: string[] }) => {
+        if (m.supportedGenerationMethods?.includes('generateContent')) {
+          const cleanName = m.name.replace(/^models\//, '');
+          if (cleanName.includes('flash')) {
+            flashModels.push(cleanName);
+          } else {
+            otherModels.push(cleanName);
+          }
+        }
+      });
+
+      // Sort models: 3.8 at top, then other 3.x, then 2.5
+      flashModels.sort((a, b) => {
+        if (a.includes('3.8') && !b.includes('3.8')) return -1;
+        if (!a.includes('3.8') && b.includes('3.8')) return 1;
+        return a.localeCompare(b);
+      });
+
+      const list = [...flashModels, ...otherModels];
+      return list.length > 0 ? list : fallbackList;
+    }
+    return fallbackList;
+  } catch {
+    return fallbackList;
+  }
+}
 
 export function getGeminiApiKey(): string {
   try {
@@ -105,7 +147,8 @@ export function noteNameToPitch(name: string): number {
  */
 export async function fileToBase64(file: File): Promise<{ mimeType: string; data: string }> {
   // If it's a PDF, read directly
-  if (file.type === 'application/pdf') {
+  const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+  if (isPdf) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => {
@@ -240,71 +283,93 @@ export async function transcribeSheetImageWithGemini(
     throw new Error('Chave de API do Gemini não configurada. Insira sua chave gratuita do Google AI Studio.');
   }
 
-  const model = options?.model || 'gemini-2.5-flash';
+  const requestedModel = options?.model || 'gemini-3.8-flash';
   const targetTrackId = options?.targetTrackId || `track-${Date.now()}`;
 
   const { mimeType, data: base64Data } = await fileToBase64(file);
 
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey.trim()}`;
+  // Model retry candidates if 404 (model not found / deprecated for new accounts)
+  const candidateModels = [
+    requestedModel,
+    'gemini-3.8-flash',
+    'gemini-3.8-flash-lite',
+    'gemini-2.5-flash',
+  ].filter((m, i, arr) => m && arr.indexOf(m) === i);
 
-  const requestBody = {
-    contents: [
-      {
-        parts: [
-          {
-            inlineData: {
-              mimeType,
-              data: base64Data,
+  let lastError: Error | null = null;
+  let rawText: string | undefined;
+
+  for (const modelToTry of candidateModels) {
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelToTry}:generateContent?key=${apiKey.trim()}`;
+
+    const requestBody = {
+      contents: [
+        {
+          parts: [
+            {
+              inlineData: {
+                mimeType,
+                data: base64Data,
+              },
             },
-          },
-          {
-            text: OMR_SYSTEM_PROMPT,
-          },
-        ],
+            {
+              text: OMR_SYSTEM_PROMPT,
+            },
+          ],
+        },
+      ],
+      generationConfig: {
+        responseMimeType: 'application/json',
+        temperature: 0.1,
       },
-    ],
-    generationConfig: {
-      responseMimeType: 'application/json',
-      temperature: 0.1,
-    },
-  };
+    };
 
-  let response: Response;
-  try {
-    response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(requestBody),
-    });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Falha de conexão com a API do Gemini: ${message}. Verifique sua internet.`);
-  }
-
-  if (!response.ok) {
-    let errorDetail = '';
+    let response: Response;
     try {
-      const errJson = await response.json();
-      errorDetail = errJson.error?.message || response.statusText;
-    } catch {
-      errorDetail = response.statusText;
+      response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(`Falha de conexão com a API do Gemini: ${message}. Verifique sua internet.`);
     }
 
-    if (response.status === 400 || errorDetail.includes('API_KEY_INVALID')) {
-      throw new Error('Chave de API do Gemini inválida ou não autorizada. Verifique no Google AI Studio.');
+    if (!response.ok) {
+      let errorDetail = '';
+      try {
+        const errJson = await response.json();
+        errorDetail = errJson.error?.message || response.statusText;
+      } catch {
+        errorDetail = response.statusText;
+      }
+
+      if (response.status === 400 || errorDetail.includes('API_KEY_INVALID')) {
+        throw new Error('Chave de API do Gemini inválida ou não autorizada. Verifique no Google AI Studio.');
+      }
+      if (response.status === 429 || errorDetail.includes('RESOURCE_EXHAUSTED')) {
+        throw new Error('Limite de requisições gratuitas por minuto atingido no Gemini. Aguarde 30 segundos e tente novamente.');
+      }
+
+      // If 404 (model not found or deprecated for new users), continue to next candidate
+      if (response.status === 404) {
+        lastError = new Error(`Erro na API Gemini (${response.status}): ${errorDetail}`);
+        continue;
+      }
+
+      throw new Error(`Erro na API Gemini (${response.status}): ${errorDetail}`);
     }
-    if (response.status === 429 || errorDetail.includes('RESOURCE_EXHAUSTED')) {
-      throw new Error('Limite de requisições gratuitas por minuto atingido no Gemini. Aguarde 30 segundos e tente novamente.');
-    }
-    throw new Error(`Erro na API Gemini (${response.status}): ${errorDetail}`);
+
+    const resultData = await response.json();
+    rawText = resultData.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (rawText) break;
   }
-
-  const resultData = await response.json();
-  const rawText = resultData.candidates?.[0]?.content?.parts?.[0]?.text;
 
   if (!rawText) {
+    if (lastError) throw lastError;
     throw new Error('A IA não retornou dados legíveis para a imagem enviada. Verifique se a foto da partitura está nítida.');
   }
 

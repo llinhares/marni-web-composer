@@ -23,6 +23,7 @@ import {
   saveGeminiApiKey,
   clearGeminiApiKey,
   transcribeSheetImageWithGemini,
+  fetchAvailableGeminiModels,
   ParsedScoreResult,
 } from '../utils/aiSheetScanner.ts';
 
@@ -55,7 +56,12 @@ export const AiSheetScannerModal: React.FC<AiSheetScannerModalProps> = ({
   const [showApiKey, setShowApiKey] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [selectedModel, setSelectedModel] = useState<'gemini-2.5-flash' | 'gemini-1.5-flash'>('gemini-2.5-flash');
+  const [availableModels, setAvailableModels] = useState<string[]>([
+    'gemini-3.8-flash',
+    'gemini-3.8-flash-lite',
+    'gemini-2.5-flash',
+  ]);
+  const [selectedModel, setSelectedModel] = useState<string>('gemini-3.8-flash');
 
   // Destination Options
   const [destinationMode, setDestinationMode] = useState<'new' | 'existing'>('new');
@@ -70,15 +76,26 @@ export const AiSheetScannerModal: React.FC<AiSheetScannerModalProps> = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [scanResult, setScanResult] = useState<ParsedScoreResult | null>(null);
   const [showKeyGuide, setShowKeyGuide] = useState(false);
-
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (isOpen) {
-      setApiKey(getGeminiApiKey());
+      const savedKey = getGeminiApiKey();
+      setApiKey(savedKey);
       setTargetTrackId(activeTrackId);
       setErrorMessage(null);
       setScanResult(null);
+
+      if (savedKey.trim()) {
+        fetchAvailableGeminiModels(savedKey).then((models) => {
+          if (models && models.length > 0) {
+            setAvailableModels(models);
+            if (!models.includes(selectedModel)) {
+              setSelectedModel(models[0]);
+            }
+          }
+        });
+      }
     }
   }, [isOpen, activeTrackId]);
 
@@ -100,6 +117,16 @@ export const AiSheetScannerModal: React.FC<AiSheetScannerModalProps> = ({
 
   const handleSaveKey = () => {
     saveGeminiApiKey(apiKey);
+    if (apiKey.trim()) {
+      fetchAvailableGeminiModels(apiKey).then((models) => {
+        if (models && models.length > 0) {
+          setAvailableModels(models);
+          if (!models.includes(selectedModel)) {
+            setSelectedModel(models[0]);
+          }
+        }
+      });
+    }
   };
 
   const handleClearKey = () => {
@@ -493,11 +520,20 @@ export const AiSheetScannerModal: React.FC<AiSheetScannerModalProps> = ({
                 <span className="text-[11px] text-stone-400">Modelo IA:</span>
                 <select
                   value={selectedModel}
-                  onChange={(e) => setSelectedModel(e.target.value as 'gemini-2.5-flash' | 'gemini-1.5-flash')}
+                  onChange={(e) => setSelectedModel(e.target.value)}
                   className="bg-[#141210] border border-[#3e342b] rounded-lg px-2 py-1 text-xs text-stone-300 focus:outline-none"
                 >
-                  <option value="gemini-2.5-flash">Gemini 2.5 Flash (Recomendado)</option>
-                  <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
+                  {availableModels.map((m) => (
+                    <option key={m} value={m}>
+                      {m === 'gemini-3.8-flash'
+                        ? 'Gemini 3.8 Flash (Recomendado)'
+                        : m === 'gemini-3.8-flash-lite'
+                        ? 'Gemini 3.8 Flash-Lite (Rápido)'
+                        : m === 'gemini-2.5-flash'
+                        ? 'Gemini 2.5 Flash'
+                        : m}
+                    </option>
+                  ))}
                 </select>
               </div>
             </div>
