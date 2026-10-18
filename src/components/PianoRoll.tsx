@@ -134,17 +134,9 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
   const totalGridTicks = totalGridBars * ticksPerMeasure;
   const totalGridWidth = totalGridTicks * pixelsPerTick;
 
-  // Auto-focus drum kit range (pitches 48 to 62) when switching to percussion track
-  useEffect(() => {
-    if (isPercussion) {
-      const centerIndex = MAX_PITCH - 55;
-      const targetScroll = Math.max(0, centerIndex * keyHeight - 160);
-      setScrollY(targetScroll);
-    }
-  }, [isPercussion, activeTrackId, keyHeight]);
-
   // Container resize observer for responsive scrollbars and layout
   const [containerWidth, setContainerWidth] = useState(1000);
+  const [containerHeight, setContainerHeight] = useState(700);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -153,6 +145,9 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
     const updateSize = () => {
       if (container.clientWidth > 0) {
         setContainerWidth(container.clientWidth);
+      }
+      if (container.clientHeight > 0) {
+        setContainerHeight(container.clientHeight);
       }
     };
 
@@ -179,8 +174,27 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
     return () => container.removeEventListener('wheel', onNativeWheel);
   }, [onZoomChange]);
 
-  const visibleWidth = Math.max(100, containerWidth - keyboardWidth);
+  const VERTICAL_SCROLLBAR_WIDTH = 12;
+  const HORIZONTAL_SCROLLBAR_HEIGHT = 12;
+
+  const visibleWidth = Math.max(100, containerWidth - keyboardWidth - VERTICAL_SCROLLBAR_WIDTH);
+  const visibleHeight = Math.max(100, containerHeight - RULER_HEIGHT - HORIZONTAL_SCROLLBAR_HEIGHT);
   const maxScrollX = Math.max(0, totalGridWidth - visibleWidth);
+  const maxScrollY = Math.max(0, totalGridHeight - visibleHeight);
+
+  // Auto-focus drum kit range (pitches 48 to 62) when switching to percussion track
+  useEffect(() => {
+    if (isPercussion) {
+      const centerIndex = MAX_PITCH - 55;
+      const targetScroll = Math.max(0, Math.min(maxScrollY, centerIndex * keyHeight - visibleHeight / 2));
+      setScrollY(targetScroll);
+    }
+  }, [isPercussion, activeTrackId, keyHeight, maxScrollY, visibleHeight]);
+
+  // Clamp vertical scroll whenever bounds change (resize, zoom, etc.)
+  useEffect(() => {
+    setScrollY((prev) => Math.max(0, Math.min(maxScrollY, prev)));
+  }, [maxScrollY]);
 
   // Drag interaction states (including Pan with middle-click or pan tool)
   const [dragAction, setDragAction] = useState<{
@@ -209,6 +223,20 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
   const scrollbarThumbLeft =
     maxScrollX > 0
       ? (Math.min(maxScrollX, Math.max(0, scrollX)) / maxScrollX) * scrollbarTrackDistance
+      : 0;
+
+  // Vertical Scrollbar dragging state
+  const [isDraggingVerticalScrollbar, setIsDraggingVerticalScrollbar] = useState(false);
+  const verticalScrollbarDragStart = useRef<{ startY: number; startScrollY: number }>({ startY: 0, startScrollY: 0 });
+
+  const scrollbarThumbHeight = Math.max(
+    36,
+    Math.min(visibleHeight, (visibleHeight / Math.max(1, totalGridHeight)) * visibleHeight)
+  );
+  const scrollbarTrackDistanceY = Math.max(1, visibleHeight - scrollbarThumbHeight);
+  const scrollbarThumbTop =
+    maxScrollY > 0
+      ? (Math.min(maxScrollY, Math.max(0, scrollY)) / maxScrollY) * scrollbarTrackDistanceY
       : 0;
 
   // Auto-scroll to follow playhead smoothly during playback
@@ -462,10 +490,10 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
     (pitch: number) => {
       onAuditionPitch(pitch);
       const centerIndex = MAX_PITCH - pitch;
-      const targetScroll = Math.max(0, centerIndex * keyHeight - 140);
+      const targetScroll = Math.max(0, Math.min(maxScrollY, centerIndex * keyHeight - visibleHeight / 2));
       setScrollY(targetScroll);
     },
-    [onAuditionPitch, keyHeight]
+    [onAuditionPitch, keyHeight, maxScrollY, visibleHeight]
   );
 
   // Main Canvas Render
@@ -900,6 +928,50 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
     setScrollX(ratio * maxScrollX);
   };
 
+  // Vertical Scrollbar Dragging and Clicking Handlers
+  const handleVerticalScrollbarThumbPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+    setIsDraggingVerticalScrollbar(true);
+    verticalScrollbarDragStart.current = {
+      startY: e.clientY,
+      startScrollY: scrollY,
+    };
+  };
+
+  const handleVerticalScrollbarThumbPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDraggingVerticalScrollbar) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const dy = e.clientY - verticalScrollbarDragStart.current.startY;
+    const scrollDelta = (dy / scrollbarTrackDistanceY) * maxScrollY;
+    setScrollY(Math.max(0, Math.min(maxScrollY, verticalScrollbarDragStart.current.startScrollY + scrollDelta)));
+  };
+
+  const handleVerticalScrollbarThumbPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (isDraggingVerticalScrollbar) {
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {
+        // ignore
+      }
+      setIsDraggingVerticalScrollbar(false);
+    }
+  };
+
+  const handleVerticalScrollbarTrackClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickY = e.clientY - rect.top;
+    const targetThumbTop = clickY - scrollbarThumbHeight / 2;
+    const ratio = Math.max(0, Math.min(1, targetThumbTop / scrollbarTrackDistanceY));
+    setScrollY(ratio * maxScrollY);
+  };
+
   // Pointer Interaction (Selection, Proportional Resize, Move, Pan)
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     // 0. Middle Click (Button 1) or Hand/Pan Tool
@@ -1100,8 +1172,6 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
       const startX = dragAction.startScrollX ?? scrollX;
       const startY = dragAction.startScrollY ?? scrollY;
 
-      const maxScrollY = Math.max(0, totalGridHeight - 200);
-
       setScrollX(Math.max(0, Math.min(maxScrollX, startX - dx)));
       setScrollY(Math.max(0, Math.min(maxScrollY, startY - dy)));
       return;
@@ -1255,7 +1325,6 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
       onZoomChange?.(zoomDelta);
       return;
     }
-    const maxScrollY = Math.max(0, totalGridHeight - 200);
 
     if (e.shiftKey) {
       setScrollX((prev) => Math.max(0, Math.min(maxScrollX, prev + e.deltaY)));
@@ -1434,8 +1503,8 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
 
       {/* Horizontal Scrollbar */}
       <div
-        className="absolute bottom-0 right-0 h-3 bg-[#181513]/90 border-t border-[#2d2722] z-30 flex items-center select-none cursor-pointer"
-        style={{ left: `${keyboardWidth}px` }}
+        className="absolute bottom-0 h-3 bg-[#181513]/90 border-t border-[#2d2722] z-30 flex items-center select-none cursor-pointer"
+        style={{ left: `${keyboardWidth}px`, right: `${VERTICAL_SCROLLBAR_WIDTH}px` }}
         onClick={handleScrollbarTrackClick}
       >
         <div
@@ -1455,11 +1524,27 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
         />
       </div>
 
-      {/* Subtle Bottom Instruction Hint */}
-      <div className="absolute bottom-4 left-4 pointer-events-none hidden lg:block z-20">
-        <span className="text-[10px] text-stone-500 font-mono">
-          Dica: Use a ferramenta Mover (H) ou o clique da rodinha do mouse para mover a tela • Shift + Scroll para rolar horizontalmente
-        </span>
+      {/* Vertical Scrollbar */}
+      <div
+        className="absolute right-0 w-3 bg-[#181513]/90 border-l border-[#2d2722] z-30 flex justify-center select-none cursor-pointer"
+        style={{ top: `${RULER_HEIGHT}px`, bottom: `${HORIZONTAL_SCROLLBAR_HEIGHT}px` }}
+        onClick={handleVerticalScrollbarTrackClick}
+      >
+        <div
+          className={`w-2 rounded-full transition-colors cursor-grab active:cursor-grabbing ${
+            isDraggingVerticalScrollbar
+              ? 'bg-amber-500 shadow-md shadow-amber-500/30'
+              : 'bg-[#443a32] hover:bg-amber-600/70'
+          }`}
+          style={{
+            height: `${scrollbarThumbHeight}px`,
+            transform: `translateY(${scrollbarThumbTop}px)`,
+          }}
+          onPointerDown={handleVerticalScrollbarThumbPointerDown}
+          onPointerMove={handleVerticalScrollbarThumbPointerMove}
+          onPointerUp={handleVerticalScrollbarThumbPointerUp}
+          onPointerCancel={handleVerticalScrollbarThumbPointerUp}
+        />
       </div>
     </div>
   );

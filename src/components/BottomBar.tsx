@@ -34,6 +34,20 @@ export const BottomBar: React.FC<BottomBarProps> = ({
         />
       </div>
 
+      {/* Center Helpful Shortcuts Hint */}
+      <div className="hidden xl:flex items-center gap-2 text-[11px] font-mono select-none">
+        <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-stone-900/80 border border-[#2d2722] text-stone-400">
+          <span className="text-amber-500/90 font-semibold font-sans">Dica:</span>
+          <span>
+            <kbd className="px-1.5 py-0.5 rounded bg-stone-850 border border-stone-700/60 text-[10px] text-stone-300 font-sans">H</kbd> ou <kbd className="px-1.5 py-0.5 rounded bg-stone-850 border border-stone-700/60 text-[10px] text-stone-300 font-sans">Clique Scroll</kbd> mover tela
+          </span>
+          <span className="text-stone-600">•</span>
+          <span>
+            <kbd className="px-1.5 py-0.5 rounded bg-stone-850 border border-stone-700/60 text-[10px] text-stone-300 font-sans">Shift + Scroll</kbd> rolar horizontal
+          </span>
+        </div>
+      </div>
+
       {/* Right / Export Action Buttons matching Screenshot 1 */}
       <div className="flex items-center gap-2">
         {/* High-Resolution Lossless Audio Dropdown (WAV 24-bit / 16-bit) */}
