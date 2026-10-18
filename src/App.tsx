@@ -96,6 +96,19 @@ export default function App() {
   const [tracks, setTracks] = useState<Track[]>(INITIAL_TRACKS);
   const [activeTrackId, setActiveTrackId] = useState<string>('track-piano');
   const [title, setTitle] = useState<string>('Marni Web Composer - Example');
+  const [author, setAuthor] = useState<string>(() => {
+    return localStorage.getItem('marni_bdo_author') || 'Tchepper';
+  });
+  const [bdoOwnerId, setBdoOwnerId] = useState<number>(() => {
+    const saved = localStorage.getItem('marni_bdo_owner_id');
+    return saved ? parseInt(saved, 10) : 1009649;
+  });
+
+  const handleAuthorChange = useCallback((newAuthor: string) => {
+    setAuthor(newAuthor);
+    localStorage.setItem('marni_bdo_author', newAuthor);
+  }, []);
+
   const [bpm, setBpm] = useState<number>(120);
   const [timeSignature, setTimeSignature] = useState<TimeSignature>('4/4');
   const [gridSnap, setGridSnap] = useState<GridSnap>('1/4');
@@ -301,7 +314,7 @@ export default function App() {
   const metadata: SongMetadata = useMemo(
     () => ({
       title,
-      author: 'Lucas Linhares',
+      author,
       bpm,
       timeSignature,
       ticksPerQuarterNote: 480,
@@ -309,7 +322,7 @@ export default function App() {
       gridSnap,
       bdoGrade,
     }),
-    [title, bpm, timeSignature, accidentals, gridSnap, bdoGrade]
+    [title, author, bpm, timeSignature, accidentals, gridSnap, bdoGrade]
   );
 
   // Playback Controls
@@ -592,13 +605,25 @@ export default function App() {
 
       // 2. Detect BDO In-game Binary Score (BMS / ICE Encrypted format: starts with 0x09 0x00 0x00 0x00)
       if (isBdoBinaryContent(bytes) || file.name.toLowerCase().endsWith('.bms')) {
-        const decoded = parseBdoBinaryFile(bytes);
+        const fileTitle = file.name.replace(/\.[^/.]+$/, '').trim();
+        const decoded = parseBdoBinaryFile(bytes, fileTitle);
         if (decoded.tracks.length > 0) {
           handleStop();
           setTracks(decoded.tracks);
           setActiveTrackId(decoded.tracks[0].id);
           if (decoded.bpm) setBpm(decoded.bpm);
-          if (decoded.title) setTitle(decoded.title);
+          if (fileTitle) {
+            setTitle(fileTitle);
+          } else if (decoded.title) {
+            setTitle(decoded.title);
+          }
+          if (decoded.author) {
+            handleAuthorChange(decoded.author);
+          }
+          if (decoded.ownerId) {
+            setBdoOwnerId(decoded.ownerId);
+            localStorage.setItem('marni_bdo_owner_id', decoded.ownerId.toString());
+          }
           if (decoded.timeSignature) setTimeSignature(decoded.timeSignature);
           pushHistory(decoded.tracks, decoded.tracks[0].id);
         } else {
@@ -875,6 +900,8 @@ export default function App() {
       <BottomBar
         title={title}
         onTitleChange={setTitle}
+        author={author}
+        onAuthorChange={handleAuthorChange}
         onSaveMidi={handleSaveMidi}
         onExportBdo={() => setIsBdoExportOpen(true)}
         onExportWav={handleExportWav}

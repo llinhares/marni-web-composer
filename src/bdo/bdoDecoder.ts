@@ -173,6 +173,9 @@ const BDO_ID_TO_INSTRUMENT: Record<number, { id: InstrumentId; name: string }> =
 
 export interface DecodedBdoSong {
   title: string;
+  composer: string;
+  arranger: string;
+  author: string;
   bpm: number;
   timeSignature: TimeSignature;
   ownerId: number;
@@ -182,7 +185,10 @@ export interface DecodedBdoSong {
 /**
  * Parses binary BDO music file into structured Marni Web Composer tracks.
  */
-export function parseBdoBinaryFile(data: Uint8Array | ArrayBuffer): DecodedBdoSong {
+export function parseBdoBinaryFile(
+  data: Uint8Array | ArrayBuffer,
+  fileNameFallback?: string
+): DecodedBdoSong {
   const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
   if (!isBdoBinaryContent(bytes)) {
     throw new Error('Arquivo não é um binário de partitura BDO válido.');
@@ -194,14 +200,26 @@ export function parseBdoBinaryFile(data: Uint8Array | ArrayBuffer): DecodedBdoSo
 
   const ownerId = dv.getUint32(0, true);
 
-  // Read UTF-16LE song title from bytes 8 to 70 (max 31 chars)
-  let title = '';
+  // In BDO, bytes 8..70 is Composer (Composição), bytes 70..132 is Arranger (Arranjo)
+  let composer = '';
   for (let i = 8; i < 70; i += 2) {
     const code = dv.getUint16(i, true);
     if (code === 0) break;
-    title += String.fromCharCode(code);
+    composer += String.fromCharCode(code);
   }
-  title = title.trim() || 'Música BDO Importada';
+  composer = composer.trim();
+
+  let arranger = '';
+  for (let i = 70; i < 132; i += 2) {
+    const code = dv.getUint16(i, true);
+    if (code === 0) break;
+    arranger += String.fromCharCode(code);
+  }
+  arranger = arranger.trim();
+
+  const author = arranger || composer || '';
+  const cleanFileName = fileNameFallback ? fileNameFallback.replace(/\.[^/.]+$/, '').trim() : '';
+  const title = cleanFileName || composer || 'Música BDO Importada';
 
   const bpm = dv.getUint16(132, true) || 120;
   const timeSigNumerator = dv.getUint16(134, true) || 4;
@@ -211,7 +229,7 @@ export function parseBdoBinaryFile(data: Uint8Array | ArrayBuffer): DecodedBdoSo
   const msToTicks = (bpm * 480) / 60000;
   let offset = 0x150;
   if (offset + 3 > decrypted.length) {
-    return { title, bpm, timeSignature, ownerId, tracks: [] };
+    return { title, composer, arranger, author, bpm, timeSignature, ownerId, tracks: [] };
   }
 
   // Skip leading 0x00 byte
@@ -289,9 +307,12 @@ export function parseBdoBinaryFile(data: Uint8Array | ArrayBuffer): DecodedBdoSo
 
   return {
     title,
+    composer,
+    arranger,
+    author,
     bpm,
     timeSignature,
     ownerId,
     tracks,
   };
-}
+};

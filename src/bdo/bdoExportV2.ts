@@ -4,6 +4,7 @@ export interface SongContext {
   bpm: number;
   timeSignature: [number, number];
   title: string;
+  author?: string;
 }
 
 const _KA = new Uint8Array([0xa3, 0x71, 0x8f, 0x92, 0x46, 0xb2, 0xc8, 0x55]);
@@ -271,10 +272,14 @@ export function exportToBdo(tracks: Track[], song: SongContext, options: ExportO
   view.setUint32(offset, options.ownerId, true); offset += 4;
   view.setUint32(offset, 0, true); offset += 4;
   
-  const titleBuf = encodeNameUTF16LE(song.title || options.charName || 'Marni_Song');
-  new Uint8Array(buffer, offset, 62).set(titleBuf); offset += 62;
-  const charNameBuf = encodeNameUTF16LE(options.charName || song.title || 'Composer');
-  new Uint8Array(buffer, offset, 62).set(charNameBuf); offset += 62;
+  // In Black Desert Online:
+  // Offset 0x008 (bytes 8..69): Compositor (Composição)
+  // Offset 0x046 (bytes 70..131): Arranjador (Arranjo)
+  // Both fields must use the same character / family name
+  const authorName = (options.charName || song.author || 'Composer').trim();
+  const authorBuf = encodeNameUTF16LE(authorName);
+  new Uint8Array(buffer, offset, 62).set(authorBuf); offset += 62;
+  new Uint8Array(buffer, offset, 62).set(authorBuf); offset += 62;
   
   view.setUint16(offset, song.bpm, true); offset += 2;
   view.setUint16(offset, song.timeSignature[0], true); offset += 2;

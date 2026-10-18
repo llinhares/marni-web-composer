@@ -45,9 +45,17 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
   const [copied, setCopied] = useState(false);
 
   // Binary Exporter State (from Lucas Linhares v2)
-  const [charName, setCharName] = useState<string>('');
-  const [ownerId, setOwnerId] = useState<string>(''); // Default or extracted ID
-  const [idStatus, setIdStatus] = useState<string>('');
+  const [charName, setCharName] = useState<string>(() => {
+    return metadata.author || localStorage.getItem('marni_bdo_author') || 'Tchepper';
+  });
+  const [ownerId, setOwnerId] = useState<string>(() => {
+    return localStorage.getItem('marni_bdo_owner_id') || '1009649';
+  }); // Default or extracted ID
+  const [idStatus, setIdStatus] = useState<string>(() => {
+    const savedOwner = localStorage.getItem('marni_bdo_owner_id') || '1009649';
+    const savedName = metadata.author || localStorage.getItem('marni_bdo_author') || 'Tchepper';
+    return `0x${parseInt(savedOwner, 10).toString(16)} (${savedName})`;
+  });
   const [transpose, setTranspose] = useState<string>('0');
   const [maxChunkNotes, setMaxChunkNotes] = useState<string>('730');
 
@@ -68,9 +76,15 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const bdoInstrumentNames = Object.keys(FULL_BDO_INSTRUMENTS);
 
-  // Initialize overrides from tracks
+  // Initialize overrides from tracks and metadata
   useEffect(() => {
     if (!isOpen) return;
+    const initialAuthor = metadata.author || localStorage.getItem('marni_bdo_author') || 'Tchepper';
+    const initialOwner = localStorage.getItem('marni_bdo_owner_id') || '1009649';
+    setCharName(initialAuthor);
+    setOwnerId(initialOwner);
+    setIdStatus(`0x${parseInt(initialOwner, 10).toString(16)} (${initialAuthor})`);
+
     const initialOverrides: Record<string, string> = {};
     const initialScales: Record<string, number> = {};
     const initialSustains: Record<string, boolean> = {};
@@ -86,7 +100,7 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
     setInstOverrides(initialOverrides);
     setVelScales(initialScales);
     setSustainOverrides(initialSustains);
-  }, [tracks, isOpen]);
+  }, [tracks, metadata, isOpen]);
 
   // Generate XML / MML for preview
   const bdoScoreResult = useMemo(() => {
@@ -127,15 +141,28 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
       const decrypted = decryptOwnerHeader(payload);
       const extractedId = new DataView(decrypted.buffer).getUint32(decrypted.byteOffset, true);
 
+      // In BDO, offset 70 is arranger, offset 8 is composer
       let extractedName = '';
-      for (let i = 8; i < 8 + 62; i += 2) {
+      for (let i = 70; i < 70 + 62; i += 2) {
         const charCode = decrypted[i] | (decrypted[i + 1] << 8);
         if (charCode === 0) break;
         extractedName += String.fromCharCode(charCode);
       }
+      if (!extractedName) {
+        for (let i = 8; i < 8 + 62; i += 2) {
+          const charCode = decrypted[i] | (decrypted[i + 1] << 8);
+          if (charCode === 0) break;
+          extractedName += String.fromCharCode(charCode);
+        }
+      }
+      extractedName = extractedName.trim();
 
       setOwnerId(extractedId.toString());
-      if (extractedName) setCharName(extractedName);
+      localStorage.setItem('marni_bdo_owner_id', extractedId.toString());
+      if (extractedName) {
+        setCharName(extractedName);
+        localStorage.setItem('marni_bdo_author', extractedName);
+      }
       setIdStatus(`0x${extractedId.toString(16)} (${extractedName || 'Personagem'})`);
     } catch {
       setIdStatus('Erro ao ler arquivo .bms');
@@ -144,16 +171,28 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
 
   const handleExportBinary = (withExtension = true) => {
     const songTitle = (metadata.title || 'Marni_Song').trim();
+    const resolvedCharName = (
+      charName ||
+      metadata.author ||
+      localStorage.getItem('marni_bdo_author') ||
+      'Tchepper'
+    ).trim();
+
+    localStorage.setItem('marni_bdo_author', resolvedCharName);
+    if (ownerId) {
+      localStorage.setItem('marni_bdo_owner_id', ownerId);
+    }
 
     const songContext: SongContext = {
       bpm: metadata.bpm,
       timeSignature: [4, 4],
       title: songTitle,
+      author: resolvedCharName,
     };
 
     const options: ExportOptions = {
-      charName: charName || '',
-      ownerId: parseInt(ownerId, 10) || 0,
+      charName: resolvedCharName,
+      ownerId: parseInt(ownerId, 10) || 1009649,
       transpose: parseInt(transpose, 10) || 0,
       velMode,
       velStepBase: parseInt(stepBase, 10) || 100,
@@ -296,19 +335,26 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
 
                 <div className="space-y-3 text-xs">
                   {/* Character Row */}
-                  <div className="grid grid-cols-1 sm:grid-cols-[100px_1fr] items-center gap-2">
-                    <span className="text-[#8b847a] sm:text-right sm:pr-3 font-medium">Character:</span>
+                  <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-center gap-2">
+                    <span className="text-[#8b847a] sm:text-right sm:pr-3 font-medium">
+                      Autor (Personagem/Família):
+                    </span>
                     <div className="flex items-center gap-2.5 flex-wrap">
                       <input
                         type="text"
                         value={charName}
-                        onChange={(e) => setCharName(e.target.value)}
-                        className="w-36 bg-[#1c1a1a] border border-[#3e3832] rounded px-3 py-1.5 text-xs text-[#e0d4c8] outline-none focus:border-[#d4ab6a] transition-colors"
+                        onChange={(e) => {
+                          setCharName(e.target.value);
+                          localStorage.setItem('marni_bdo_author', e.target.value);
+                        }}
+                        placeholder="Nome de Personagem ou Família"
+                        title="Nome preenchido igualmente em Composição e Arranjo no BDO"
+                        className="w-48 bg-[#1c1a1a] border border-[#3e3832] rounded px-3 py-1.5 text-xs text-[#e0d4c8] outline-none focus:border-[#d4ab6a] transition-colors"
                       />
                       <button
                         onClick={() => fileInputRef.current?.click()}
                         className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-[#3e3832] bg-[#23201e] text-xs font-medium text-[#e0d4c8] hover:text-[#d4ab6a] hover:border-[#d4ab6a] transition-all"
-                        title="Extrair Owner ID de um arquivo .bms salvo pelo seu personagem"
+                        title="Extrair Owner ID e Nome de um arquivo .bms salvo pelo seu personagem no Black Desert"
                       >
                         <Upload className="w-3.5 h-3.5" />
                         <span>Carregar ID BDO</span>

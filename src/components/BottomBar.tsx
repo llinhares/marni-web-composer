@@ -4,6 +4,8 @@ import { Download, Music, Disc, ChevronUp, FileAudio } from 'lucide-react';
 interface BottomBarProps {
   title: string;
   onTitleChange: (newTitle: string) => void;
+  author?: string;
+  onAuthorChange?: (newAuthor: string) => void;
   onSaveMidi: () => void;
   onExportBdo: () => void;
   onExportWav: (bitDepth: 16 | 24) => void;
@@ -13,6 +15,8 @@ interface BottomBarProps {
 export const BottomBar: React.FC<BottomBarProps> = ({
   title,
   onTitleChange,
+  author,
+  onAuthorChange,
   onSaveMidi,
   onExportBdo,
   onExportWav,
@@ -22,16 +26,27 @@ export const BottomBar: React.FC<BottomBarProps> = ({
 
   return (
     <footer className="h-14 bg-[#141210] border-t border-[#2d2722] px-3 sm:px-4 flex items-center justify-between gap-3 shrink-0 z-20 text-xs text-stone-300">
-      {/* Left / Song Title Input */}
-      <div className="flex-1 max-w-md">
+      {/* Left / Song Title & Author Input */}
+      <div className="flex-1 max-w-lg flex items-center gap-2">
         <input
           type="text"
           value={title}
           onChange={(e) => onTitleChange(e.target.value)}
           placeholder="Insira o título da música..."
-          className="w-full bg-stone-900/90 border border-[#2d2722] rounded-lg px-3 py-1.5 text-stone-200 placeholder-stone-500 focus:outline-none focus:border-amber-500/60 font-medium text-xs transition-colors"
+          className="flex-1 bg-stone-900/90 border border-[#2d2722] rounded-lg px-3 py-1.5 text-stone-200 placeholder-stone-500 focus:outline-none focus:border-amber-500/60 font-medium text-xs transition-colors"
           aria-label="Título da Música"
         />
+        {onAuthorChange !== undefined && (
+          <input
+            type="text"
+            value={author ?? ''}
+            onChange={(e) => onAuthorChange(e.target.value)}
+            placeholder="Personagem / Família..."
+            className="w-40 bg-stone-900/90 border border-[#2d2722] rounded-lg px-2.5 py-1.5 text-stone-300 placeholder-stone-500 focus:outline-none focus:border-amber-500/60 font-medium text-xs transition-colors"
+            title="Nome de Personagem / Família (usado igualmente em Composição e Arranjo no BDO)"
+            aria-label="Autor da Música"
+          />
+        )}
       </div>
 
       {/* Center Helpful Shortcuts Hint */}

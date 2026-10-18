@@ -97,8 +97,11 @@ test('exportToBdo and parseBdoBinaryFile preserve sustain pedal and C0-B8 note r
 
   assert.strictEqual(isBdoBinaryContent(arrayBuffer), true);
 
-  const decoded = parseBdoBinaryFile(arrayBuffer);
+  const decoded = parseBdoBinaryFile(arrayBuffer, 'Sustain_Test.bms');
   assert.strictEqual(decoded.title, 'Sustain_Test');
+  assert.strictEqual(decoded.composer, 'MarniTester');
+  assert.strictEqual(decoded.arranger, 'MarniTester');
+  assert.strictEqual(decoded.author, 'MarniTester');
   assert.strictEqual(decoded.bpm, 120);
   assert.strictEqual(decoded.tracks.length, 1);
 
