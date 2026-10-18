@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { Download, Music, Disc, ChevronUp, FileAudio } from 'lucide-react';
+import { Download, Music, Disc, ChevronUp, FileAudio, Lock } from 'lucide-react';
 
 interface BottomBarProps {
   title: string;
   onTitleChange: (newTitle: string) => void;
   author?: string;
   onAuthorChange?: (newAuthor: string) => void;
+  isBdoProtected?: boolean;
   onSaveMidi: () => void;
   onExportBdo: () => void;
   onExportWav: (bitDepth: 16 | 24) => void;
@@ -17,6 +18,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
   onTitleChange,
   author,
   onAuthorChange,
+  isBdoProtected,
   onSaveMidi,
   onExportBdo,
   onExportWav,
@@ -37,15 +39,39 @@ export const BottomBar: React.FC<BottomBarProps> = ({
           aria-label="Título da Música"
         />
         {onAuthorChange !== undefined && (
-          <input
-            type="text"
-            value={author ?? ''}
-            onChange={(e) => onAuthorChange(e.target.value)}
-            placeholder="Personagem / Família..."
-            className="w-40 bg-stone-900/90 border border-[#2d2722] rounded-lg px-2.5 py-1.5 text-stone-300 placeholder-stone-500 focus:outline-none focus:border-amber-500/60 font-medium text-xs transition-colors"
-            title="Nome de Personagem / Família (usado igualmente em Composição e Arranjo no BDO)"
-            aria-label="Autor da Música"
-          />
+          <div className="relative flex items-center">
+            <input
+              type="text"
+              value={author ?? ''}
+              onChange={(e) => {
+                if (!isBdoProtected) {
+                  onAuthorChange(e.target.value);
+                }
+              }}
+              readOnly={isBdoProtected}
+              disabled={isBdoProtected}
+              placeholder="Personagem / Família..."
+              className={`w-40 bg-stone-900/90 border rounded-lg px-2.5 py-1.5 font-medium text-xs transition-colors ${
+                isBdoProtected
+                  ? 'border-amber-900/40 text-amber-400/90 cursor-not-allowed pr-7 bg-stone-900/95 selection:bg-none'
+                  : 'border-[#2d2722] text-stone-300 placeholder-stone-500 focus:outline-none focus:border-amber-500/60'
+              }`}
+              title={
+                isBdoProtected
+                  ? 'Partitura original do Black Desert: Composição e Arranjo protegidos contra plágio.'
+                  : 'Nome de Personagem / Família (usado igualmente em Composição e Arranjo no BDO)'
+              }
+              aria-label="Autor da Música"
+            />
+            {isBdoProtected && (
+              <span
+                className="absolute right-2 text-amber-400/80 pointer-events-none"
+                title="Partitura original do Black Desert: Composição e Arranjo protegidos contra plágio."
+              >
+                <Lock className="w-3.5 h-3.5" />
+              </span>
+            )}
+          </div>
         )}
       </div>
 

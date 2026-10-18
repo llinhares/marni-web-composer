@@ -103,11 +103,15 @@ export default function App() {
     const saved = localStorage.getItem('marni_bdo_owner_id');
     return saved ? parseInt(saved, 10) : 1009649;
   });
+  const [isBdoProtected, setIsBdoProtected] = useState<boolean>(false);
+  const [originalBdoAuthor, setOriginalBdoAuthor] = useState<string>('');
+  const [originalBdoOwnerId, setOriginalBdoOwnerId] = useState<number | null>(null);
 
   const handleAuthorChange = useCallback((newAuthor: string) => {
+    if (isBdoProtected) return;
     setAuthor(newAuthor);
     localStorage.setItem('marni_bdo_author', newAuthor);
-  }, []);
+  }, [isBdoProtected]);
 
   const [bpm, setBpm] = useState<number>(120);
   const [timeSignature, setTimeSignature] = useState<TimeSignature>('4/4');
@@ -321,8 +325,11 @@ export default function App() {
       accidentals,
       gridSnap,
       bdoGrade,
+      isBdoProtected,
+      originalBdoAuthor,
+      originalBdoOwnerId: originalBdoOwnerId ?? undefined,
     }),
-    [title, author, bpm, timeSignature, accidentals, gridSnap, bdoGrade]
+    [title, author, bpm, timeSignature, accidentals, gridSnap, bdoGrade, isBdoProtected, originalBdoAuthor, originalBdoOwnerId]
   );
 
   // Playback Controls
@@ -499,6 +506,10 @@ export default function App() {
     setActiveTrackId('track-piano');
     setCurrentPlayheadTick(0);
     setTitle('Marni Web Composer - Example');
+    setIsBdoProtected(false);
+    setOriginalBdoAuthor('');
+    setOriginalBdoOwnerId(null);
+    setAuthor(localStorage.getItem('marni_bdo_author') || 'Tchepper');
     setIsResetConfirmOpen(false);
     pushHistory(resetTracks, 'track-piano');
   };
@@ -596,6 +607,9 @@ export default function App() {
         const decoded = parseStandardMidiFile(buffer);
         if (decoded.tracks.length > 0) {
           handleStop();
+          setIsBdoProtected(false);
+          setOriginalBdoAuthor('');
+          setOriginalBdoOwnerId(null);
           setTracks(decoded.tracks);
           setActiveTrackId(decoded.tracks[0].id);
           if (decoded.bpm) setBpm(decoded.bpm);
@@ -622,13 +636,12 @@ export default function App() {
           } else if (decoded.title) {
             setTitle(decoded.title);
           }
-          if (decoded.author) {
-            handleAuthorChange(decoded.author);
-          }
-          if (decoded.ownerId) {
-            setBdoOwnerId(decoded.ownerId);
-            localStorage.setItem('marni_bdo_owner_id', decoded.ownerId.toString());
-          }
+          const detectedAuthor = (decoded.author || decoded.arranger || decoded.composer || 'Desconhecido').trim();
+          setIsBdoProtected(true);
+          setOriginalBdoAuthor(detectedAuthor);
+          setOriginalBdoOwnerId(decoded.ownerId);
+          setAuthor(detectedAuthor);
+          setBdoOwnerId(decoded.ownerId);
           if (decoded.timeSignature) setTimeSignature(decoded.timeSignature);
           if (decoded.effectorSettings) {
             setEffectorSettings(decoded.effectorSettings);
@@ -647,6 +660,9 @@ export default function App() {
         const decoded = parseMusicXml(text);
         if (decoded.tracks.length > 0) {
           handleStop();
+          setIsBdoProtected(false);
+          setOriginalBdoAuthor('');
+          setOriginalBdoOwnerId(null);
           setTracks(decoded.tracks);
           setActiveTrackId(decoded.tracks[0].id);
           if (decoded.bpm) setBpm(decoded.bpm);
@@ -705,6 +721,9 @@ export default function App() {
           });
 
           handleStop();
+          setIsBdoProtected(false);
+          setOriginalBdoAuthor('');
+          setOriginalBdoOwnerId(null);
           setTracks(importedTracks);
           setActiveTrackId(importedTracks[0].id);
           pushHistory(importedTracks, importedTracks[0].id);
@@ -714,6 +733,9 @@ export default function App() {
         const parsed = JSON.parse(text);
         if (Array.isArray(parsed.tracks) && parsed.tracks.length > 0) {
           handleStop();
+          setIsBdoProtected(false);
+          setOriginalBdoAuthor('');
+          setOriginalBdoOwnerId(null);
           setTracks(parsed.tracks);
           setActiveTrackId(parsed.tracks[0].id);
           if (parsed.bpm) setBpm(parsed.bpm);
@@ -911,6 +933,7 @@ export default function App() {
         onTitleChange={setTitle}
         author={author}
         onAuthorChange={handleAuthorChange}
+        isBdoProtected={isBdoProtected}
         onSaveMidi={handleSaveMidi}
         onExportBdo={() => setIsBdoExportOpen(true)}
         onExportWav={handleExportWav}

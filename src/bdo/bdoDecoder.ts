@@ -193,6 +193,7 @@ export interface DecodedBdoSong {
   ownerId: number;
   tracks: Track[];
   effectorSettings?: EffectorSettings;
+  isProtected?: boolean;
 }
 
 /**
@@ -242,7 +243,7 @@ export function parseBdoBinaryFile(
   const msToTicks = (bpm * 480) / 60000;
   let offset = 0x150;
   if (offset + 3 > decrypted.length) {
-    return { title, composer, arranger, author, bpm, timeSignature, ownerId, tracks: [] };
+    return { title, composer, arranger, author, bpm, timeSignature, ownerId, tracks: [], isProtected: true };
   }
 
   // Skip leading 0x00 byte
@@ -393,5 +394,6 @@ export function parseBdoBinaryFile(
     ownerId,
     tracks,
     effectorSettings: extractedEffector,
+    isProtected: true,
   };
 };

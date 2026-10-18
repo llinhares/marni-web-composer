@@ -71,4 +71,9 @@ test('generateBdoScore outputs structured XML and MML with correct counts', () =
   assert.ok(result.xmlContent.includes('<Title>Balenos Serenade</Title>'));
   assert.ok(result.xmlContent.includes('instrumentId="grand-piano"'));
   assert.ok(result.mmlContent.includes('Balenos Serenade'));
+  assert.ok(!result.xmlContent.includes('<Protected>true</Protected>'));
+
+  const protectedResult = generateBdoScore(tracks, { ...meta, isBdoProtected: true });
+  assert.ok(protectedResult.xmlContent.includes('<Protected>true</Protected>'));
 });
+

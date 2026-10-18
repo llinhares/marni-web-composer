@@ -249,3 +249,69 @@ test('parseBdoBinaryFile unifies multiple chunks of the same instrument into a s
   assert.strictEqual(decoded.tracks[0].name, 'Florchestra Piano');
   assert.strictEqual(decoded.tracks[0].notes.length, 800);
 });
+
+test('parseBdoBinaryFile sets isProtected flag and protects original composer, arranger, and ownerId against plagiarism', async () => {
+  const notes: Note[] = [
+    {
+      id: 'n-lock',
+      trackId: 'tr-lock',
+      pitch: 60,
+      startTick: 0,
+      durationTicks: 480,
+      velocity: 100,
+    },
+  ];
+
+  const tracks: Track[] = [
+    {
+      id: 'tr-lock',
+      name: 'Florchestra Piano',
+      instrumentId: 'grand-piano',
+      color: '#d4a373',
+      volume: 80,
+      pan: 0,
+      isMuted: false,
+      isSolo: false,
+      auxSend: true,
+      notes,
+    },
+  ];
+
+  const originalOwnerId = 9876543;
+  const originalCreator = 'OriginalMasterComposer';
+
+  const blob = exportToBdo(
+    tracks,
+    { bpm: 130, timeSignature: [4, 4], title: 'Masterpiece' },
+    {
+      charName: originalCreator,
+      ownerId: originalOwnerId,
+      transpose: 0,
+      velMode: 'off',
+      velStepBase: 100,
+      velStepStep: 5,
+      velRescaleMin: 80,
+      velRescaleMax: 127,
+      velFloorVal: 100,
+      instrumentOverrides: { 'tr-lock': 'Florchestra Piano' },
+      velocityScales: { 'tr-lock': 100 },
+      effector: {
+        reverb: { enabled: false, damp: 50, mix: 30, time: 20 },
+        delay: { enabled: false, time: 20, feedback: 20, mix: 25 },
+        chorus: { enabled: false, feedback: 20, lfoDepth: 30, lfoFrequency: 20, mix: 20 },
+      },
+    }
+  );
+
+  const arrayBuffer = await blob.arrayBuffer();
+  const decoded = parseBdoBinaryFile(arrayBuffer, 'Masterpiece');
+
+  // Must have protection flag enabled
+  assert.strictEqual(decoded.isProtected, true);
+  // Must preserve exact author, composer, arranger, and owner ID
+  assert.strictEqual(decoded.author, originalCreator);
+  assert.strictEqual(decoded.composer, originalCreator);
+  assert.strictEqual(decoded.arranger, originalCreator);
+  assert.strictEqual(decoded.ownerId, originalOwnerId);
+});
+

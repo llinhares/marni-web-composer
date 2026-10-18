@@ -10,6 +10,7 @@ import {
   Music,
   Sliders,
   AudioWaveform,
+  Lock,
 } from 'lucide-react';
 import type { Track, EffectorSettings, SongMetadata } from '../types/music.ts';
 import {
@@ -46,15 +47,26 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
 
   // Binary Exporter State (from Lucas Linhares v2)
   const [charName, setCharName] = useState<string>(() => {
+    if (metadata.isBdoProtected && metadata.originalBdoAuthor) {
+      return metadata.originalBdoAuthor;
+    }
     return metadata.author || localStorage.getItem('marni_bdo_author') || 'Tchepper';
   });
   const [ownerId, setOwnerId] = useState<string>(() => {
+    if (metadata.isBdoProtected && metadata.originalBdoOwnerId !== undefined) {
+      return metadata.originalBdoOwnerId.toString();
+    }
     return localStorage.getItem('marni_bdo_owner_id') || '1009649';
-  }); // Default or extracted ID
+  });
   const [idStatus, setIdStatus] = useState<string>(() => {
-    const savedOwner = localStorage.getItem('marni_bdo_owner_id') || '1009649';
-    const savedName = metadata.author || localStorage.getItem('marni_bdo_author') || 'Tchepper';
-    return `0x${parseInt(savedOwner, 10).toString(16)} (${savedName})`;
+    const savedOwner = metadata.isBdoProtected && metadata.originalBdoOwnerId !== undefined
+      ? metadata.originalBdoOwnerId.toString()
+      : localStorage.getItem('marni_bdo_owner_id') || '1009649';
+    const savedName = metadata.isBdoProtected && metadata.originalBdoAuthor
+      ? metadata.originalBdoAuthor
+      : metadata.author || localStorage.getItem('marni_bdo_author') || 'Tchepper';
+    const protSuffix = metadata.isBdoProtected ? ' [Protegido contra Plágio]' : '';
+    return `0x${parseInt(savedOwner, 10).toString(16)} (${savedName})${protSuffix}`;
   });
   const [transpose, setTranspose] = useState<string>('0');
   const [maxChunkNotes, setMaxChunkNotes] = useState<string>('730');
@@ -79,11 +91,16 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
   // Initialize overrides from tracks and metadata
   useEffect(() => {
     if (!isOpen) return;
-    const initialAuthor = metadata.author || localStorage.getItem('marni_bdo_author') || 'Tchepper';
-    const initialOwner = localStorage.getItem('marni_bdo_owner_id') || '1009649';
+    const initialAuthor = metadata.isBdoProtected && metadata.originalBdoAuthor
+      ? metadata.originalBdoAuthor
+      : metadata.author || localStorage.getItem('marni_bdo_author') || 'Tchepper';
+    const initialOwner = metadata.isBdoProtected && metadata.originalBdoOwnerId !== undefined
+      ? metadata.originalBdoOwnerId.toString()
+      : localStorage.getItem('marni_bdo_owner_id') || '1009649';
     setCharName(initialAuthor);
     setOwnerId(initialOwner);
-    setIdStatus(`0x${parseInt(initialOwner, 10).toString(16)} (${initialAuthor})`);
+    const protSuffix = metadata.isBdoProtected ? ' [Protegido contra Plágio]' : '';
+    setIdStatus(`0x${parseInt(initialOwner, 10).toString(16)} (${initialAuthor})${protSuffix}`);
 
     const initialOverrides: Record<string, string> = {};
     const initialScales: Record<string, number> = {};
@@ -125,6 +142,7 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
   };
 
   const handleExtractId = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (metadata.isBdoProtected) return;
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -172,15 +190,24 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
   const handleExportBinary = () => {
     const songTitle = (metadata.title || 'Marni_Song').trim();
     const resolvedCharName = (
-      charName ||
-      metadata.author ||
-      localStorage.getItem('marni_bdo_author') ||
-      'Tchepper'
+      metadata.isBdoProtected && metadata.originalBdoAuthor
+        ? metadata.originalBdoAuthor
+        : charName ||
+          metadata.author ||
+          localStorage.getItem('marni_bdo_author') ||
+          'Tchepper'
     ).trim();
 
-    localStorage.setItem('marni_bdo_author', resolvedCharName);
-    if (ownerId) {
-      localStorage.setItem('marni_bdo_owner_id', ownerId);
+    const resolvedOwnerId =
+      metadata.isBdoProtected && metadata.originalBdoOwnerId !== undefined
+        ? metadata.originalBdoOwnerId
+        : parseInt(ownerId, 10) || 1009649;
+
+    if (!metadata.isBdoProtected) {
+      localStorage.setItem('marni_bdo_author', resolvedCharName);
+      if (ownerId) {
+        localStorage.setItem('marni_bdo_owner_id', ownerId);
+      }
     }
 
     const songContext: SongContext = {
@@ -192,7 +219,7 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
 
     const options: ExportOptions = {
       charName: resolvedCharName,
-      ownerId: parseInt(ownerId, 10) || 1009649,
+      ownerId: resolvedOwnerId,
       transpose: parseInt(transpose, 10) || 0,
       velMode,
       velStepBase: parseInt(stepBase, 10) || 100,
@@ -331,6 +358,22 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
                   CONFIGURAÇÕES
                 </span>
 
+                {/* Anti-Plagiarism Protection Banner */}
+                {metadata.isBdoProtected && (
+                  <div className="mb-4 flex items-start gap-2.5 bg-amber-950/40 border border-amber-600/50 p-3 rounded-xl text-xs text-amber-200">
+                    <Lock className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                    <div className="space-y-1">
+                      <div className="font-semibold text-amber-300 flex items-center gap-1.5">
+                        <span>Partitura Protegida (Anti-Plágio)</span>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/60 text-amber-300 border border-amber-700/50 font-mono">BDO Oficial</span>
+                      </div>
+                      <p className="text-[11px] text-amber-200/90 leading-relaxed">
+                        Esta partitura foi importada diretamente do Black Desert. Os dados de <b>Composição</b>, <b>Arranjo</b> ({metadata.originalBdoAuthor || metadata.author}) e <b>Owner ID</b> estão bloqueados para proteger os créditos e a autoria do criador original.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 <div className="space-y-3 text-xs">
                   {/* Character Row */}
                   <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-center gap-2">
@@ -338,32 +381,55 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
                       Autor (Personagem/Família):
                     </span>
                     <div className="flex items-center gap-2.5 flex-wrap">
-                      <input
-                        type="text"
-                        value={charName}
-                        onChange={(e) => {
-                          setCharName(e.target.value);
-                          localStorage.setItem('marni_bdo_author', e.target.value);
-                        }}
-                        placeholder="Nome de Personagem ou Família"
-                        title="Nome preenchido igualmente em Composição e Arranjo no BDO"
-                        className="w-48 bg-stone-900/90 border border-[#3e342b] rounded-lg px-3 py-1.5 text-xs text-stone-200 outline-none focus:border-amber-500 transition-colors"
-                      />
-                      <button
-                        onClick={() => fileInputRef.current?.click()}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#3e342b] bg-stone-850 hover:bg-stone-800 text-xs font-medium text-stone-300 hover:text-amber-300 hover:border-amber-500/50 transition-all"
-                        title="Extrair Owner ID e Nome de um arquivo salvo pelo seu personagem no Black Desert (Documents\Black Desert\Music)"
-                      >
-                        <Upload className="w-3.5 h-3.5" />
-                        <span>Carregar ID BDO</span>
-                      </button>
-                      <input
-                        type="file"
-                        ref={fileInputRef}
-                        className="hidden"
-                        accept="*"
-                        onChange={handleExtractId}
-                      />
+                      <div className="relative flex items-center">
+                        <input
+                          type="text"
+                          value={metadata.isBdoProtected ? (metadata.originalBdoAuthor || charName) : charName}
+                          onChange={(e) => {
+                            if (!metadata.isBdoProtected) {
+                              setCharName(e.target.value);
+                              localStorage.setItem('marni_bdo_author', e.target.value);
+                            }
+                          }}
+                          readOnly={metadata.isBdoProtected}
+                          disabled={metadata.isBdoProtected}
+                          placeholder="Nome de Personagem ou Família"
+                          title={
+                            metadata.isBdoProtected
+                              ? 'Partitura protegida contra plágio: autoria original bloqueada para edição.'
+                              : 'Nome preenchido igualmente em Composição e Arranjo no BDO'
+                          }
+                          className={`w-48 bg-stone-900/90 border rounded-lg px-3 py-1.5 text-xs outline-none transition-colors ${
+                            metadata.isBdoProtected
+                              ? 'border-amber-900/50 text-amber-400/95 cursor-not-allowed pr-7 bg-stone-900/95'
+                              : 'border-[#3e342b] text-stone-200 focus:border-amber-500'
+                          }`}
+                        />
+                        {metadata.isBdoProtected && (
+                          <span className="absolute right-2 text-amber-400/80 pointer-events-none">
+                            <Lock className="w-3.5 h-3.5" />
+                          </span>
+                        )}
+                      </div>
+                      {!metadata.isBdoProtected && (
+                        <button
+                          onClick={() => fileInputRef.current?.click()}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#3e342b] bg-stone-850 hover:bg-stone-800 text-xs font-medium text-stone-300 hover:text-amber-300 hover:border-amber-500/50 transition-all"
+                          title="Extrair Owner ID e Nome de um arquivo salvo pelo seu personagem no Black Desert (Documents\Black Desert\Music)"
+                        >
+                          <Upload className="w-3.5 h-3.5" />
+                          <span>Carregar ID BDO</span>
+                        </button>
+                      )}
+                      {!metadata.isBdoProtected && (
+                        <input
+                          type="file"
+                          ref={fileInputRef}
+                          className="hidden"
+                          accept="*"
+                          onChange={handleExtractId}
+                        />
+                      )}
                     </div>
                   </div>
 
@@ -402,7 +468,7 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
                 </div>
 
                 {/* Owner ID Warning Notice */}
-                {ownerId === '0' && (
+                {!metadata.isBdoProtected && ownerId === '0' && (
                   <div className="mt-4 flex items-start gap-2 bg-amber-950/30 border border-amber-600/40 p-3 rounded-lg text-xs text-amber-200 leading-relaxed">
                     <span className="font-bold text-amber-400">Aviso:</span>
                     <span>

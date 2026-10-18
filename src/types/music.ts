@@ -90,6 +90,11 @@ export interface SongMetadata {
   accidentals: 'sharp' | 'flat'; // # vs b
   gridSnap: GridSnap;
   bdoGrade: 'F' | 'D' | 'C' | 'B' | 'A' | 'S'; // BDO note budget limit
+  isBdoProtected?: boolean; // Anti-plagiarism protection lock for imported BDO scores
+  originalBdoAuthor?: string;
+  originalBdoOwnerId?: number;
+  originalBdoComposer?: string;
+  originalBdoArranger?: string;
 }
 
 export const TICKS_PER_BEAT = 480;

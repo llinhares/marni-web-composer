@@ -146,6 +146,9 @@ export function generateBdoScore(tracks: Track[], metadata: SongMetadata): BdoEx
   xml += '  <Metadata>\n';
   xml += `    <Title>${escapeXml(metadata.title || 'Sem Título')}</Title>\n`;
   xml += `    <Author>${escapeXml(metadata.author || 'Marni Composer')}</Author>\n`;
+  if (metadata.isBdoProtected) {
+    xml += '    <Protected>true</Protected>\n';
+  }
   xml += `    <BPM>${metadata.bpm}</BPM>\n`;
   xml += `    <TimeSignature>${metadata.timeSignature}</TimeSignature>\n`;
   xml += `    <TotalNotes>${totalNotes}</TotalNotes>\n`;
