@@ -92,6 +92,7 @@ export function parseStandardMidiFile(data: Uint8Array | ArrayBuffer): DecodedMi
       durationTicks: number;
       velocity: number;
       channel: number;
+      sustain?: boolean;
     }[];
   }
 
@@ -117,10 +118,11 @@ export function parseStandardMidiFile(data: Uint8Array | ArrayBuffer): DecodedMi
     let runningStatus = 0;
     let trackName = '';
     const channelPrograms = new Map<number, number>();
+    const channelSustain = new Map<number, boolean>();
     const channelsUsed = new Set<number>();
 
-    // Key: `${channel}-${pitch}` -> { startTick, velocity }
-    const activeNoteStarts = new Map<string, { startTick: number; velocity: number }>();
+    // Key: `${channel}-${pitch}` -> { startTick, velocity, sustain }
+    const activeNoteStarts = new Map<string, { startTick: number; velocity: number; sustain: boolean }>();
     const completedNotes: RawParsedTrack['notes'] = [];
 
     while (offset < trackEnd && offset < bytes.length) {
@@ -156,6 +158,7 @@ export function parseStandardMidiFile(data: Uint8Array | ArrayBuffer): DecodedMi
             durationTicks: duration,
             velocity: start.velocity,
             channel,
+            sustain: start.sustain,
           });
           activeNoteStarts.delete(key);
         }
@@ -165,6 +168,7 @@ export function parseStandardMidiFile(data: Uint8Array | ArrayBuffer): DecodedMi
         const velocity = bytes[offset++];
         const key = `${channel}-${pitch}`;
         channelsUsed.add(channel);
+        const isSustained = Boolean(channelSustain.get(channel));
 
         if (velocity === 0) {
           // Note On with vel 0 is Note Off
@@ -177,6 +181,7 @@ export function parseStandardMidiFile(data: Uint8Array | ArrayBuffer): DecodedMi
               durationTicks: duration,
               velocity: start.velocity,
               channel,
+              sustain: start.sustain,
             });
             activeNoteStarts.delete(key);
           }
@@ -190,16 +195,21 @@ export function parseStandardMidiFile(data: Uint8Array | ArrayBuffer): DecodedMi
               durationTicks: Math.max(30, currentTick - prev.startTick),
               velocity: prev.velocity,
               channel,
+              sustain: prev.sustain,
             });
           }
-          activeNoteStarts.set(key, { startTick: currentTick, velocity });
+          activeNoteStarts.set(key, { startTick: currentTick, velocity, sustain: isSustained });
         }
       } else if (eventType === 0xa0) {
         // Polyphonic aftertouch (2 bytes)
         offset += 2;
       } else if (eventType === 0xb0) {
         // Control change (2 bytes)
-        offset += 2;
+        const controller = bytes[offset++];
+        const value = bytes[offset++];
+        if (controller === 64) {
+          channelSustain.set(channel, value >= 64);
+        }
       } else if (eventType === 0xc0) {
         // Program change (1 byte)
         const prog = bytes[offset++];
@@ -330,13 +340,15 @@ export function parseStandardMidiFile(data: Uint8Array | ArrayBuffer): DecodedMi
           isMuted: false,
           isSolo: false,
           auxSend: true,
+          sustainPedal: instId === 'grand-piano' || notes.some((n) => n.sustain),
           notes: notes.map((n, nIdx) => ({
             id: `note-m-${trackId}-${nIdx}`,
             trackId,
-            pitch: Math.max(24, Math.min(108, n.pitch)),
+            pitch: Math.max(12, Math.min(119, n.pitch)),
             startTick: Math.round(n.startTick * tickScale),
             durationTicks: Math.max(30, Math.round(n.durationTicks * tickScale)),
             velocity: Math.max(1, Math.min(127, n.velocity)),
+            sustain: n.sustain,
           })),
         });
       });
@@ -362,13 +374,15 @@ export function parseStandardMidiFile(data: Uint8Array | ArrayBuffer): DecodedMi
       isMuted: false,
       isSolo: false,
       auxSend: true,
+      sustainPedal: instId === 'grand-piano' || pTrack.notes.some((n) => n.sustain),
       notes: pTrack.notes.map((n, nIdx) => ({
         id: `note-m-${trackId}-${nIdx}`,
         trackId,
-        pitch: Math.max(24, Math.min(108, n.pitch)),
+        pitch: Math.max(12, Math.min(119, n.pitch)),
         startTick: Math.round(n.startTick * tickScale),
         durationTicks: Math.max(30, Math.round(n.durationTicks * tickScale)),
         velocity: Math.max(1, Math.min(127, n.velocity)),
+        sustain: n.sustain,
       })),
     });
   });

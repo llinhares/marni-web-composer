@@ -232,7 +232,8 @@ export class AudioEngine {
     durationSeconds = 1.0,
     trackVolume = 80,
     auxSend = true,
-    trackPan = 0
+    trackPan = 0,
+    sustain = false
   ): string {
     if (!this.ctx) {
       this.init();
@@ -250,14 +251,16 @@ export class AudioEngine {
       trackVolume,
       auxSend,
       trackPan,
-      false // direct audition
+      false, // direct audition
+      sustain
     );
 
     this.activeAuditionVoices.set(noteVoiceId, { stop: stopFn });
 
+    const auditRelease = sustain ? 2.5 : 0.8;
     setTimeout(() => {
       this.activeAuditionVoices.delete(noteVoiceId);
-    }, (durationSeconds + 0.8) * 1000);
+    }, (durationSeconds + auditRelease) * 1000);
 
     return noteVoiceId;
   }
@@ -290,7 +293,8 @@ export class AudioEngine {
     trackVolume: number,
     auxSend: boolean,
     pan: number,
-    isPlayback = true
+    isPlayback = true,
+    sustain = false
   ): (stopTime: number) => void {
     if (!this.ctx || !this.masterGain) return () => {};
 
@@ -323,12 +327,13 @@ export class AudioEngine {
     const stopCallbacks: ((t: number) => void)[] = [];
 
     // Cleanup voiceGain from audio graph
+    const voiceLifeSec = duration + (sustain ? 2.5 : 1.2);
     setTimeout(() => {
       try {
         voiceGain.disconnect();
         if (panner) panner.disconnect();
       } catch {}
-    }, (duration + 1.2) * 1000);
+    }, voiceLifeSec * 1000);
 
     switch (instrumentId) {
       case 'grand-piano': {
@@ -367,19 +372,20 @@ export class AudioEngine {
         subGain3.connect(filter);
         filter.connect(voiceGain);
 
+        const releaseTime = sustain ? 2.0 : 0.25;
         const targetVol = velFactor * volFactor;
         voiceGain.gain.setValueAtTime(0.0001, startTime);
         voiceGain.gain.linearRampToValueAtTime(targetVol, startTime + 0.005);
         voiceGain.gain.exponentialRampToValueAtTime(Math.max(0.0001, targetVol * 0.6), startTime + 0.2);
-        voiceGain.gain.exponentialRampToValueAtTime(0.0001, noteEndTime + 0.25);
-        voiceGain.gain.setValueAtTime(0.0, noteEndTime + 0.26);
+        voiceGain.gain.exponentialRampToValueAtTime(0.0001, noteEndTime + releaseTime);
+        voiceGain.gain.setValueAtTime(0.0, noteEndTime + releaseTime + 0.01);
 
         osc1.start(startTime);
         osc2.start(startTime);
         osc3.start(startTime);
 
         // ALWAYS schedule hard stop to kill oscillators!
-        const autoStopT = noteEndTime + 0.3;
+        const autoStopT = noteEndTime + releaseTime + 0.05;
         osc1.stop(autoStopT);
         osc2.stop(autoStopT);
         osc3.stop(autoStopT);
@@ -973,6 +979,7 @@ export class AudioEngine {
             const noteStartAudio = baseAudioTime + ticksToSeconds(noteOffsetTicks, this.tempoBpm);
             const durationSec = ticksToSeconds(note.durationTicks, this.tempoBpm);
 
+            const isSustain = !!(note.sustain ?? track.sustainPedal ?? (track.instrumentId === 'grand-piano'));
             const stopVoice = this.synthesizeInstrument(
               track.instrumentId,
               note.pitch,
@@ -982,13 +989,15 @@ export class AudioEngine {
               track.volume,
               track.auxSend,
               track.pan,
-              true
+              true,
+              isSustain
             );
 
             this.activePlaybackVoices.add(stopVoice);
+            const voiceCleanupSec = durationSec + (isSustain ? 2.5 : 0.5);
             setTimeout(() => {
               this.activePlaybackVoices.delete(stopVoice);
-            }, (durationSec + 0.5) * 1000);
+            }, voiceCleanupSec * 1000);
           }
         });
       });

@@ -24,9 +24,10 @@ test('noteNameToPitch correctly maps standard notes and accidentals to MIDI numb
   assert.strictEqual(noteNameToPitch('C5'), 72);
   assert.strictEqual(noteNameToPitch('G3'), 55);
 
-  // Clamp limits
-  assert.strictEqual(noteNameToPitch('C0'), 35); // Below MIN_PITCH 35
-  assert.strictEqual(noteNameToPitch('C9'), 108); // Above MAX_PITCH 108
+  // Clamp limits (C0 = 12 to B8 = 119)
+  assert.strictEqual(noteNameToPitch('C0'), 12); // C0 is lowest BDO pitch (12)
+  assert.strictEqual(noteNameToPitch('B8'), 119); // B8 is highest BDO pitch (119)
+  assert.strictEqual(noteNameToPitch('C9'), 119); // Above B8 (119) clamps to 119
 });
 
 test('parseAiTranscription extracts notes, BPM, measures, and chords accurately', () => {

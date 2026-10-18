@@ -41,7 +41,7 @@ function stepToPitch(step: string, octave: number, alter: number = 0): number {
   const cleanStep = step.toUpperCase().trim();
   const base = STEP_SEMITONES[cleanStep] ?? 0;
   const pitch = (octave + 1) * 12 + base + alter;
-  return Math.max(35, Math.min(108, Math.round(pitch)));
+  return Math.max(12, Math.min(119, Math.round(pitch)));
 }
 
 function detectInstrument(name: string): InstrumentId {

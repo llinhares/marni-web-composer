@@ -124,7 +124,7 @@ export function clearGeminiApiKey(): void {
 }
 
 /**
- * Converts a note name with accidental and octave (e.g., 'C4', 'Eb4', 'F#5', 'G3') to MIDI pitch (35-108).
+ * Converts a note name with accidental and octave (e.g., 'C4', 'Eb4', 'F#5', 'G3') to MIDI pitch (12-119, C0-B8).
  */
 export function noteNameToPitch(name: string): number {
   if (!name || typeof name !== 'string') return 60;
@@ -150,7 +150,7 @@ export function noteNameToPitch(name: string): number {
   else if (accidental === 'b' || accidental === '♭') semitone -= 1;
 
   const midiPitch = (octave + 1) * 12 + semitone;
-  return Math.max(35, Math.min(108, midiPitch));
+  return Math.max(12, Math.min(119, midiPitch));
 }
 
 /**
@@ -255,7 +255,7 @@ Analise com máxima atenção a imagem ou PDF da partitura e transcreva as notas
    Cada nota no array "notes" DEVE ser uma lista compacta:
    [pitch, measure, beat, durationBeats, hand]
 
-   - pitch: número MIDI da nota (35 a 108).
+   - pitch: número MIDI da nota (12 a 119, C0 a B8).
    - measure: número do compasso na partitura (1, 2, 3, 4...).
    - beat: tempo dentro do compasso onde a nota inicia (1.0 = início do compasso, 1.5 = meio do primeiro tempo, 2.0 = segundo tempo, etc.).
    - durationBeats: duração em tempos (1.0 = semínima / quarter note, 0.5 = colcheia / eighth note, 0.25 = semicolcheia / sixteenth note, 2.0 = mínima / half note, 4.0 = semibreve / whole note, 1.5 = semínima pontuada).
@@ -454,7 +454,7 @@ export function parseAiTranscription(
     let hand: 'right' | 'left' = 'right';
 
     if (Array.isArray(n)) {
-      pitch = typeof n[0] === 'number' ? Math.max(35, Math.min(108, Math.round(n[0]))) : 60;
+      pitch = typeof n[0] === 'number' ? Math.max(12, Math.min(119, Math.round(n[0]))) : 60;
 
       // Distinguish between Format B: [pitch, measure, beat, durationBeats, hand]
       // and Format A: [pitch, startTick, durationTicks, velocity?, hand?]
@@ -477,7 +477,7 @@ export function parseAiTranscription(
       }
     } else if (n && typeof n === 'object') {
       const obj = n as SheetTranscriptionNoteObject;
-      if (typeof obj.pitch === 'number' && obj.pitch >= 35 && obj.pitch <= 108) {
+      if (typeof obj.pitch === 'number' && obj.pitch >= 12 && obj.pitch <= 119) {
         pitch = Math.round(obj.pitch);
       } else if (obj.noteName && typeof obj.noteName === 'string') {
         pitch = noteNameToPitch(obj.noteName);

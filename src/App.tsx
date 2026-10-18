@@ -23,6 +23,7 @@ import { parseStandardMidiFile } from './midi/midiDecoder.ts';
 import { exportWavFile } from './export/audioExporter.ts';
 import { isBlackKey } from './utils/musicMath.ts';
 import { isMusicXmlContent, parseMusicXml } from './musicxml/musicXmlDecoder.ts';
+import { isBdoBinaryContent, parseBdoBinaryFile } from './bdo/bdoDecoder.ts';
 import { Header } from './components/Header.tsx';
 import { TrackList } from './components/TrackList.tsx';
 import { PianoRoll } from './components/PianoRoll.tsx';
@@ -45,6 +46,7 @@ const INITIAL_TRACKS: Track[] = [
     isMuted: false,
     isSolo: false,
     auxSend: true,
+    sustainPedal: true,
     notes: [
       // Measure 1 - Beautiful opening theme
       { id: 'n1', trackId: 'track-piano', pitch: 72, startTick: 0, durationTicks: 480, velocity: 95 }, // C5
@@ -368,7 +370,8 @@ export default function App() {
           0.8,
           active.volume,
           active.auxSend,
-          active.pan
+          active.pan,
+          active.sustainPedal ?? (active.instrumentId === 'grand-piano')
         );
       }
     },
@@ -404,6 +407,7 @@ export default function App() {
       isMuted: false,
       isSolo: false,
       auxSend: true,
+      sustainPedal: instrumentId === 'grand-piano',
       notes: [],
     };
 
@@ -586,7 +590,24 @@ export default function App() {
         return;
       }
 
-      // 2. Decode text for MusicXML / XML / JSON
+      // 2. Detect BDO In-game Binary Score (BMS / ICE Encrypted format: starts with 0x09 0x00 0x00 0x00)
+      if (isBdoBinaryContent(bytes) || file.name.toLowerCase().endsWith('.bms')) {
+        const decoded = parseBdoBinaryFile(bytes);
+        if (decoded.tracks.length > 0) {
+          handleStop();
+          setTracks(decoded.tracks);
+          setActiveTrackId(decoded.tracks[0].id);
+          if (decoded.bpm) setBpm(decoded.bpm);
+          if (decoded.title) setTitle(decoded.title);
+          if (decoded.timeSignature) setTimeSignature(decoded.timeSignature);
+          pushHistory(decoded.tracks, decoded.tracks[0].id);
+        } else {
+          alert('O arquivo de partitura do Black Desert foi lido, mas nenhuma nota foi encontrada.');
+        }
+        return;
+      }
+
+      // 3. Decode text for MusicXML / XML / JSON
       const text = new TextDecoder().decode(buffer);
 
       if (isMusicXmlContent(text) || file.name.toLowerCase().endsWith('.musicxml')) {
@@ -865,7 +886,7 @@ export default function App() {
         type="file"
         ref={fileInputRef}
         onChange={handleFileImport}
-        accept=".xml,.bdo,.mid,.midi,.musicxml,.mxl,.json"
+        accept=".xml,.bdo,.mid,.midi,.musicxml,.mxl,.json,.bms,*"
         className="hidden"
         aria-hidden="true"
       />

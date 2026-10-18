@@ -106,16 +106,18 @@ export async function renderMultitrackAudio(
       filter.connect(noteGain);
       noteGain.connect(trackGain);
 
+      const isSustain = !!(note.sustain ?? track.sustainPedal ?? (track.instrumentId === 'grand-piano'));
+      const releaseTime = isSustain ? 1.8 : 0.2;
       const targetVol = velFactor * 0.9;
       noteGain.gain.setValueAtTime(0.0001, startSec);
       noteGain.gain.linearRampToValueAtTime(targetVol, startSec + 0.008);
-      noteGain.gain.exponentialRampToValueAtTime(0.0001, startSec + noteDur + 0.2);
+      noteGain.gain.exponentialRampToValueAtTime(0.0001, startSec + noteDur + releaseTime);
 
       osc.start(startSec);
-      osc.stop(startSec + noteDur + 0.25);
+      osc.stop(startSec + noteDur + releaseTime + 0.05);
       if (track.instrumentId === 'grand-piano' || track.instrumentId === 'marnisynth') {
         osc2.start(startSec);
-        osc2.stop(startSec + noteDur + 0.25);
+        osc2.stop(startSec + noteDur + releaseTime + 0.05);
       }
     });
   });

@@ -31,11 +31,12 @@ export interface InstrumentInfo {
 export interface Note {
   id: string;
   trackId: string;
-  pitch: number; // MIDI pitch 24 - 108
+  pitch: number; // MIDI pitch 12 (C0) to 119 (B8)
   startTick: number; // Ticks from start (1 beat = 480 ticks)
   durationTicks: number; // Duration in ticks
   velocity: number; // 1 - 127
   selected?: boolean;
+  sustain?: boolean; // Sustain pedal effect (BDO byte 11)
 }
 
 export interface Track {
@@ -48,6 +49,7 @@ export interface Track {
   isMuted: boolean;
   isSolo: boolean;
   auxSend: boolean; // Reverb/Delay FX send toggle
+  sustainPedal?: boolean; // Sustain pedal enabled for track (default true for piano)
   notes: Note[];
 }
 
@@ -110,8 +112,8 @@ export const BDO_INSTRUMENTS: InstrumentInfo[] = [
     iconName: 'Piano',
     bdoMnemonic: 'PNO',
     color: '#d4a373',
-    minPitch: 24, // C1
-    maxPitch: 108, // C8
+    minPitch: 12, // C0
+    maxPitch: 119, // B8
     defaultVolume: 75,
     bdoCode: 0,
   },

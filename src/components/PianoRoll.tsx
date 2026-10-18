@@ -57,9 +57,9 @@ interface PianoRollProps {
   scaleType: string;
 }
 
-const MIN_PITCH = 35; // B0 / GM Percussion start
-const MAX_PITCH = 108; // C8
-const TOTAL_PITCHES = MAX_PITCH - MIN_PITCH + 1;
+const MIN_PITCH = 12; // C0 (BDO lowest pitch)
+const MAX_PITCH = 119; // B8 (BDO highest pitch)
+const TOTAL_PITCHES = MAX_PITCH - MIN_PITCH + 1; // 108 pitches
 const DEFAULT_KEY_HEIGHT = 20;
 const RULER_HEIGHT = 28;
 
@@ -84,9 +84,9 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  // Viewport scroll offsets
+  // Viewport scroll offsets (default centered on Middle C / Octaves 3-5)
   const [scrollX, setScrollX] = useState(0);
-  const [scrollY, setScrollY] = useState(380);
+  const [scrollY, setScrollY] = useState(900);
 
   // Active track
   const activeTrack = useMemo(
@@ -441,6 +441,23 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
     }
   }, [activeNotes, selectedNoteIds, activeTrack.id, onUpdateNotes, onAuditionPitch]);
 
+  // Check if all selected notes have Sustain Pedal active
+  const isSelectionSustained = useMemo(() => {
+    const selected = activeNotes.filter((n) => selectedNoteIds.has(n.id));
+    if (selected.length === 0) return false;
+    return selected.every((n) => n.sustain);
+  }, [activeNotes, selectedNoteIds]);
+
+  const handleToggleSelectionSustain = useCallback(() => {
+    if (selectedNoteIds.size === 0) return;
+    const shouldSustain = !isSelectionSustained;
+    const updated = activeNotes.map((note) => {
+      if (!selectedNoteIds.has(note.id)) return note;
+      return { ...note, sustain: shouldSustain };
+    });
+    onUpdateNotes(activeTrack.id, updated, true);
+  }, [activeNotes, selectedNoteIds, isSelectionSustained, activeTrack.id, onUpdateNotes]);
+
   const handleDrumPadClick = useCallback(
     (pitch: number) => {
       onAuditionPitch(pitch);
@@ -610,6 +627,14 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
       ctx.beginPath();
       ctx.roundRect(x, y + 1.5, w, keyHeight - 3, 3);
       ctx.fill();
+
+      // Sustain Pedal Visual Indicator
+      if (note.sustain) {
+        ctx.fillStyle = isSelected ? '#ffffff' : '#67e8f9';
+        ctx.beginPath();
+        ctx.arc(x + 4, y + keyHeight - 4.5, 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
 
       // Outer Selection Glow / Stroke
       ctx.strokeStyle = isSelected ? '#ffffff' : '#7c4d1e';
@@ -1025,6 +1050,9 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
           }
         }
 
+        const hasTrackSustain =
+          activeTrack.instrumentId === 'grand-piano' || Boolean(activeTrack.sustainPedal);
+
         const newNote: Note = {
           id: `note-${Date.now()}-${Math.random()}`,
           trackId: activeTrack.id,
@@ -1033,6 +1061,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
           durationTicks: defaultDuration,
           velocity: 95,
           selected: true,
+          sustain: hasTrackSustain,
         };
 
         const updated: Note[] = [
@@ -1353,6 +1382,24 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
             >
               <span className="font-mono font-bold text-sm leading-none">#</span>
               <span>{isSelectionSharp ? 'Sustenido (#)' : 'Natural'}</span>
+            </button>
+
+            {/* Pedal de Sustain Toggle for Selected Notes */}
+            <button
+              onClick={handleToggleSelectionSustain}
+              className={`px-2.5 py-1 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition-all shadow-sm ${
+                isSelectionSustained
+                  ? 'bg-amber-400 text-stone-950 border-amber-300 font-bold shadow-[0_0_10px_rgba(251,191,36,0.5)]'
+                  : 'bg-stone-900 hover:bg-stone-800 border-[#3e342b] hover:border-amber-500 text-stone-200'
+              }`}
+              title={
+                isSelectionSustained
+                  ? 'Desativar Pedal de Sustain nas notas selecionadas'
+                  : 'Ativar Pedal de Sustain nas notas selecionadas (ressonância do BDO, gravado como byte 11)'
+              }
+            >
+              <span className="text-xs font-serif font-bold italic tracking-tighter">Ped</span>
+              <span>{isSelectionSustained ? 'Pedal Ativo' : 'Pedal'}</span>
             </button>
 
             {/* Duplicate */}

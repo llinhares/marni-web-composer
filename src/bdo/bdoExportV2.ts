@@ -123,15 +123,16 @@ export interface ExportOptions {
   velStepBase: number; velStepStep: number;
   velRescaleMin: number; velRescaleMax: number; velFloorVal: number;
   instrumentOverrides: Record<string, string>; 
-  velocityScales: Record<string, number>;      
+  velocityScales: Record<string, number>;
+  sustainOverrides?: Record<string, boolean>;
   effector: EffectorSettings;                 
   maxChunkNotes?: number;
 }
 
 const BDO_VERSION = 9;
 const HEADER_SIZE = 0x150;
-const BDO_NOTE_MIN = 24;
-const BDO_NOTE_MAX = 108;
+const BDO_NOTE_MIN = 12; // C0 (BDO lowest pitch)
+const BDO_NOTE_MAX = 119; // B8 (BDO highest pitch)
 
 function encodeNameUTF16LE(name: string, size: number = 62): Uint8Array {
   const buf = new Uint8Array(size); let offset = 0;
@@ -202,18 +203,24 @@ export function exportToBdo(tracks: Track[], song: SongContext, options: ExportO
     
     const msFactor = 60000 / (song.bpm * 480);
     const scaleFactor = (options.velocityScales[t.id] ?? 100) / 100;
+    const isPianoInst = instId === FULL_BDO_INSTRUMENTS['Florchestra Piano'] || instId === FULL_BDO_INSTRUMENTS['Beginner Piano'];
+    const trackSustainActive = options.sustainOverrides?.[t.id] !== undefined
+      ? options.sustainOverrides[t.id]
+      : (t.sustainPedal !== undefined ? t.sustainPedal : isPianoInst);
     
-    let processedNotes = t.notes.map(n => {
+    let processedNotes: Note[] = t.notes.map(n => {
       let finalPitch: number = n.pitch;
       if (isPerc) {
         finalPitch = resolveDrumPitch(n.pitch);
       }
+      const noteSustain = n.sustain !== undefined ? n.sustain : trackSustainActive;
       return {
         ...n,
         pitch: finalPitch,
         startTick: n.startTick * msFactor, 
         durationTicks: n.durationTicks * msFactor, 
-        velocity: Math.max(1, Math.min(127, Math.round(n.velocity * scaleFactor)))
+        velocity: Math.max(1, Math.min(127, Math.round(n.velocity * scaleFactor))),
+        sustain: noteSustain,
       };
     });
     
@@ -264,8 +271,9 @@ export function exportToBdo(tracks: Track[], song: SongContext, options: ExportO
   view.setUint32(offset, options.ownerId, true); offset += 4;
   view.setUint32(offset, 0, true); offset += 4;
   
-  const charNameBuf = encodeNameUTF16LE(options.charName);
-  new Uint8Array(buffer, offset, 62).set(charNameBuf); offset += 62;
+  const titleBuf = encodeNameUTF16LE(song.title || options.charName || 'Marni_Song');
+  new Uint8Array(buffer, offset, 62).set(titleBuf); offset += 62;
+  const charNameBuf = encodeNameUTF16LE(options.charName || song.title || 'Composer');
   new Uint8Array(buffer, offset, 62).set(charNameBuf); offset += 62;
   
   view.setUint16(offset, song.bpm, true); offset += 2;
@@ -319,8 +327,14 @@ export function exportToBdo(tracks: Track[], song: SongContext, options: ExportO
           ? resolveDrumPitch(n.pitch) 
           : (typeof n.pitch === 'string' ? parseInt(n.pitch, 10) : n.pitch); 
         
+        // Byte 1: Articulation
+        // 99 = Percussion trigger
+        // 11 (0x0B) = Sustain pedal resonance (BDO Piano and instruments with pedal)
+        // 0 = Normal key release
+        const articulation = isPercGroup ? 99 : (n.sustain ? 11 : 0);
+
         view.setUint8(offset++, p & 0x7F);
-        view.setUint8(offset++, isPercGroup ? 99 : 0);
+        view.setUint8(offset++, articulation);
         view.setUint8(offset++, n.velocity & 0x7F);
         view.setUint8(offset++, n.velocity & 0x7F);
         view.setFloat64(offset, n.startTick, true); offset += 8;

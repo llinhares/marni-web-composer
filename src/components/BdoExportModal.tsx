@@ -59,9 +59,10 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
   const [rescaleMax, setRescaleMax] = useState<string>('127');
   const [floorVal, setFloorVal] = useState<string>('100');
 
-  // Instrument overrides and volume scales per track
+  // Instrument overrides, volume scales, and sustain pedal per track
   const [instOverrides, setInstOverrides] = useState<Record<string, string>>({});
   const [velScales, setVelScales] = useState<Record<string, number>>({});
+  const [sustainOverrides, setSustainOverrides] = useState<Record<string, boolean>>({});
   const [mergeTarget, setMergeTarget] = useState<string>('Florchestra Piano');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -72,14 +73,19 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
     if (!isOpen) return;
     const initialOverrides: Record<string, string> = {};
     const initialScales: Record<string, number> = {};
+    const initialSustains: Record<string, boolean> = {};
 
     tracks.forEach((t) => {
       initialOverrides[t.id] = getDefaultBdoInstrument(t.instrumentId || t.name);
       initialScales[t.id] = 100;
+      const isPiano = t.instrumentId === 'grand-piano' || t.name.toLowerCase().includes('piano');
+      initialSustains[t.id] =
+        t.sustainPedal !== undefined ? t.sustainPedal : (isPiano || t.notes.some((n) => n.sustain));
     });
 
     setInstOverrides(initialOverrides);
     setVelScales(initialScales);
+    setSustainOverrides(initialSustains);
   }, [tracks, isOpen]);
 
   // Generate XML / MML for preview
@@ -157,6 +163,7 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
       velFloorVal: parseInt(floorVal, 10) || 100,
       instrumentOverrides: instOverrides,
       velocityScales: velScales,
+      sustainOverrides,
       effector: effectorSettings,
       maxChunkNotes: parseInt(maxChunkNotes, 10) || 730,
     };
@@ -391,21 +398,23 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
 
                 {/* Tracks Table */}
                 <div className="border border-[#2a2a2a] rounded overflow-hidden text-xs">
-                  <div className="grid grid-cols-[1.2fr_1.4fr_1fr] bg-[#1c1a1a] px-3 py-2 border-b border-[#2a2a2a] text-[10px] uppercase font-semibold text-[#8b847a] tracking-wider">
+                  <div className="grid grid-cols-[1.1fr_1.3fr_0.9fr_64px] bg-[#1c1a1a] px-3 py-2 border-b border-[#2a2a2a] text-[10px] uppercase font-semibold text-[#8b847a] tracking-wider">
                     <span>SOURCE TRACK</span>
                     <span>BDO INSTRUMENT</span>
                     <span>VOLUME SCALE</span>
+                    <span className="text-center">PEDAL</span>
                   </div>
 
                   <div className="divide-y divide-[#23201e] max-h-40 overflow-y-auto">
                     {activeTracks.map((track) => {
                       const currentInst = instOverrides[track.id] || 'Florchestra Piano';
                       const currentVol = velScales[track.id] ?? 100;
+                      const hasSustain = Boolean(sustainOverrides[track.id]);
 
                       return (
                         <div
                           key={track.id}
-                          className="grid grid-cols-[1.2fr_1.4fr_1fr] items-center px-3 py-2.5 hover:bg-[#1a1818] gap-2"
+                          className="grid grid-cols-[1.1fr_1.3fr_0.9fr_64px] items-center px-3 py-2.5 hover:bg-[#1a1818] gap-2"
                         >
                           <span className="text-[#e0d4c8] font-medium truncate">
                             {track.name} ({track.notes.length})
@@ -442,9 +451,28 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
                               }
                               className="flex-1 accent-[#d4ab6a] h-1.5 bg-[#23201e] rounded cursor-pointer"
                             />
-                            <span className="text-[11px] font-mono text-[#d4ab6a] w-10 text-right">
+                            <span className="text-[11px] font-mono text-[#d4ab6a] w-8 text-right">
                               {currentVol}%
                             </span>
+                          </div>
+
+                          <div className="flex items-center justify-center">
+                            <label
+                              className="flex items-center gap-1 cursor-pointer"
+                              title="Pedal de Sustain do BDO (byte 11 - ressonância do piano/instrumento)"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={hasSustain}
+                                onChange={(e) =>
+                                  setSustainOverrides((prev) => ({
+                                    ...prev,
+                                    [track.id]: e.target.checked,
+                                  }))
+                                }
+                                className="accent-[#d4ab6a] w-4 h-4 cursor-pointer rounded"
+                              />
+                            </label>
                           </div>
                         </div>
                       );
