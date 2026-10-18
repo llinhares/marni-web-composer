@@ -26,6 +26,7 @@ interface HeaderProps {
   onSetToolMode: (mode: ToolMode) => void;
   isPlaying: boolean;
   onPlay: () => void;
+  onPause: () => void;
   onStop: () => void;
   currentTick: number;
   maxTick: number;
@@ -65,6 +66,7 @@ export const Header: React.FC<HeaderProps> = ({
   onSetToolMode,
   isPlaying,
   onPlay,
+  onPause,
   onStop,
   currentTick,
   maxTick,
@@ -278,10 +280,10 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
-      {/* Center Segment: Play, Stop, Timecode Display */}
+      {/* Center Segment: Play, Pause, Stop, Timecode Display */}
       <div className="flex items-center gap-2.5">
         <button
-          onClick={isPlaying ? onStop : onPlay}
+          onClick={isPlaying ? onPause : onPlay}
           className="p-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-stone-950 transition-all shadow-[0_0_12px_rgba(245,158,11,0.25)] flex items-center justify-center"
           title={isPlaying ? 'Pausar (Espaço)' : 'Tocar Partitura (Espaço)'}
           aria-label={isPlaying ? 'Pausar' : 'Tocar'}

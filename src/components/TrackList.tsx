@@ -51,11 +51,10 @@ export const TrackList: React.FC<TrackListProps> = ({
 
   return (
     <aside
-      className={`w-64 md:w-72 bg-[#161412] border-r border-[#2d2722] flex-col justify-between shrink-0 select-none ${
-        isOpenOnMobile
+      className={`w-64 md:w-72 bg-[#161412] border-r border-[#2d2722] flex-col justify-between shrink-0 select-none ${isOpenOnMobile
           ? 'flex absolute inset-y-0 left-0 z-40 shadow-2xl bg-[#161412]/95 backdrop-blur-md'
           : 'hidden md:flex z-10'
-      }`}
+        }`}
     >
       {/* Top Section: Note Budget & Track Cards */}
       <div className="flex-1 overflow-y-auto">
@@ -81,11 +80,10 @@ export const TrackList: React.FC<TrackListProps> = ({
               <div
                 key={track.id}
                 onClick={() => onSelectTrack(track.id)}
-                className={`p-3 rounded-xl border transition-all cursor-pointer relative ${
-                  isActive
+                className={`p-3 rounded-xl border transition-all cursor-pointer relative ${isActive
                     ? 'border-amber-600/70 bg-gradient-to-r from-[#2a221a] to-[#221c17] shadow-[0_2px_12px_rgba(0,0,0,0.4)]'
                     : 'border-[#2d2722] bg-[#1c1917]/80 hover:bg-[#231f1c]'
-                }`}
+                  }`}
               >
                 {/* Track Card Header */}
                 <div className="flex items-center justify-between mb-2">
@@ -106,11 +104,10 @@ export const TrackList: React.FC<TrackListProps> = ({
                         e.stopPropagation();
                         onUpdateTrack(track.id, { isMuted: !track.isMuted });
                       }}
-                      className={`w-6 h-6 rounded flex items-center justify-center font-bold text-[10px] transition-colors ${
-                        track.isMuted
+                      className={`w-6 h-6 rounded flex items-center justify-center font-bold text-[10px] transition-colors ${track.isMuted
                           ? 'bg-rose-900 text-rose-200 border border-rose-700'
                           : 'bg-stone-900 text-stone-400 hover:text-stone-200 border border-[#2d2722]'
-                      }`}
+                        }`}
                       title={track.isMuted ? 'Desmutar Faixa' : 'Mutar Faixa'}
                       aria-label="Mutar Faixa"
                     >
@@ -123,11 +120,10 @@ export const TrackList: React.FC<TrackListProps> = ({
                         e.stopPropagation();
                         onUpdateTrack(track.id, { isSolo: !track.isSolo });
                       }}
-                      className={`w-6 h-6 rounded flex items-center justify-center font-bold text-[10px] transition-colors ${
-                        track.isSolo
+                      className={`w-6 h-6 rounded flex items-center justify-center font-bold text-[10px] transition-colors ${track.isSolo
                           ? 'bg-amber-500 text-stone-950 font-extrabold border border-amber-400'
                           : 'bg-stone-900 text-stone-400 hover:text-stone-200 border border-[#2d2722]'
-                      }`}
+                        }`}
                       title={track.isSolo ? 'Desativar Solo' : 'Solo Faixa'}
                       aria-label="Solo Faixa"
                     >
@@ -184,16 +180,14 @@ export const TrackList: React.FC<TrackListProps> = ({
                       e.stopPropagation();
                       onUpdateTrack(track.id, { auxSend: !track.auxSend });
                     }}
-                    className={`flex items-center gap-1.5 text-[10px] font-medium px-2 py-0.5 rounded transition-colors ${
-                      track.auxSend
+                    className={`flex items-center gap-1.5 text-[10px] font-medium px-2 py-0.5 rounded transition-colors ${track.auxSend
                         ? 'text-amber-400 bg-amber-950/40 border border-amber-800/50'
                         : 'text-stone-400 bg-stone-900 border border-[#2d2722]'
-                    }`}
+                      }`}
                   >
                     <span
-                      className={`w-1.5 h-1.5 rounded-full ${
-                        track.auxSend ? 'bg-amber-400 shadow-[0_0_5px_rgba(251,191,36,0.8)]' : 'bg-stone-600'
-                      }`}
+                      className={`w-1.5 h-1.5 rounded-full ${track.auxSend ? 'bg-amber-400 shadow-[0_0_5px_rgba(251,191,36,0.8)]' : 'bg-stone-600'
+                        }`}
                     />
                     AUX SEND
                   </button>
@@ -243,7 +237,7 @@ export const TrackList: React.FC<TrackListProps> = ({
           <button
             onClick={onImportClick}
             className="p-2 rounded-lg bg-stone-900 hover:bg-stone-850 border border-[#2d2722] hover:border-amber-700/60 text-stone-400 hover:text-stone-200 transition-colors"
-            title="Importar Arquivo MIDI ou BDO XML"
+            title="Importar Arquivo MIDI ou BDO"
             aria-label="Importar"
           >
             <Upload className="w-4 h-4" />

@@ -187,3 +187,65 @@ test('exportToBdo and parseBdoBinaryFile round-trip effector settings and native
   assert.strictEqual(decoded.effectorSettings?.chorus.enabled, true);
   assert.strictEqual(decoded.effectorSettings?.chorus.mix, 50);
 });
+
+test('parseBdoBinaryFile unifies multiple chunks of the same instrument into a single track without duplication', async () => {
+  // Create 800 notes in a single track (which forces chunking into 2 chunks of 730 + 70)
+  const notes: Note[] = Array.from({ length: 800 }, (_, i) => ({
+    id: `n-${i}`,
+    trackId: 'tr-piano',
+    pitch: 60 + (i % 24),
+    startTick: i * 60,
+    durationTicks: 40,
+    velocity: 80,
+  }));
+
+  const tracks: Track[] = [
+    {
+      id: 'tr-piano',
+      name: 'Florchestra Piano',
+      instrumentId: 'grand-piano',
+      color: '#d4a373',
+      volume: 90,
+      pan: 0,
+      isMuted: false,
+      isSolo: false,
+      auxSend: true,
+      notes,
+    },
+  ];
+
+  const song = {
+    bpm: 120,
+    timeSignature: [4, 4] as [number, number],
+    title: 'Multi_Chunk_Song',
+  };
+
+  const options: ExportOptions = {
+    charName: 'ChunkTester',
+    ownerId: 1009649,
+    transpose: 0,
+    velMode: 'off',
+    velStepBase: 100,
+    velStepStep: 5,
+    velRescaleMin: 80,
+    velRescaleMax: 127,
+    velFloorVal: 100,
+    instrumentOverrides: { 'tr-piano': 'Florchestra Piano' },
+    velocityScales: { 'tr-piano': 100 },
+    effector: {
+      reverb: { enabled: false, damp: 50, mix: 30, time: 20 },
+      delay: { enabled: false, time: 20, feedback: 20, mix: 25 },
+      chorus: { enabled: false, feedback: 20, lfoDepth: 30, lfoFrequency: 20, mix: 20 },
+    },
+    maxChunkNotes: 730,
+  };
+
+  const blob = exportToBdo(tracks, song, options);
+  const arrayBuffer = await blob.arrayBuffer();
+
+  const decoded = parseBdoBinaryFile(arrayBuffer, 'Multi_Chunk_Song');
+  // Must be exactly 1 track with all 800 notes, NOT 2 separate duplicate piano tracks!
+  assert.strictEqual(decoded.tracks.length, 1);
+  assert.strictEqual(decoded.tracks[0].name, 'Florchestra Piano');
+  assert.strictEqual(decoded.tracks[0].notes.length, 800);
+});

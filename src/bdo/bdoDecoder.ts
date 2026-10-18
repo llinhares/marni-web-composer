@@ -258,6 +258,12 @@ export function parseBdoBinaryFile(
     const trackCount = dv.getUint16(offset, true);
     offset += 2;
 
+    let groupInstId = 0;
+    let groupVolume = 75;
+    let groupAuxActive = true;
+    const groupNotes: Note[] = [];
+    const trackId = `track-bdo-${g}-${Date.now()}`;
+
     for (let t = 0; t < trackCount; t++) {
       if (offset + 12 > decrypted.length) break;
       offset += 2; // skip dataSize
@@ -305,8 +311,11 @@ export function parseBdoBinaryFile(
       const noteCount = dv.getUint16(offset, true);
       offset += 2;
 
-      const notes: Note[] = [];
-      const trackId = `track-bdo-${g}-${t}-${Date.now()}`;
+      if (t === 0 || (groupNotes.length === 0 && noteCount > 0)) {
+        groupInstId = bdoInstId;
+        groupVolume = volume;
+        groupAuxActive = (revSend > 0 || delSend > 0 || choSend > 0) || !extractedEffector;
+      }
 
       for (let n = 0; n < noteCount; n++) {
         if (offset + 20 > decrypted.length) break;
@@ -320,7 +329,7 @@ export function parseBdoBinaryFile(
         // Byte 1 === 11 indicates BDO sustain pedal resonance!
         const hasSustain = b1 === 11;
 
-        notes.push({
+        groupNotes.push({
           id: `note-bdo-${g}-${t}-${n}-${Math.random().toString(36).substring(2, 7)}`,
           trackId,
           pitch: Math.max(12, Math.min(119, pitch)),
@@ -330,25 +339,45 @@ export function parseBdoBinaryFile(
           sustain: hasSustain,
         });
       }
+    }
 
-      if (notes.length > 0) {
-        const instMeta = BDO_ID_TO_INSTRUMENT[bdoInstId];
+    if (groupNotes.length > 0) {
+      // Deduplicate any exact overlapping notes and sort chronologically
+      const noteMap = new Map<string, Note>();
+      groupNotes.forEach((n) => {
+        const key = `${n.pitch}-${n.startTick}`;
+        const existing = noteMap.get(key);
+        if (!existing || n.durationTicks > existing.durationTicks) {
+          noteMap.set(key, n);
+        }
+      });
+      const uniqueNotes = Array.from(noteMap.values()).sort((a, b) => a.startTick - b.startTick);
+
+      const instMeta = BDO_ID_TO_INSTRUMENT[groupInstId];
+      const instName = instMeta?.name || `Trilha BDO (${groupInstId})`;
+      const hasAnySustain = uniqueNotes.some((n) => n.sustain);
+
+      // In case multiple groups share the same instrument, merge them cleanly into one track
+      const existingTrack = tracks.find((tr) => tr.name === instName);
+      if (existingTrack) {
+        uniqueNotes.forEach((n) => (n.trackId = existingTrack.id));
+        existingTrack.notes.push(...uniqueNotes);
+        existingTrack.notes.sort((a, b) => a.startTick - b.startTick);
+        if (hasAnySustain) existingTrack.sustainPedal = true;
+      } else {
         const instDef = BDO_INSTRUMENTS.find((i) => i.id === instMeta?.id);
-        const hasAnySustain = notes.some((n) => n.sustain);
-        const auxActive = (revSend > 0 || delSend > 0 || choSend > 0) || !extractedEffector;
-
         tracks.push({
           id: trackId,
-          name: instMeta?.name || `Trilha BDO (${bdoInstId})`,
+          name: instName,
           instrumentId: instMeta?.id || 'grand-piano',
           color: instDef?.color || '#d4a373',
-          volume,
+          volume: groupVolume,
           pan: 0,
           isMuted: false,
           isSolo: false,
-          auxSend: auxActive,
+          auxSend: groupAuxActive,
           sustainPedal: hasAnySustain,
-          notes,
+          notes: uniqueNotes,
         });
       }
     }

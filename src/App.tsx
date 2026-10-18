@@ -345,6 +345,11 @@ export default function App() {
     });
   }, [tracks, bpm, currentPlayheadTick]);
 
+  const handlePause = useCallback(() => {
+    audioEngineRef.current?.pausePlayback();
+    setIsPlaying(false);
+  }, []);
+
   const handleStop = useCallback(() => {
     audioEngineRef.current?.stopPlayback();
     setIsPlaying(false);
@@ -547,7 +552,7 @@ export default function App() {
       if (e.code === 'Space') {
         e.preventDefault();
         if (isPlaying) {
-          handleStop();
+          handlePause();
         } else {
           handlePlay();
         }
@@ -566,7 +571,7 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isPlaying, handlePlay, handleStop, handleUndo, handleRedo]);
+  }, [isPlaying, handlePlay, handlePause, handleStop, handleUndo, handleRedo]);
 
   // Handle File Import (MIDI / XML / JSON)
   const handleFileImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -811,6 +816,7 @@ export default function App() {
         onSetToolMode={setToolMode}
         isPlaying={isPlaying}
         onPlay={handlePlay}
+        onPause={handlePause}
         onStop={handleStop}
         currentTick={currentPlayheadTick}
         maxTick={maxTick}
