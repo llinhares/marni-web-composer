@@ -229,9 +229,9 @@ export function parseBdoBinaryFile(
     if (code === 0) break;
     arranger += String.fromCharCode(code);
   }
-  arranger = arranger.trim();
-
-  const author = arranger || composer || '';
+  // In BDO, bytes 8..69 is Composer (Composição - Criador Original)
+  // bytes 70..131 is Arranger (Arranjo - Quem adaptou ou baixou)
+  const author = composer || arranger || '';
   const cleanFileName = fileNameFallback ? fileNameFallback.replace(/\.[^/.]+$/, '').trim() : '';
   const title = cleanFileName || composer || 'Música BDO Importada';
 

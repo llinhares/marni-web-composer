@@ -105,6 +105,8 @@ export default function App() {
   });
   const [isBdoProtected, setIsBdoProtected] = useState<boolean>(false);
   const [originalBdoAuthor, setOriginalBdoAuthor] = useState<string>('');
+  const [originalBdoComposer, setOriginalBdoComposer] = useState<string>('');
+  const [originalBdoArranger, setOriginalBdoArranger] = useState<string>('');
   const [originalBdoOwnerId, setOriginalBdoOwnerId] = useState<number | null>(null);
 
   const handleAuthorChange = useCallback((newAuthor: string) => {
@@ -327,9 +329,24 @@ export default function App() {
       bdoGrade,
       isBdoProtected,
       originalBdoAuthor,
+      originalBdoComposer,
+      originalBdoArranger,
       originalBdoOwnerId: originalBdoOwnerId ?? undefined,
     }),
-    [title, author, bpm, timeSignature, accidentals, gridSnap, bdoGrade, isBdoProtected, originalBdoAuthor, originalBdoOwnerId]
+    [
+      title,
+      author,
+      bpm,
+      timeSignature,
+      accidentals,
+      gridSnap,
+      bdoGrade,
+      isBdoProtected,
+      originalBdoAuthor,
+      originalBdoComposer,
+      originalBdoArranger,
+      originalBdoOwnerId,
+    ]
   );
 
   // Playback Controls
@@ -508,6 +525,8 @@ export default function App() {
     setTitle('Marni Web Composer - Example');
     setIsBdoProtected(false);
     setOriginalBdoAuthor('');
+    setOriginalBdoComposer('');
+    setOriginalBdoArranger('');
     setOriginalBdoOwnerId(null);
     setAuthor(localStorage.getItem('marni_bdo_author') || 'Tchepper');
     setIsResetConfirmOpen(false);
@@ -609,6 +628,8 @@ export default function App() {
           handleStop();
           setIsBdoProtected(false);
           setOriginalBdoAuthor('');
+          setOriginalBdoComposer('');
+          setOriginalBdoArranger('');
           setOriginalBdoOwnerId(null);
           setTracks(decoded.tracks);
           setActiveTrackId(decoded.tracks[0].id);
@@ -636,9 +657,13 @@ export default function App() {
           } else if (decoded.title) {
             setTitle(decoded.title);
           }
-          const detectedAuthor = (decoded.author || decoded.arranger || decoded.composer || 'Desconhecido').trim();
+          const detectedComposer = decoded.composer.trim();
+          const detectedArranger = decoded.arranger.trim();
+          const detectedAuthor = (decoded.author || detectedComposer || detectedArranger || 'Desconhecido').trim();
           setIsBdoProtected(true);
           setOriginalBdoAuthor(detectedAuthor);
+          setOriginalBdoComposer(detectedComposer);
+          setOriginalBdoArranger(detectedArranger);
           setOriginalBdoOwnerId(decoded.ownerId);
           setAuthor(detectedAuthor);
           setBdoOwnerId(decoded.ownerId);
@@ -662,6 +687,8 @@ export default function App() {
           handleStop();
           setIsBdoProtected(false);
           setOriginalBdoAuthor('');
+          setOriginalBdoComposer('');
+          setOriginalBdoArranger('');
           setOriginalBdoOwnerId(null);
           setTracks(decoded.tracks);
           setActiveTrackId(decoded.tracks[0].id);
@@ -723,6 +750,8 @@ export default function App() {
           handleStop();
           setIsBdoProtected(false);
           setOriginalBdoAuthor('');
+          setOriginalBdoComposer('');
+          setOriginalBdoArranger('');
           setOriginalBdoOwnerId(null);
           setTracks(importedTracks);
           setActiveTrackId(importedTracks[0].id);
@@ -735,6 +764,8 @@ export default function App() {
           handleStop();
           setIsBdoProtected(false);
           setOriginalBdoAuthor('');
+          setOriginalBdoComposer('');
+          setOriginalBdoArranger('');
           setOriginalBdoOwnerId(null);
           setTracks(parsed.tracks);
           setActiveTrackId(parsed.tracks[0].id);

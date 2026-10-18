@@ -47,8 +47,8 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
 
   // Binary Exporter State (from Lucas Linhares v2)
   const [charName, setCharName] = useState<string>(() => {
-    if (metadata.isBdoProtected && metadata.originalBdoAuthor) {
-      return metadata.originalBdoAuthor;
+    if (metadata.isBdoProtected && (metadata.originalBdoComposer || metadata.originalBdoAuthor)) {
+      return (metadata.originalBdoComposer || metadata.originalBdoAuthor)!;
     }
     return metadata.author || localStorage.getItem('marni_bdo_author') || 'Tchepper';
   });
@@ -62,8 +62,8 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
     const savedOwner = metadata.isBdoProtected && metadata.originalBdoOwnerId !== undefined
       ? metadata.originalBdoOwnerId.toString()
       : localStorage.getItem('marni_bdo_owner_id') || '1009649';
-    const savedName = metadata.isBdoProtected && metadata.originalBdoAuthor
-      ? metadata.originalBdoAuthor
+    const savedName = metadata.isBdoProtected && (metadata.originalBdoComposer || metadata.originalBdoAuthor)
+      ? (metadata.originalBdoComposer || metadata.originalBdoAuthor)!
       : metadata.author || localStorage.getItem('marni_bdo_author') || 'Tchepper';
     const protSuffix = metadata.isBdoProtected ? ' [Protegido contra Plágio]' : '';
     return `0x${parseInt(savedOwner, 10).toString(16)} (${savedName})${protSuffix}`;
@@ -91,16 +91,16 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
   // Initialize overrides from tracks and metadata
   useEffect(() => {
     if (!isOpen) return;
-    const initialAuthor = metadata.isBdoProtected && metadata.originalBdoAuthor
-      ? metadata.originalBdoAuthor
+    const initialComposer = metadata.isBdoProtected && (metadata.originalBdoComposer || metadata.originalBdoAuthor)
+      ? (metadata.originalBdoComposer || metadata.originalBdoAuthor)!
       : metadata.author || localStorage.getItem('marni_bdo_author') || 'Tchepper';
     const initialOwner = metadata.isBdoProtected && metadata.originalBdoOwnerId !== undefined
       ? metadata.originalBdoOwnerId.toString()
       : localStorage.getItem('marni_bdo_owner_id') || '1009649';
-    setCharName(initialAuthor);
+    setCharName(initialComposer);
     setOwnerId(initialOwner);
     const protSuffix = metadata.isBdoProtected ? ' [Protegido contra Plágio]' : '';
-    setIdStatus(`0x${parseInt(initialOwner, 10).toString(16)} (${initialAuthor})${protSuffix}`);
+    setIdStatus(`0x${parseInt(initialOwner, 10).toString(16)} (${initialComposer})${protSuffix}`);
 
     const initialOverrides: Record<string, string> = {};
     const initialScales: Record<string, number> = {};
@@ -159,21 +159,24 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
       const decrypted = decryptOwnerHeader(payload);
       const extractedId = new DataView(decrypted.buffer).getUint32(decrypted.byteOffset, true);
 
-      // In BDO, offset 70 is arranger, offset 8 is composer
-      let extractedName = '';
+      // In BDO, offset 8 is composer (criador original), offset 70 is arranger
+      let extractedComposer = '';
+      for (let i = 8; i < 8 + 62; i += 2) {
+        const charCode = decrypted[i] | (decrypted[i + 1] << 8);
+        if (charCode === 0) break;
+        extractedComposer += String.fromCharCode(charCode);
+      }
+      extractedComposer = extractedComposer.trim();
+
+      let extractedArranger = '';
       for (let i = 70; i < 70 + 62; i += 2) {
         const charCode = decrypted[i] | (decrypted[i + 1] << 8);
         if (charCode === 0) break;
-        extractedName += String.fromCharCode(charCode);
+        extractedArranger += String.fromCharCode(charCode);
       }
-      if (!extractedName) {
-        for (let i = 8; i < 8 + 62; i += 2) {
-          const charCode = decrypted[i] | (decrypted[i + 1] << 8);
-          if (charCode === 0) break;
-          extractedName += String.fromCharCode(charCode);
-        }
-      }
-      extractedName = extractedName.trim();
+      extractedArranger = extractedArranger.trim();
+
+      const extractedName = extractedComposer || extractedArranger;
 
       setOwnerId(extractedId.toString());
       localStorage.setItem('marni_bdo_owner_id', extractedId.toString());
@@ -189,13 +192,19 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
 
   const handleExportBinary = () => {
     const songTitle = (metadata.title || 'Marni_Song').trim();
-    const resolvedCharName = (
-      metadata.isBdoProtected && metadata.originalBdoAuthor
-        ? metadata.originalBdoAuthor
+    const resolvedComposer = (
+      metadata.isBdoProtected && (metadata.originalBdoComposer || metadata.originalBdoAuthor)
+        ? (metadata.originalBdoComposer || metadata.originalBdoAuthor)
         : charName ||
           metadata.author ||
           localStorage.getItem('marni_bdo_author') ||
           'Tchepper'
+    )!.trim();
+
+    const resolvedArranger = (
+      metadata.isBdoProtected && metadata.originalBdoArranger
+        ? metadata.originalBdoArranger
+        : resolvedComposer
     ).trim();
 
     const resolvedOwnerId =
@@ -204,7 +213,7 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
         : parseInt(ownerId, 10) || 1009649;
 
     if (!metadata.isBdoProtected) {
-      localStorage.setItem('marni_bdo_author', resolvedCharName);
+      localStorage.setItem('marni_bdo_author', resolvedComposer);
       if (ownerId) {
         localStorage.setItem('marni_bdo_owner_id', ownerId);
       }
@@ -214,11 +223,13 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
       bpm: metadata.bpm,
       timeSignature: [4, 4],
       title: songTitle,
-      author: resolvedCharName,
+      author: resolvedComposer,
     };
 
     const options: ExportOptions = {
-      charName: resolvedCharName,
+      charName: resolvedComposer,
+      composerName: resolvedComposer,
+      arrangerName: resolvedArranger,
       ownerId: resolvedOwnerId,
       transpose: parseInt(transpose, 10) || 0,
       velMode,
@@ -368,7 +379,7 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
                         <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/60 text-amber-300 border border-amber-700/50 font-mono">BDO Oficial</span>
                       </div>
                       <p className="text-[11px] text-amber-200/90 leading-relaxed">
-                        Esta partitura foi importada diretamente do Black Desert. Os dados de <b>Composição</b>, <b>Arranjo</b> ({metadata.originalBdoAuthor || metadata.author}) e <b>Owner ID</b> estão bloqueados para proteger os créditos e a autoria do criador original.
+                        Esta partitura foi importada diretamente do Black Desert. Os dados de <b>Compositor Original</b> ({metadata.originalBdoComposer || metadata.originalBdoAuthor}){metadata.originalBdoArranger && metadata.originalBdoArranger !== (metadata.originalBdoComposer || metadata.originalBdoAuthor) ? ` e Arranjo (${metadata.originalBdoArranger})` : ''} e <b>Owner ID</b> estão bloqueados para proteger os créditos e a autoria do criador original.
                       </p>
                     </div>
                   </div>
@@ -378,13 +389,17 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
                   {/* Character Row */}
                   <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-center gap-2">
                     <span className="text-stone-400 sm:text-right sm:pr-3 font-medium">
-                      Autor (Personagem/Família):
+                      {metadata.isBdoProtected ? 'Compositor Original:' : 'Autor (Personagem/Família):'}
                     </span>
                     <div className="flex items-center gap-2.5 flex-wrap">
                       <div className="relative flex items-center">
                         <input
                           type="text"
-                          value={metadata.isBdoProtected ? (metadata.originalBdoAuthor || charName) : charName}
+                          value={
+                            metadata.isBdoProtected
+                              ? (metadata.originalBdoComposer || metadata.originalBdoAuthor || charName)
+                              : charName
+                          }
                           onChange={(e) => {
                             if (!metadata.isBdoProtected) {
                               setCharName(e.target.value);
@@ -393,10 +408,10 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
                           }}
                           readOnly={metadata.isBdoProtected}
                           disabled={metadata.isBdoProtected}
-                          placeholder="Nome de Personagem ou Família"
+                          placeholder={metadata.isBdoProtected ? 'Nome do Compositor Original' : 'Nome de Personagem ou Família'}
                           title={
                             metadata.isBdoProtected
-                              ? 'Partitura protegida contra plágio: autoria original bloqueada para edição.'
+                              ? 'Compositor original da partitura do Black Desert: protegido contra plágio.'
                               : 'Nome preenchido igualmente em Composição e Arranjo no BDO'
                           }
                           className={`w-48 bg-stone-900/90 border rounded-lg px-3 py-1.5 text-xs outline-none transition-colors ${
@@ -432,6 +447,16 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
                       )}
                     </div>
                   </div>
+
+                  {/* Arranger Row if protected and distinct */}
+                  {metadata.isBdoProtected && metadata.originalBdoArranger && (
+                    <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-center gap-2">
+                      <span className="text-stone-400 sm:text-right sm:pr-3 font-medium">Arranjador:</span>
+                      <div className="bg-stone-900/90 border border-[#2d2722] px-2.5 py-1 rounded-md text-xs font-mono text-stone-300 w-fit">
+                        {metadata.originalBdoArranger}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Status ID Row */}
                   <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-center gap-2">

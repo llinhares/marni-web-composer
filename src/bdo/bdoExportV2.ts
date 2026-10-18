@@ -136,7 +136,11 @@ export function resolveDrumPitch(pitch: string | number): number {
 }
 
 export interface ExportOptions {
-  charName: string; ownerId: number; transpose: number;
+  charName: string;
+  composerName?: string;
+  arrangerName?: string;
+  ownerId: number;
+  transpose: number;
   velMode: 'layered' | 'stepped' | 'rescale' | 'floor' | 'off';
   velStepBase: number; velStepStep: number;
   velRescaleMin: number; velRescaleMax: number; velFloorVal: number;
@@ -310,11 +314,14 @@ export function exportToBdo(tracks: Track[], song: SongContext, options: ExportO
   // In Black Desert Online:
   // Offset 0x008 (bytes 8..69): Compositor (Composição)
   // Offset 0x046 (bytes 70..131): Arranjador (Arranjo)
-  // Both fields must use the same character / family name
-  const authorName = (options.charName || song.author || 'Composer').trim();
-  const authorBuf = encodeNameUTF16LE(authorName);
-  new Uint8Array(buffer, offset, 62).set(authorBuf); offset += 62;
-  new Uint8Array(buffer, offset, 62).set(authorBuf); offset += 62;
+  // For original songs, both use options.charName.
+  // For imported/protected songs, composerName preserves the original composer.
+  const compName = (options.composerName || options.charName || song.author || 'Composer').trim();
+  const arrName = (options.arrangerName || options.charName || song.author || compName).trim();
+  const compBuf = encodeNameUTF16LE(compName);
+  const arrBuf = encodeNameUTF16LE(arrName);
+  new Uint8Array(buffer, offset, 62).set(compBuf); offset += 62;
+  new Uint8Array(buffer, offset, 62).set(arrBuf); offset += 62;
   
   view.setUint16(offset, song.bpm, true); offset += 2;
   view.setUint16(offset, song.timeSignature[0], true); offset += 2;

@@ -315,3 +315,70 @@ test('parseBdoBinaryFile sets isProtected flag and protects original composer, a
   assert.strictEqual(decoded.ownerId, originalOwnerId);
 });
 
+test('parseBdoBinaryFile prioritizes original composer over arranger and retains distinct credits', async () => {
+  const notes: Note[] = [
+    {
+      id: 'n-distinct',
+      trackId: 'tr-distinct',
+      pitch: 64,
+      startTick: 0,
+      durationTicks: 480,
+      velocity: 95,
+    },
+  ];
+
+  const tracks: Track[] = [
+    {
+      id: 'tr-distinct',
+      name: 'Florchestra Piano',
+      instrumentId: 'grand-piano',
+      color: '#d4a373',
+      volume: 85,
+      pan: 0,
+      isMuted: false,
+      isSolo: false,
+      auxSend: true,
+      notes,
+    },
+  ];
+
+  const originalComposer = 'FamiliaStars';
+  const playerArranger = 'Tchepper';
+  const ownerId = 0xa3480;
+
+  const blob = exportToBdo(
+    tracks,
+    { bpm: 120, timeSignature: [4, 4], title: 'Dupla' },
+    {
+      charName: originalComposer,
+      composerName: originalComposer,
+      arrangerName: playerArranger,
+      ownerId,
+      transpose: 0,
+      velMode: 'off',
+      velStepBase: 100,
+      velStepStep: 5,
+      velRescaleMin: 80,
+      velRescaleMax: 127,
+      velFloorVal: 100,
+      instrumentOverrides: { 'tr-distinct': 'Florchestra Piano' },
+      velocityScales: { 'tr-distinct': 100 },
+      effector: {
+        reverb: { enabled: false, damp: 50, mix: 30, time: 20 },
+        delay: { enabled: false, time: 20, feedback: 20, mix: 25 },
+        chorus: { enabled: false, feedback: 20, lfoDepth: 30, lfoFrequency: 20, mix: 20 },
+      },
+    }
+  );
+
+  const arrayBuffer = await blob.arrayBuffer();
+  const decoded = parseBdoBinaryFile(arrayBuffer, 'musica para dupla');
+
+  // The author MUST be the original composer (FamiliaStars), NOT the arranger (Tchepper)!
+  assert.strictEqual(decoded.author, 'FamiliaStars');
+  assert.strictEqual(decoded.composer, 'FamiliaStars');
+  assert.strictEqual(decoded.arranger, 'Tchepper');
+  assert.strictEqual(decoded.ownerId, 0xa3480);
+});
+
+
