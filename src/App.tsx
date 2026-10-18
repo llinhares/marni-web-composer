@@ -625,6 +625,9 @@ export default function App() {
             localStorage.setItem('marni_bdo_owner_id', decoded.ownerId.toString());
           }
           if (decoded.timeSignature) setTimeSignature(decoded.timeSignature);
+          if (decoded.effectorSettings) {
+            setEffectorSettings(decoded.effectorSettings);
+          }
           pushHistory(decoded.tracks, decoded.tracks[0].id);
         } else {
           alert('O arquivo de partitura do Black Desert foi lido, mas nenhuma nota foi encontrada.');

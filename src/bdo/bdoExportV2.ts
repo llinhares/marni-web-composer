@@ -37,29 +37,45 @@ export const FULL_BDO_INSTRUMENTS: Record<string, number> = {
   'Florchestra Acoustic Guitar': 0x0a, 'Florchestra Flute': 0x0b, 'Drum Set': 0x0d,
   'Marnibass': 0x0e, 'Florchestra Contrabass': 0x0f, 'Florchestra Harp': 0x10,
   'Florchestra Piano': 0x11, 'Florchestra Violin': 0x12, 'Handpan': 0x13,
-  'Marnian Wavy Planet': 0x14, 'Marnian Illusion Tree': 0x18, 'Marnian Secret Note': 0x1c,
-  'Marnian Sandwich': 0x20, 'Guitar Silver Wave': 0x24, 'Guitar Highway': 0x25,
+  'Marnian Wavy Planet': 0x14, 'Marnian Wavy Planet (Wave 2)': 0x15, 'Marnian Wavy Planet (Wave 3)': 0x16, 'Marnian Wavy Planet (Wave 4)': 0x17,
+  'Marnian Illusion Tree': 0x18, 'Marnian Illusion Tree (Wave 2)': 0x19, 'Marnian Illusion Tree (Wave 3)': 0x1a, 'Marnian Illusion Tree (Wave 4)': 0x1b,
+  'Marnian Secret Note': 0x1c, 'Marnian Secret Note (Wave 2)': 0x1d, 'Marnian Secret Note (Wave 3)': 0x1e, 'Marnian Secret Note (Wave 4)': 0x1f,
+  'Marnian Sandwich': 0x20, 'Marnian Sandwich (Wave 2)': 0x21, 'Marnian Sandwich (Wave 3)': 0x22, 'Marnian Sandwich (Wave 4)': 0x23,
+  'Guitar Silver Wave': 0x24, 'Guitar Highway': 0x25,
   'Guitar Hexe Glam': 0x26, 'Florchestra Clarinet': 0x27, 'Florchestra Horn': 0x28,
 };
 
-export const BDO_PERCUSSION_IDS = [0x04, 0x05, 0x0d];
+export const BDO_PERCUSSION_IDS = [0x04, 0x05, 0x0d, 0x13];
 
 export function getDefaultBdoInstrument(baseType: string): string {
   switch (baseType) {
     case 'Tamborim': return 'Hand Drum';
     case 'Kit de Bateria':
     case 'percussion':
-    case 'Percussão': return 'Drum Set';
+    case 'Percussão':
+    case 'Bateria': return 'Drum Set';
     case 'Pratos': return 'Cymbals';
     case 'Handpan': return 'Handpan';
     case 'grand-piano':
-    case 'Grand Piano': return 'Florchestra Piano';
+    case 'Grand Piano':
+    case 'Piano': return 'Florchestra Piano';
     case 'guitar':
     case 'Violão Acústico':
+    case 'Violão':
     case 'Guitarra Acústica': return 'Florchestra Acoustic Guitar';
+    case 'Guitar Silver Wave':
+    case 'Guitarra Silver Wave':
+    case 'Guitarra Elétrica': return 'Guitar Silver Wave';
+    case 'Guitar Highway':
+    case 'Guitarra Highway': return 'Guitar Highway';
+    case 'Guitar Hexe Glam':
+    case 'Guitarra Hexe Glam': return 'Guitar Hexe Glam';
+    case 'marnibass':
+    case 'Marnibass': return 'Marnibass';
     case 'bass':
     case 'Contrabaixo':
-    case 'Baixo Acústico': return 'Florchestra Contrabass';
+    case 'Baixo Acústico':
+    case 'Baixo': return 'Florchestra Contrabass';
     case 'harp':
     case 'Harpa': return 'Florchestra Harp';
     case 'violin':
@@ -67,6 +83,7 @@ export function getDefaultBdoInstrument(baseType: string): string {
     case 'flute':
     case 'Flauta Transversal':
     case 'Flauta': return 'Florchestra Flute';
+    case 'Flauta Doce': return 'Beginner Recorder';
     case 'clarinet':
     case 'Clarinete': return 'Florchestra Clarinet';
     case 'trumpet':
@@ -193,7 +210,7 @@ function processVelocity(notes: Note[], opts: ExportOptions): Note[] {
 }
 
 export function exportToBdo(tracks: Track[], song: SongContext, options: ExportOptions): Blob {
-  const mergedNotesByInst: Record<number, { notes: Note[], volume: number }> = {};
+  const mergedNotesByInst: Record<number, { notes: Note[]; volume: number; auxSend: boolean }> = {};
   
   tracks.forEach(t => {
     if (t.notes.length === 0 || t.isMuted) return; 
@@ -229,12 +246,20 @@ export function exportToBdo(tracks: Track[], song: SongContext, options: ExportO
     processedNotes = processVelocity(processedNotes, options);
     
     if (!mergedNotesByInst[instId]) {
-      mergedNotesByInst[instId] = { notes: [], volume: t.volume ?? 70 };
+      mergedNotesByInst[instId] = {
+        notes: [],
+        volume: t.volume ?? 100,
+        auxSend: t.auxSend !== false,
+      };
+    } else {
+      if (t.auxSend !== false) {
+        mergedNotesByInst[instId].auxSend = true;
+      }
     }
     mergedNotesByInst[instId].notes.push(...processedNotes);
   });
 
-  const processedGroups: { instId: number, volume: number, tracks: Note[][] }[] = [];
+  const processedGroups: { instId: number; volume: number; auxSend: boolean; tracks: Note[][] }[] = [];
   
   Object.entries(mergedNotesByInst).forEach(([idStr, groupData]) => {
     const instId = parseInt(idStr);
@@ -256,11 +281,21 @@ export function exportToBdo(tracks: Track[], song: SongContext, options: ExportO
     for (let i = 0; i < uniqueNotes.length; i += chunkLimit) {
       chunks.push(uniqueNotes.slice(i, i + chunkLimit));
     }
-    processedGroups.push({ instId, volume: groupData.volume, tracks: chunks });
+    processedGroups.push({
+      instId,
+      volume: groupData.volume,
+      auxSend: groupData.auxSend,
+      tracks: chunks,
+    });
   });
 
   if (processedGroups.length === 0) {
-    processedGroups.push({ instId: FULL_BDO_INSTRUMENTS['Florchestra Piano'], volume: 70, tracks: [] });
+    processedGroups.push({
+      instId: FULL_BDO_INSTRUMENTS['Florchestra Piano'],
+      volume: 100,
+      auxSend: true,
+      tracks: [],
+    });
   }
 
   const totalNoteCount = Object.values(mergedNotesByInst).reduce((acc, g) => acc + g.notes.length, 0);
@@ -304,23 +339,44 @@ export function exportToBdo(tracks: Track[], song: SongContext, options: ExportO
 
     const writeTrack = (notes: Note[]) => {
       const dataSize = 2 + 8 + 2 + notes.length * 20;
-      const vol127 = Math.min(127, Math.max(1, Math.round((group.volume ?? 70) * 1.27)));
-      const trackMarker = group.instId | (vol127 << 8); 
+      // In BDO, volume in trackMarker high byte is native 0..100%
+      const bdoVolume = Math.min(100, Math.max(0, Math.round(group.volume ?? 100)));
+      const trackMarker = (group.instId & 0xFF) | ((bdoVolume & 0xFF) << 8); 
       
       view.setUint16(offset, dataSize, true); offset += 2;
       view.setUint16(offset, trackMarker, true); offset += 2;
       
-      const revVal = (options.effector as unknown as { reverbTime?: number })?.reverbTime ?? options.effector?.reverb?.time ?? 0;
-      const delVal = (options.effector as unknown as { delayFeedback?: number })?.delayFeedback ?? options.effector?.delay?.feedback ?? 0;
-      const choFb = (options.effector as unknown as { chorusFeedback?: number })?.chorusFeedback ?? options.effector?.chorus?.feedback ?? 0;
-      const choDp = (options.effector as unknown as { chorusDepth?: number })?.chorusDepth ?? options.effector?.chorus?.lfoDepth ?? 0;
-      const choFr = (options.effector as unknown as { chorusFreq?: number })?.chorusFreq ?? options.effector?.chorus?.lfoFrequency ?? 0;
+      // 8 Effector DSP bytes (Reverb, Delay, Chorus sends and parameters)
+      // Byte 0: Reverb send level (0..100)
+      // Byte 1: Reverb room/decay time (0..100)
+      // Byte 2: Delay send level (0..100)
+      // Byte 3: Delay time/feedback (0..100)
+      // Byte 4: Chorus send level (0..100)
+      // Byte 5: Chorus feedback (0..100)
+      // Byte 6: Chorus LFO depth (0..100)
+      // Byte 7: Chorus LFO frequency (0..100)
+      const revSend = (group.auxSend && options.effector?.reverb?.enabled)
+        ? Math.min(100, Math.max(0, Math.round(options.effector.reverb.mix ?? 40)))
+        : 0;
+      const revTime = Math.min(100, Math.max(0, Math.round(options.effector?.reverb?.time ?? 20)));
 
-      view.setUint8(offset++, 0); 
-      view.setUint8(offset++, revVal); 
-      view.setUint8(offset++, 0); 
-      view.setUint8(offset++, delVal); 
-      view.setUint8(offset++, 0); 
+      const delSend = (group.auxSend && options.effector?.delay?.enabled)
+        ? Math.min(100, Math.max(0, Math.round(options.effector.delay.mix ?? 30)))
+        : 0;
+      const delTime = Math.min(100, Math.max(0, Math.round(options.effector?.delay?.feedback ?? options.effector?.delay?.time ?? 10)));
+
+      const choSend = (group.auxSend && options.effector?.chorus?.enabled)
+        ? Math.min(100, Math.max(0, Math.round(options.effector.chorus.mix ?? 30)))
+        : 0;
+      const choFb = Math.min(100, Math.max(0, Math.round(options.effector?.chorus?.feedback ?? 20)));
+      const choDp = Math.min(100, Math.max(0, Math.round(options.effector?.chorus?.lfoDepth ?? 30)));
+      const choFr = Math.min(100, Math.max(0, Math.round(options.effector?.chorus?.lfoFrequency ?? 20)));
+
+      view.setUint8(offset++, revSend); 
+      view.setUint8(offset++, revTime); 
+      view.setUint8(offset++, delSend); 
+      view.setUint8(offset++, delTime); 
+      view.setUint8(offset++, choSend); 
       view.setUint8(offset++, choFb); 
       view.setUint8(offset++, choDp); 
       view.setUint8(offset++, choFr); 

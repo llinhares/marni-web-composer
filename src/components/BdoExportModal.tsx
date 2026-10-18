@@ -165,11 +165,11 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
       }
       setIdStatus(`0x${extractedId.toString(16)} (${extractedName || 'Personagem'})`);
     } catch {
-      setIdStatus('Erro ao ler arquivo .bms');
+      setIdStatus('Erro ao ler arquivo BDO');
     }
   };
 
-  const handleExportBinary = (withExtension = true) => {
+  const handleExportBinary = () => {
     const songTitle = (metadata.title || 'Marni_Song').trim();
     const resolvedCharName = (
       charName ||
@@ -212,10 +212,8 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      // In BDO, game files in Documents/Black Desert/Music/ can be named .bms or raw title
-      a.download = withExtension
-        ? `${songTitle.replace(/\s+/g, '_')}.bms`
-        : songTitle.replace(/\s+/g, '_');
+      // In Black Desert Online, music files in Documents/Black Desert/Music/ have NO extension
+      a.download = songTitle.replace(/\s+/g, '_');
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -354,7 +352,7 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
                       <button
                         onClick={() => fileInputRef.current?.click()}
                         className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-[#3e3832] bg-[#23201e] text-xs font-medium text-[#e0d4c8] hover:text-[#d4ab6a] hover:border-[#d4ab6a] transition-all"
-                        title="Extrair Owner ID e Nome de um arquivo .bms salvo pelo seu personagem no Black Desert"
+                        title="Extrair Owner ID e Nome de um arquivo salvo pelo seu personagem no Black Desert (Documents\Black Desert\Music)"
                       >
                         <Upload className="w-3.5 h-3.5" />
                         <span>Carregar ID BDO</span>
@@ -363,7 +361,7 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
                         type="file"
                         ref={fileInputRef}
                         className="hidden"
-                        accept=".bms,.bpm"
+                        accept="*"
                         onChange={handleExtractId}
                       />
                     </div>
@@ -676,36 +674,30 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
             </div>
           )}
 
-          {/* Guide Note Box matching print */}
+          {/* Guide Note Box */}
           <div className="flex items-start gap-2.5 p-3 rounded-lg bg-[#141210] border border-[#2d2722] text-xs text-stone-400 leading-relaxed">
             <FileCode className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
             <div>
               <span className="font-semibold text-stone-200">Como importar no Black Desert:</span>
               <p className="mt-0.5 text-[11px] text-stone-400">
-                Copie o arquivo gerado (<code>.bms</code>) diretamente para a pasta:{' '}
+                Copie o arquivo gerado (sem extensão, com o mesmo nome da música) diretamente para a pasta:{' '}
                 <code className="text-amber-400 bg-stone-900 px-1 py-0.5 rounded">
                   Documents\Black Desert\Music\
                 </code>
-                . No jogo, abra o menu Esc &gt; Comunidade &gt; Álbum de Música para carregar sua partitura!
+                . O Black Desert reconhece o arquivo diretamente pelo nome sem extensão. No jogo, abra o menu Esc &gt; Comunidade &gt; Álbum de Música para carregar sua partitura!
               </p>
             </div>
           </div>
         </div>
 
-        {/* Footer with Big Gold Button matching image print */}
+        {/* Footer with Big Gold Button */}
         <div className="p-4 border-t border-[#2a2a2a] bg-[#171616] shrink-0 flex items-center gap-3">
           <button
-            onClick={() => handleExportBinary(true)}
-            className="flex-1 py-3 rounded-md bg-[#b09046] hover:bg-[#d8ad70] text-[#161618] font-bold text-sm tracking-wider uppercase transition-all shadow-[0_0_15px_rgba(216,173,112,0.25)] hover:shadow-[0_0_20px_rgba(216,173,112,0.45)] active:scale-[0.99]"
+            onClick={handleExportBinary}
+            className="w-full py-3 rounded-md bg-[#b09046] hover:bg-[#d8ad70] text-[#161618] font-bold text-sm tracking-wider uppercase transition-all shadow-[0_0_15px_rgba(216,173,112,0.25)] hover:shadow-[0_0_20px_rgba(216,173,112,0.45)] active:scale-[0.99] flex items-center justify-center gap-2"
           >
-            GERAR ARQUIVO BDO (.BMS)
-          </button>
-          <button
-            onClick={() => handleExportBinary(false)}
-            className="hidden sm:inline-flex px-4 py-3 rounded-md border border-[#3e3832] bg-[#23201e] hover:border-amber-500 text-stone-300 hover:text-amber-300 text-xs font-semibold transition-colors"
-            title="Exportar como arquivo BDO nativo sem extensão"
-          >
-            Sem extensão
+            <Download className="w-4 h-4" />
+            EXPORTAR ARQUIVO BDO (SEM EXTENSÃO)
           </button>
         </div>
       </div>

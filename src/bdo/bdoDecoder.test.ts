@@ -119,4 +119,71 @@ test('exportToBdo and parseBdoBinaryFile preserve sustain pedal and C0-B8 note r
   // Note 2: B8 without sustain pedal!
   assert.strictEqual(decodedNotes[2].pitch, 119);
   assert.strictEqual(decodedNotes[2].sustain, false);
+  assert.strictEqual(decoded.tracks[0].volume, 80);
+});
+
+test('exportToBdo and parseBdoBinaryFile round-trip effector settings and native volume', async () => {
+  const notes: Note[] = [
+    {
+      id: 'n-1',
+      trackId: 'tr-fx',
+      pitch: 60, // C4
+      startTick: 0,
+      durationTicks: 480,
+      velocity: 100,
+    },
+  ];
+
+  const tracks: Track[] = [
+    {
+      id: 'tr-fx',
+      name: 'Florchestra Violin',
+      instrumentId: 'violin',
+      color: '#e07a5f',
+      volume: 95,
+      pan: 0,
+      isMuted: false,
+      isSolo: false,
+      auxSend: true,
+      notes,
+    },
+  ];
+
+  const song = {
+    bpm: 140,
+    timeSignature: [4, 4] as [number, number],
+    title: 'Effector_Song',
+  };
+
+  const options: ExportOptions = {
+    charName: 'MarniEffector',
+    ownerId: 999999,
+    transpose: 0,
+    velMode: 'off',
+    velStepBase: 100,
+    velStepStep: 5,
+    velRescaleMin: 80,
+    velRescaleMax: 127,
+    velFloorVal: 100,
+    instrumentOverrides: { 'tr-fx': 'Florchestra Violin' },
+    velocityScales: { 'tr-fx': 100 },
+    effector: {
+      reverb: { enabled: true, damp: 50, mix: 45, time: 60 },
+      delay: { enabled: true, time: 30, feedback: 30, mix: 35 },
+      chorus: { enabled: true, feedback: 25, lfoDepth: 40, lfoFrequency: 35, mix: 50 },
+    },
+  };
+
+  const blob = exportToBdo(tracks, song, options);
+  const arrayBuffer = await blob.arrayBuffer();
+
+  const decoded = parseBdoBinaryFile(arrayBuffer, 'Effector_Song');
+  assert.strictEqual(decoded.tracks[0].volume, 95);
+  assert.strictEqual(decoded.effectorSettings?.reverb.enabled, true);
+  assert.strictEqual(decoded.effectorSettings?.reverb.mix, 45);
+  assert.strictEqual(decoded.effectorSettings?.reverb.time, 60);
+  assert.strictEqual(decoded.effectorSettings?.delay.enabled, true);
+  assert.strictEqual(decoded.effectorSettings?.delay.mix, 35);
+  assert.strictEqual(decoded.effectorSettings?.chorus.enabled, true);
+  assert.strictEqual(decoded.effectorSettings?.chorus.mix, 50);
 });

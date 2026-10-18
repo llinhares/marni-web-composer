@@ -5,7 +5,7 @@
  * Notes (C0-B8) and Sustain Pedal articulation flags (byte 1 === 11).
  */
 
-import type { Track, Note, InstrumentId, TimeSignature } from '../types/music.ts';
+import type { Track, Note, InstrumentId, TimeSignature, EffectorSettings } from '../types/music.ts';
 import { BDO_INSTRUMENTS } from '../types/music.ts';
 import { FULL_BDO_INSTRUMENTS } from './bdoExportV2.ts';
 
@@ -161,9 +161,21 @@ const BDO_ID_TO_INSTRUMENT: Record<number, { id: InstrumentId; name: string }> =
   0x12: { id: 'violin', name: 'Florchestra Violin' },
   0x13: { id: 'percussion', name: 'Handpan' },
   0x14: { id: 'marnisynth', name: 'Marnian Wavy Planet' },
+  0x15: { id: 'marnisynth', name: 'Marnian Wavy Planet (Wave 2)' },
+  0x16: { id: 'marnisynth', name: 'Marnian Wavy Planet (Wave 3)' },
+  0x17: { id: 'marnisynth', name: 'Marnian Wavy Planet (Wave 4)' },
   0x18: { id: 'marnisynth', name: 'Marnian Illusion Tree' },
+  0x19: { id: 'marnisynth', name: 'Marnian Illusion Tree (Wave 2)' },
+  0x1a: { id: 'marnisynth', name: 'Marnian Illusion Tree (Wave 3)' },
+  0x1b: { id: 'marnisynth', name: 'Marnian Illusion Tree (Wave 4)' },
   0x1c: { id: 'marnisynth', name: 'Marnian Secret Note' },
+  0x1d: { id: 'marnisynth', name: 'Marnian Secret Note (Wave 2)' },
+  0x1e: { id: 'marnisynth', name: 'Marnian Secret Note (Wave 3)' },
+  0x1f: { id: 'marnisynth', name: 'Marnian Secret Note (Wave 4)' },
   0x20: { id: 'marnisynth', name: 'Marnian Sandwich' },
+  0x21: { id: 'marnisynth', name: 'Marnian Sandwich (Wave 2)' },
+  0x22: { id: 'marnisynth', name: 'Marnian Sandwich (Wave 3)' },
+  0x23: { id: 'marnisynth', name: 'Marnian Sandwich (Wave 4)' },
   0x24: { id: 'guitar', name: 'Guitar Silver Wave' },
   0x25: { id: 'guitar', name: 'Guitar Highway' },
   0x26: { id: 'guitar', name: 'Guitar Hexe Glam' },
@@ -180,6 +192,7 @@ export interface DecodedBdoSong {
   timeSignature: TimeSignature;
   ownerId: number;
   tracks: Track[];
+  effectorSettings?: EffectorSettings;
 }
 
 /**
@@ -238,6 +251,7 @@ export function parseBdoBinaryFile(
   offset += 2;
 
   const tracks: Track[] = [];
+  let extractedEffector: EffectorSettings | undefined = undefined;
 
   for (let g = 0; g < numGroups; g++) {
     if (offset + 2 > decrypted.length) break;
@@ -250,9 +264,43 @@ export function parseBdoBinaryFile(
       const trackMarker = dv.getUint16(offset, true);
       offset += 2;
       const bdoInstId = trackMarker & 0xFF;
-      const volume = Math.round(((trackMarker >> 8) & 0xFF) / 1.27) || 75;
+      const rawVolume = (trackMarker >> 8) & 0xFF;
+      const volume = Math.min(100, Math.max(0, rawVolume)) || 75;
 
-      offset += 8; // skip 8 effector bytes
+      const revSend = dv.getUint8(offset);
+      const revTime = dv.getUint8(offset + 1);
+      const delSend = dv.getUint8(offset + 2);
+      const delTime = dv.getUint8(offset + 3);
+      const choSend = dv.getUint8(offset + 4);
+      const choFb = dv.getUint8(offset + 5);
+      const choDp = dv.getUint8(offset + 6);
+      const choFr = dv.getUint8(offset + 7);
+      offset += 8;
+
+      if (!extractedEffector && (revSend > 0 || delSend > 0 || choSend > 0 || revTime > 0)) {
+        extractedEffector = {
+          reverb: {
+            enabled: revSend > 0,
+            time: revTime || 20,
+            damp: 50,
+            mix: revSend || 40,
+          },
+          delay: {
+            enabled: delSend > 0,
+            feedback: delTime || 10,
+            time: delTime || 10,
+            mix: delSend || 30,
+          },
+          chorus: {
+            enabled: choSend > 0,
+            feedback: choFb || 20,
+            lfoDepth: choDp || 30,
+            lfoFrequency: choFr || 20,
+            mix: choSend || 30,
+          },
+        };
+      }
+
       if (offset + 2 > decrypted.length) break;
       const noteCount = dv.getUint16(offset, true);
       offset += 2;
@@ -287,6 +335,7 @@ export function parseBdoBinaryFile(
         const instMeta = BDO_ID_TO_INSTRUMENT[bdoInstId];
         const instDef = BDO_INSTRUMENTS.find((i) => i.id === instMeta?.id);
         const hasAnySustain = notes.some((n) => n.sustain);
+        const auxActive = (revSend > 0 || delSend > 0 || choSend > 0) || !extractedEffector;
 
         tracks.push({
           id: trackId,
@@ -297,7 +346,7 @@ export function parseBdoBinaryFile(
           pan: 0,
           isMuted: false,
           isSolo: false,
-          auxSend: true,
+          auxSend: auxActive,
           sustainPedal: hasAnySustain,
           notes,
         });
@@ -314,5 +363,6 @@ export function parseBdoBinaryFile(
     timeSignature,
     ownerId,
     tracks,
+    effectorSettings: extractedEffector,
   };
 };
