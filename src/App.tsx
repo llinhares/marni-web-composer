@@ -359,14 +359,14 @@ export default function App() {
 
   // Audition single pitch
   const handleAuditionPitch = useCallback(
-    (pitch: number) => {
+    (pitch: number, velocity: number = 95) => {
       const active = tracks.find((t) => t.id === activeTrackId) || tracks[0];
       if (active && audioEngineRef.current) {
         audioEngineRef.current.init();
         audioEngineRef.current.playNote(
           active.instrumentId,
           pitch,
-          95,
+          velocity,
           0.8,
           active.volume,
           active.auxSend,

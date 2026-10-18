@@ -45,6 +45,10 @@ export const BottomBar: React.FC<BottomBarProps> = ({
           <span>
             <kbd className="px-1.5 py-0.5 rounded bg-stone-850 border border-stone-700/60 text-[10px] text-stone-300 font-sans">Shift + Scroll</kbd> rolar horizontal
           </span>
+          <span className="text-stone-600">•</span>
+          <span>
+            <kbd className="px-1.5 py-0.5 rounded bg-stone-850 border border-stone-700/60 text-[10px] text-stone-300 font-sans">Alt + Scroll</kbd> intensidade
+          </span>
         </div>
       </div>
 

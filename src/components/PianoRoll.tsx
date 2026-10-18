@@ -8,6 +8,8 @@ import {
   ArrowDown,
   X as CloseIcon,
   Music,
+  Sliders,
+  Volume2,
 } from 'lucide-react';
 import type { Note, Track, ToolMode, GridSnap, TimeSignature } from '../types/music.ts';
 import {
@@ -42,7 +44,7 @@ interface PianoRollProps {
   tracks: Track[];
   activeTrackId: string;
   onUpdateNotes: (trackId: string, notes: Note[], commitHistory?: boolean) => void;
-  onAuditionPitch: (pitch: number) => void;
+  onAuditionPitch: (pitch: number, velocity?: number) => void;
   toolMode: ToolMode;
   gridSnap: GridSnap;
   timeSignature: TimeSignature;
@@ -174,11 +176,18 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
     return () => container.removeEventListener('wheel', onNativeWheel);
   }, [onZoomChange]);
 
+  const [showVelocityLane, setShowVelocityLane] = useState<boolean>(false);
+  const [defaultVelocity, setDefaultVelocity] = useState<number>(95);
+
   const VERTICAL_SCROLLBAR_WIDTH = 12;
   const HORIZONTAL_SCROLLBAR_HEIGHT = 12;
+  const VELOCITY_LANE_HEIGHT = showVelocityLane ? 80 : 0;
 
   const visibleWidth = Math.max(100, containerWidth - keyboardWidth - VERTICAL_SCROLLBAR_WIDTH);
-  const visibleHeight = Math.max(100, containerHeight - RULER_HEIGHT - HORIZONTAL_SCROLLBAR_HEIGHT);
+  const visibleHeight = Math.max(
+    100,
+    containerHeight - RULER_HEIGHT - HORIZONTAL_SCROLLBAR_HEIGHT - VELOCITY_LANE_HEIGHT
+  );
   const maxScrollX = Math.max(0, totalGridWidth - visibleWidth);
   const maxScrollY = Math.max(0, totalGridHeight - visibleHeight);
 
@@ -196,9 +205,9 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
     setScrollY((prev) => Math.max(0, Math.min(maxScrollY, prev)));
   }, [maxScrollY]);
 
-  // Drag interaction states (including Pan with middle-click or pan tool)
+  // Drag interaction states (including Pan with middle-click or pan tool, and velocity lane editing)
   const [dragAction, setDragAction] = useState<{
-    type: 'create' | 'move' | 'resize' | 'pan' | 'selectBox';
+    type: 'create' | 'move' | 'resize' | 'pan' | 'selectBox' | 'velocityLane';
     targetNoteId?: string;
     initialNotes?: Map<string, Note>;
     startX: number;
@@ -486,6 +495,59 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
     onUpdateNotes(activeTrack.id, updated, true);
   }, [activeNotes, selectedNoteIds, isSelectionSustained, activeTrack.id, onUpdateNotes]);
 
+  // Selected notes velocity (returns exact number if all identical or 1 selected, or average)
+  const selectionVelocity = useMemo(() => {
+    const selected = activeNotes.filter((n) => selectedNoteIds.has(n.id));
+    if (selected.length === 0) return null;
+    const firstVel = selected[0].velocity ?? 95;
+    const allSame = selected.every((n) => (n.velocity ?? 95) === firstVel);
+    if (allSame) return firstVel;
+    const avg = Math.round(selected.reduce((acc, n) => acc + (n.velocity ?? 95), 0) / selected.length);
+    return avg;
+  }, [activeNotes, selectedNoteIds]);
+
+  // Adjust velocity of all selected notes by delta (e.g. +5 or -5)
+  const handleAdjustVelocity = useCallback(
+    (delta: number) => {
+      if (selectedNoteIds.size === 0) return;
+      const updated = activeNotes.map((note) => {
+        if (!selectedNoteIds.has(note.id)) return note;
+        const currentVel = note.velocity ?? 95;
+        const newVel = Math.max(1, Math.min(127, currentVel + delta));
+        return { ...note, velocity: newVel };
+      });
+      onUpdateNotes(activeTrack.id, updated, true);
+
+      // Audition preview with new velocity
+      const first = updated.find((n) => selectedNoteIds.has(n.id));
+      if (first) {
+        setDefaultVelocity(first.velocity);
+        onAuditionPitch(first.pitch, first.velocity);
+      }
+    },
+    [activeNotes, selectedNoteIds, activeTrack.id, onUpdateNotes, onAuditionPitch]
+  );
+
+  // Set exact velocity on all selected notes
+  const handleSetVelocity = useCallback(
+    (vel: number) => {
+      if (selectedNoteIds.size === 0) return;
+      const clamped = Math.max(1, Math.min(127, Math.round(vel)));
+      const updated = activeNotes.map((note) => {
+        if (!selectedNoteIds.has(note.id)) return note;
+        return { ...note, velocity: clamped };
+      });
+      setDefaultVelocity(clamped);
+      onUpdateNotes(activeTrack.id, updated, true);
+
+      const first = updated.find((n) => selectedNoteIds.has(n.id));
+      if (first) {
+        onAuditionPitch(first.pitch, clamped);
+      }
+    },
+    [activeNotes, selectedNoteIds, activeTrack.id, onUpdateNotes, onAuditionPitch]
+  );
+
   const handleDrumPadClick = useCallback(
     (pitch: number) => {
       onAuditionPitch(pitch);
@@ -526,10 +588,12 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
     ctx.fillStyle = '#141210';
     ctx.fillRect(0, 0, width, height);
 
+    const gridBottom = RULER_HEIGHT + visibleHeight;
+
     // 2. Pitch / Drum Rows
     for (let p = MIN_PITCH; p <= MAX_PITCH; p++) {
       const y = pitchToY(p);
-      if (y + keyHeight < RULER_HEIGHT || y > height) continue;
+      if (y + keyHeight < RULER_HEIGHT || y > gridBottom) continue;
 
       const isBlack = isBlackKey(p);
       const inScale = isPitchInScale(p, 0, scaleType);
@@ -617,7 +681,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
 
       ctx.beginPath();
       ctx.moveTo(x, RULER_HEIGHT);
-      ctx.lineTo(x, height);
+      ctx.lineTo(x, gridBottom);
       ctx.stroke();
     }
 
@@ -629,26 +693,30 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
         const x = tickToX(note.startTick);
         const y = pitchToY(note.pitch);
         const w = note.durationTicks * pixelsPerTick;
-        if (x + w < keyboardWidth || x > width || y + keyHeight < RULER_HEIGHT || y > height) return;
+        if (x + w < keyboardWidth || x > width || y + keyHeight < RULER_HEIGHT || y > gridBottom) return;
         ctx.fillRect(x, y + 2, Math.max(4, w), keyHeight - 4);
       });
     });
 
-    // 5. Active Track Notes (Amber Gold with Selection Highlighting)
+    // 5. Active Track Notes (Amber Gold with Selection Highlighting & Velocity Visuals)
     activeNotes.forEach((note) => {
       const x = tickToX(note.startTick);
       const y = pitchToY(note.pitch);
       const w = Math.max(6, note.durationTicks * pixelsPerTick);
-      if (x + w < keyboardWidth || x > width || y + keyHeight < RULER_HEIGHT || y > height) return;
+      if (x + w < keyboardWidth || x > width || y + keyHeight < RULER_HEIGHT || y > gridBottom) return;
 
       const isSelected = note.selected;
+      const vel = Math.max(1, Math.min(127, note.velocity ?? 95));
+      const velRatio = vel / 127;
+
       const gradient = ctx.createLinearGradient(x, y, x, y + keyHeight);
       if (isSelected) {
         gradient.addColorStop(0, '#fef08a');
         gradient.addColorStop(1, '#f59e0b');
       } else {
-        gradient.addColorStop(0, '#dfa86a');
-        gradient.addColorStop(1, '#c28543');
+        const topAlpha = 0.55 + velRatio * 0.45;
+        gradient.addColorStop(0, `rgba(223, 168, 106, ${topAlpha})`);
+        gradient.addColorStop(1, `rgba(194, 133, 67, ${topAlpha})`);
       }
 
       ctx.fillStyle = gradient;
@@ -656,11 +724,16 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
       ctx.roundRect(x, y + 1.5, w, keyHeight - 3, 3);
       ctx.fill();
 
+      // Velocity Level Indicator Bar at bottom of note
+      const velBarW = Math.max(2, (w - 4) * velRatio);
+      ctx.fillStyle = isSelected ? 'rgba(255, 255, 255, 0.75)' : 'rgba(245, 158, 11, 0.65)';
+      ctx.fillRect(x + 2, y + keyHeight - 3.5, velBarW, 1.5);
+
       // Sustain Pedal Visual Indicator
       if (note.sustain) {
         ctx.fillStyle = isSelected ? '#ffffff' : '#67e8f9';
         ctx.beginPath();
-        ctx.arc(x + 4, y + keyHeight - 4.5, 2, 0, Math.PI * 2);
+        ctx.arc(x + 4, y + keyHeight - 5.5, 2, 0, Math.PI * 2);
         ctx.fill();
       }
 
@@ -685,9 +758,91 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
           const drum = getBdoDrumInfo(note.pitch);
           if (drum) label = drum.code;
         }
-        ctx.fillText(label, x + 4, y + keyHeight / 2);
+        if (w > 56) {
+          label = `${label} (${vel})`;
+        }
+        ctx.fillText(label, x + 4, y + keyHeight / 2 - 1);
       }
     });
+
+    // 5.5 Velocity Lane (when enabled)
+    if (showVelocityLane) {
+      const laneTop = RULER_HEIGHT + visibleHeight;
+      const laneHeight = VELOCITY_LANE_HEIGHT;
+
+      // Lane Background
+      ctx.fillStyle = '#171412';
+      ctx.fillRect(keyboardWidth, laneTop, width - keyboardWidth, laneHeight);
+
+      // Top divider border
+      ctx.strokeStyle = '#383029';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(0, laneTop);
+      ctx.lineTo(width, laneTop);
+      ctx.stroke();
+
+      // Keyboard left corner for Velocity Lane
+      ctx.fillStyle = '#141210';
+      ctx.fillRect(0, laneTop, keyboardWidth, laneHeight);
+      ctx.strokeStyle = '#2d2722';
+      ctx.strokeRect(0, laneTop, keyboardWidth, laneHeight);
+
+      ctx.fillStyle = '#f59e0b';
+      ctx.font = 'bold 9px sans-serif';
+      ctx.textBaseline = 'top';
+      ctx.fillText('VELOCITY', 6, laneTop + 6);
+
+      ctx.fillStyle = '#78716c';
+      ctx.font = '8px "JetBrains Mono", monospace';
+      ctx.fillText('127 (ff)', 6, laneTop + 20);
+      ctx.fillText('95 (mf)', 6, laneTop + 36);
+      ctx.fillText('60 (p)', 6, laneTop + 50);
+      ctx.fillText('1 (min)', 6, laneTop + 64);
+
+      // Horizontal dashed guide lines at velocity levels (127, 95, 60)
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([2, 4]);
+      [127, 95, 60].forEach((v) => {
+        const lineY = laneTop + laneHeight - 6 - (v / 127) * (laneHeight - 18);
+        ctx.beginPath();
+        ctx.moveTo(keyboardWidth, lineY);
+        ctx.lineTo(width, lineY);
+        ctx.stroke();
+      });
+      ctx.setLineDash([]);
+
+      // Draw velocity stems for each note in active track
+      activeNotes.forEach((n) => {
+        const nx = tickToX(n.startTick) + 2;
+        if (nx < keyboardWidth || nx > width) return;
+
+        const vel = Math.max(1, Math.min(127, n.velocity ?? 95));
+        const barH = (vel / 127) * (laneHeight - 18);
+        const stemTop = laneTop + laneHeight - 6 - barH;
+        const stemBottom = laneTop + laneHeight - 6;
+
+        // Stem line
+        ctx.strokeStyle = n.selected ? '#fef08a' : '#d97706';
+        ctx.lineWidth = n.selected ? 2.5 : 1.5;
+        ctx.beginPath();
+        ctx.moveTo(nx, stemBottom);
+        ctx.lineTo(nx, stemTop);
+        ctx.stroke();
+
+        // Knob at top
+        ctx.fillStyle = n.selected ? '#ffffff' : '#f59e0b';
+        ctx.beginPath();
+        ctx.arc(nx, stemTop, n.selected ? 4 : 3, 0, Math.PI * 2);
+        ctx.fill();
+        if (n.selected) {
+          ctx.strokeStyle = '#d97706';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
+      });
+    }
 
     // 6. Marquee Selection Box
     if (
@@ -755,11 +910,11 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
 
     // 8. Left Vertical Keyboard Column (with BDO Drum Mapping Support!)
     ctx.fillStyle = '#191614';
-    ctx.fillRect(0, 0, keyboardWidth, height);
+    ctx.fillRect(0, 0, keyboardWidth, gridBottom);
 
     for (let p = MIN_PITCH; p <= MAX_PITCH; p++) {
       const y = pitchToY(p);
-      if (y + keyHeight < RULER_HEIGHT || y > height) continue;
+      if (y + keyHeight < RULER_HEIGHT || y > gridBottom) continue;
 
       const isBlack = isBlackKey(p);
       const isC = p % 12 === 0;
@@ -882,6 +1037,8 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
     tickToX,
     ticksPerMeasure,
     beatsPerMeasure,
+    showVelocityLane,
+    visibleHeight,
   ]);
 
   // Scrollbar Dragging and Clicking Handlers
@@ -1016,6 +1173,45 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
       return;
     }
 
+    // 2.5 Clicked inside Velocity Lane!
+    const laneTop = RULER_HEIGHT + visibleHeight;
+    if (showVelocityLane && y >= laneTop && y <= laneTop + VELOCITY_LANE_HEIGHT) {
+      if (x < keyboardWidth) return;
+      const clampedY = Math.max(laneTop + 4, Math.min(laneTop + VELOCITY_LANE_HEIGHT - 6, y));
+      const calculatedVel = Math.max(
+        1,
+        Math.min(
+          127,
+          Math.round(((laneTop + VELOCITY_LANE_HEIGHT - 6 - clampedY) / (VELOCITY_LANE_HEIGHT - 18)) * 127)
+        )
+      );
+
+      // Find note near this x (within 14px)
+      const nearbyNote = activeNotes.find((n) => {
+        const nX = tickToX(n.startTick);
+        return Math.abs(x - nX) <= 14;
+      });
+
+      if (nearbyNote) {
+        const updated = activeNotes.map((n) =>
+          n.id === nearbyNote.id ? { ...n, velocity: calculatedVel, selected: true } : n
+        );
+        onUpdateNotes(activeTrack.id, updated, true);
+        onAuditionPitch(nearbyNote.pitch, calculatedVel);
+        setDefaultVelocity(calculatedVel);
+      }
+
+      setDragAction({
+        type: 'velocityLane',
+        startX: x,
+        startY: y,
+        startTick: xToTick(x),
+        startPitch: 0,
+        targetNoteId: nearbyNote?.id,
+      });
+      return;
+    }
+
     const clickedTick = xToTick(x);
     const clickedPitch = yToPitch(y);
 
@@ -1057,7 +1253,9 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
       }
 
       onUpdateNotes(activeTrack.id, newActiveNotes, false);
-      onAuditionPitch(clickedNote.pitch);
+      const noteVel = clickedNote.velocity ?? 95;
+      setDefaultVelocity(noteVel);
+      onAuditionPitch(clickedNote.pitch, noteVel);
 
       // Snapshot initial state of all currently selected notes for proportional resize/move
       const selectedMap = new Map<string, Note>();
@@ -1131,7 +1329,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
           pitch: finalPitch,
           startTick: snappedTick,
           durationTicks: defaultDuration,
-          velocity: 95,
+          velocity: defaultVelocity,
           selected: true,
           sustain: hasTrackSustain,
         };
@@ -1140,7 +1338,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
           ...activeNotes.map((n) => ({ ...n, selected: false })),
           newNote,
         ];
-        onAuditionPitch(finalPitch);
+        onAuditionPitch(finalPitch, defaultVelocity);
         onUpdateNotes(activeTrack.id, updated);
 
         const map = new Map<string, Note>();
@@ -1220,6 +1418,43 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
         } else {
           e.currentTarget.style.cursor = 'default';
         }
+      }
+      return;
+    }
+
+    if (dragAction.type === 'velocityLane') {
+      const laneTop = RULER_HEIGHT + visibleHeight;
+      const laneBottom = laneTop + VELOCITY_LANE_HEIGHT;
+      const clampedY = Math.max(laneTop + 10, Math.min(laneBottom - 8, y));
+      const normalizedRatio = 1 - (clampedY - (laneTop + 10)) / (VELOCITY_LANE_HEIGHT - 18);
+      const calculatedVel = Math.max(1, Math.min(127, Math.round(normalizedRatio * 127)));
+
+      const noteToUpdate =
+        (dragAction.targetNoteId && activeNotes.find((n) => n.id === dragAction.targetNoteId)) ||
+        activeNotes.find((n) => {
+          const noteX = tickToX(n.startTick);
+          return Math.abs(noteX - x) < 20;
+        });
+
+      if (noteToUpdate) {
+        const isSelected = noteToUpdate.selected;
+        let updated: Note[];
+        if (isSelected && selectedNoteIds.size > 1) {
+          const diff = calculatedVel - (noteToUpdate.velocity ?? 95);
+          updated = activeNotes.map((n) => {
+            if (n.selected) {
+              const cur = n.velocity ?? 95;
+              return { ...n, velocity: Math.max(1, Math.min(127, cur + diff)) };
+            }
+            return n;
+          });
+        } else {
+          updated = activeNotes.map((n) =>
+            n.id === noteToUpdate.id ? { ...n, velocity: calculatedVel } : n
+          );
+        }
+        onUpdateNotes(activeTrack.id, updated, false);
+        setDefaultVelocity(calculatedVel);
       }
       return;
     }
@@ -1311,7 +1546,11 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
       } catch {
         // ignore
       }
-    } else if (dragAction?.type === 'resize' || dragAction?.type === 'move') {
+    } else if (
+      dragAction?.type === 'resize' ||
+      dragAction?.type === 'move' ||
+      dragAction?.type === 'velocityLane'
+    ) {
       // Commit once upon gesture completion
       onUpdateNotes(activeTrack.id, activeNotes, true);
     }
@@ -1323,6 +1562,12 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
     if (e.ctrlKey || e.metaKey) {
       const zoomDelta = e.deltaY < 0 ? 0.1 : -0.1;
       onZoomChange?.(zoomDelta);
+      return;
+    }
+
+    if (e.altKey) {
+      const delta = e.deltaY < 0 ? 5 : -5;
+      handleAdjustVelocity(delta);
       return;
     }
 
@@ -1471,6 +1716,69 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
               <span>{isSelectionSustained ? 'Pedal Ativo' : 'Pedal'}</span>
             </button>
 
+            {/* Intensidade (Velocity) Controls */}
+            <div className="flex items-center gap-1 pl-2 pr-1 border-l border-[#3e342b]">
+              <span className="text-[11px] text-amber-400 font-bold flex items-center gap-1 mr-0.5">
+                <Volume2 className="w-3.5 h-3.5 text-amber-400" />
+                <span className="hidden sm:inline">Vel:</span>
+              </span>
+              <button
+                onClick={() => handleAdjustVelocity(-5)}
+                className="w-6 h-6 rounded bg-stone-900 hover:bg-stone-800 border border-[#3e342b] hover:border-amber-500 text-stone-200 font-bold text-xs flex items-center justify-center transition-colors shadow-sm"
+                title="Diminuir intensidade (-5) de todas as notas selecionadas"
+              >
+                -
+              </button>
+              <input
+                type="number"
+                min={1}
+                max={127}
+                value={selectionVelocity ?? ''}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value, 10);
+                  if (!isNaN(val)) {
+                    handleSetVelocity(val);
+                  }
+                }}
+                className="w-11 h-6 bg-stone-900 border border-[#3e342b] focus:border-amber-400 rounded text-center text-xs text-amber-300 font-bold focus:outline-none"
+                title="Intensidade / Velocity (1 a 127) de todas as notas selecionadas"
+              />
+              <button
+                onClick={() => handleAdjustVelocity(5)}
+                className="w-6 h-6 rounded bg-stone-900 hover:bg-stone-800 border border-[#3e342b] hover:border-amber-500 text-stone-200 font-bold text-xs flex items-center justify-center transition-colors shadow-sm"
+                title="Aumentar intensidade (+5) de todas as notas selecionadas"
+              >
+                +
+              </button>
+
+              {/* Dynamic Presets: p, mp, mf, f, ff */}
+              <div className="flex items-center gap-0.5 ml-1">
+                {[
+                  { label: 'p', vel: 55, title: 'Piano (Suave, 55)' },
+                  { label: 'mp', vel: 75, title: 'Mezzo-piano (Médio-baixo, 75)' },
+                  { label: 'mf', vel: 95, title: 'Mezzo-forte (Padrão, 95)' },
+                  { label: 'f', vel: 112, title: 'Forte (112)' },
+                  { label: 'ff', vel: 127, title: 'Fortíssimo (Máximo, 127)' },
+                ].map((preset) => {
+                  const isCurrent = selectionVelocity === preset.vel;
+                  return (
+                    <button
+                      key={preset.label}
+                      onClick={() => handleSetVelocity(preset.vel)}
+                      className={`px-1.5 h-6 rounded text-[10px] font-serif font-bold italic transition-colors ${
+                        isCurrent
+                          ? 'bg-amber-500 text-stone-950 shadow-sm font-black'
+                          : 'bg-stone-900 hover:bg-stone-800 border border-[#3e342b] text-stone-300 hover:text-amber-300'
+                      }`}
+                      title={preset.title}
+                    >
+                      {preset.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             {/* Duplicate */}
             <button
               onClick={handleDuplicateSelection}
@@ -1501,6 +1809,24 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
         </div>
       )}
 
+      {/* Velocity Lane Toggle Button */}
+      <button
+        onClick={() => setShowVelocityLane((prev) => !prev)}
+        className={`absolute bottom-4 right-6 z-40 px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all shadow-xl backdrop-blur-md border ${
+          showVelocityLane
+            ? 'bg-amber-500 text-stone-950 border-amber-400 font-bold shadow-amber-500/20'
+            : 'bg-[#1c1917]/90 hover:bg-[#25201c] border-[#3e342b] text-stone-300 hover:text-stone-100'
+        }`}
+        title={
+          showVelocityLane
+            ? 'Ocultar Pista de Intensidade (Velocity Lane)'
+            : 'Mostrar Pista de Intensidade (Velocity Lane) para editar volume das notas'
+        }
+      >
+        <Sliders className="w-3.5 h-3.5" />
+        <span>Intensidade</span>
+      </button>
+
       {/* Horizontal Scrollbar */}
       <div
         className="absolute bottom-0 h-3 bg-[#181513]/90 border-t border-[#2d2722] z-30 flex items-center select-none cursor-pointer"
@@ -1527,7 +1853,10 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
       {/* Vertical Scrollbar */}
       <div
         className="absolute right-0 w-3 bg-[#181513]/90 border-l border-[#2d2722] z-30 flex justify-center select-none cursor-pointer"
-        style={{ top: `${RULER_HEIGHT}px`, bottom: `${HORIZONTAL_SCROLLBAR_HEIGHT}px` }}
+        style={{
+          top: `${RULER_HEIGHT}px`,
+          bottom: `${HORIZONTAL_SCROLLBAR_HEIGHT + VELOCITY_LANE_HEIGHT}px`,
+        }}
         onClick={handleVerticalScrollbarTrackClick}
       >
         <div
