@@ -44,36 +44,10 @@ function stepToPitch(step: string, octave: number, alter: number = 0): number {
   return Math.max(12, Math.min(119, Math.round(pitch)));
 }
 
+import { detectBdoInstrument } from '../utils/instrumentDetection.ts';
+
 function detectInstrument(name: string): InstrumentId {
-  const lower = name.toLowerCase();
-  if (lower.includes('guitar') || lower.includes('violão') || lower.includes('violao')) {
-    return 'guitar';
-  }
-  if (lower.includes('bass') || lower.includes('baixo')) {
-    return 'bass';
-  }
-  if (lower.includes('harp') || lower.includes('harpa')) {
-    return 'harp';
-  }
-  if (lower.includes('trumpet') || lower.includes('trompete')) {
-    return 'trumpet';
-  }
-  if (lower.includes('flute') || lower.includes('flauta')) {
-    return 'flute';
-  }
-  if (lower.includes('violin') || lower.includes('violino')) {
-    return 'violin';
-  }
-  if (lower.includes('cello') || lower.includes('violoncelo')) {
-    return 'cello';
-  }
-  if (lower.includes('drum') || lower.includes('percuss') || lower.includes('bateria')) {
-    return 'percussion';
-  }
-  if (lower.includes('synth') || lower.includes('marni')) {
-    return 'marnisynth';
-  }
-  return 'grand-piano';
+  return detectBdoInstrument({ name });
 }
 
 /**

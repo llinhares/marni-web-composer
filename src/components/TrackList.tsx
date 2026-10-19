@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import type { Track, InstrumentId } from '../types/music.ts';
 import { BDO_INSTRUMENTS } from '../types/music.ts';
+import { AddInstrumentModal } from './AddInstrumentModal.tsx';
 
 interface TrackListProps {
   tracks: Track[];
@@ -52,6 +53,7 @@ export const TrackList: React.FC<TrackListProps> = ({
 }) => {
   const [menuOpenTrackId, setMenuOpenTrackId] = useState<string | null>(null);
   const [isImportMenuOpen, setIsImportMenuOpen] = useState(false);
+  const [changingTrackId, setChangingTrackId] = useState<string | null>(null);
 
   return (
     <aside
@@ -151,15 +153,24 @@ export const TrackList: React.FC<TrackListProps> = ({
                 {/* Dropdown Menu Options */}
                 {menuOpenTrackId === track.id && (
                   <div
-                    className="absolute right-2 top-10 z-30 w-36 rounded-lg bg-stone-900 border border-[#3e342b] shadow-xl py-1 text-xs text-stone-300"
+                    className="absolute right-2 top-10 z-30 w-44 rounded-lg bg-stone-900 border border-[#3e342b] shadow-xl py-1 text-xs text-stone-300"
                     onClick={(e) => e.stopPropagation()}
                   >
+                    <button
+                      onClick={() => {
+                        setChangingTrackId(track.id);
+                        setMenuOpenTrackId(null);
+                      }}
+                      className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-stone-850 text-left"
+                    >
+                      <Music className="w-3 h-3 text-amber-400" /> Trocar Instrumento...
+                    </button>
                     <button
                       onClick={() => {
                         onDuplicateTrack(track.id);
                         setMenuOpenTrackId(null);
                       }}
-                      className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-stone-800 text-left"
+                      className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-stone-850 text-left"
                     >
                       <Copy className="w-3 h-3 text-amber-400" /> Duplicar
                     </button>
@@ -169,13 +180,57 @@ export const TrackList: React.FC<TrackListProps> = ({
                           onDeleteTrack(track.id);
                           setMenuOpenTrackId(null);
                         }}
-                        className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-stone-800 text-rose-400 text-left"
+                        className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-stone-850 text-rose-400 text-left"
                       >
                         <Trash2 className="w-3 h-3" /> Excluir Faixa
                       </button>
                     )}
                   </div>
                 )}
+
+                {/* Quick Instrument Selector Dropdown */}
+                <div className="mb-2" onClick={(e) => e.stopPropagation()}>
+                  <select
+                    value={track.instrumentId}
+                    onChange={(e) => {
+                      const newInstId = e.target.value as InstrumentId;
+                      const newInst = BDO_INSTRUMENTS.find((i) => i.id === newInstId);
+                      const oldInst = BDO_INSTRUMENTS.find((i) => i.id === track.instrumentId);
+
+                      let newName = track.name;
+                      if (oldInst) {
+                        const oldBase = oldInst.name;
+                        if (track.name === oldBase) {
+                          newName = newInst?.name || 'Instrumento';
+                        } else if (track.name.startsWith(`${oldBase} `)) {
+                          const suffix = track.name.slice(oldBase.length);
+                          newName = `${newInst?.name || 'Instrumento'}${suffix}`;
+                        }
+                      }
+
+                      onUpdateTrack(track.id, {
+                        instrumentId: newInstId,
+                        name: newName,
+                        color: newInst?.color || track.color,
+                        volume: newInst?.defaultVolume !== undefined ? newInst.defaultVolume : track.volume,
+                        sustainPedal: newInstId === 'grand-piano' ? true : (newInstId === 'percussion' ? false : track.sustainPedal),
+                      });
+                    }}
+                    className="w-full bg-[#12100e] hover:bg-[#1a1714] border border-[#2d2722] hover:border-amber-600/70 rounded-md px-2 py-1 text-[11px] text-amber-300 font-semibold focus:outline-none focus:border-amber-500 cursor-pointer transition-colors truncate shadow-inner"
+                    title="Clique para trocar o tipo de instrumento desta faixa"
+                    aria-label={`Trocar instrumento da faixa ${track.name}`}
+                  >
+                    {BDO_INSTRUMENTS.map((instOption) => (
+                      <option
+                        key={instOption.id}
+                        value={instOption.id}
+                        className="bg-[#1c1917] text-stone-200"
+                      >
+                        {instOption.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
                 {/* AUX Send Toggle Button */}
                 <div className="flex items-center justify-between mb-2">
@@ -353,6 +408,46 @@ export const TrackList: React.FC<TrackListProps> = ({
           </a>
         </div>
       </div>
+
+      {/* Modal to change instrument via full catalog */}
+      {changingTrackId && (() => {
+        const targetTrack = tracks.find((t) => t.id === changingTrackId);
+        return (
+          <AddInstrumentModal
+            isOpen={Boolean(changingTrackId)}
+            onClose={() => setChangingTrackId(null)}
+            title="Trocar Instrumento"
+            subtitle={`Escolha o novo timbre para a faixa "${targetTrack?.name || 'Faixa'}"`}
+            initialInstrumentId={targetTrack?.instrumentId}
+            onSelectInstrument={(newInstId) => {
+              if (targetTrack) {
+                const newInst = BDO_INSTRUMENTS.find((i) => i.id === newInstId);
+                const oldInst = BDO_INSTRUMENTS.find((i) => i.id === targetTrack.instrumentId);
+
+                let newName = targetTrack.name;
+                if (oldInst) {
+                  const oldBase = oldInst.name;
+                  if (targetTrack.name === oldBase) {
+                    newName = newInst?.name || 'Instrumento';
+                  } else if (targetTrack.name.startsWith(`${oldBase} `)) {
+                    const suffix = targetTrack.name.slice(oldBase.length);
+                    newName = `${newInst?.name || 'Instrumento'}${suffix}`;
+                  }
+                }
+
+                onUpdateTrack(targetTrack.id, {
+                  instrumentId: newInstId,
+                  name: newName,
+                  color: newInst?.color || targetTrack.color,
+                  volume: newInst?.defaultVolume !== undefined ? newInst.defaultVolume : targetTrack.volume,
+                  sustainPedal: newInstId === 'grand-piano' ? true : (newInstId === 'percussion' ? false : targetTrack.sustainPedal),
+                });
+              }
+              setChangingTrackId(null);
+            }}
+          />
+        );
+      })()}
     </aside>
   );
 };

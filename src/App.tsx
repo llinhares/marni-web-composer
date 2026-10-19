@@ -25,6 +25,7 @@ import { isBlackKey } from './utils/musicMath.ts';
 import { isMusicXmlContent, parseMusicXml } from './musicxml/musicXmlDecoder.ts';
 import { isBdoBinaryContent, parseBdoBinaryFile } from './bdo/bdoDecoder.ts';
 import { mergeImportedTracks, type ImportMode } from './utils/trackImport.ts';
+import { detectBdoInstrument } from './utils/instrumentDetection.ts';
 import { Header } from './components/Header.tsx';
 import { TrackList } from './components/TrackList.tsx';
 import { PianoRoll } from './components/PianoRoll.tsx';
@@ -696,7 +697,7 @@ export default function App() {
         file.name.toLowerCase().endsWith('.midi');
 
       if (isMidi) {
-        const decoded = parseStandardMidiFile(buffer);
+        const decoded = parseStandardMidiFile(buffer, file.name);
         if (decoded.tracks.length > 0) {
           applyImportedData({
             importedTracks: decoded.tracks,
@@ -769,9 +770,6 @@ export default function App() {
           const importedTracks: Track[] = [];
           trackElements.forEach((tEl, idx) => {
             const name = tEl.getAttribute('name') || `Faixa ${idx + 1}`;
-            const instrumentId =
-              (tEl.getAttribute('instrumentId') as InstrumentId) || 'grand-piano';
-            const inst = BDO_INSTRUMENTS.find((i) => i.id === instrumentId);
 
             const noteElements = tEl.querySelectorAll('Note');
             const notes: Note[] = [];
@@ -786,12 +784,19 @@ export default function App() {
               });
             });
 
+            const rawInstAttr = tEl.getAttribute('instrumentId');
+            const instrumentId =
+              rawInstAttr && BDO_INSTRUMENTS.some((i) => i.id === rawInstAttr)
+                ? (rawInstAttr as InstrumentId)
+                : detectBdoInstrument({ name, fileName: file.name, notes });
+            const inst = BDO_INSTRUMENTS.find((i) => i.id === instrumentId);
+
             importedTracks.push({
               id: `track-imp-${idx}`,
               name,
               instrumentId,
               color: inst?.color || '#d4a373',
-              volume: 75,
+              volume: inst?.defaultVolume || 75,
               pan: 0,
               isMuted: false,
               isSolo: false,

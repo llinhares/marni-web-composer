@@ -6,6 +6,9 @@ interface AddInstrumentModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSelectInstrument: (instrumentId: InstrumentId) => void;
+  title?: string;
+  subtitle?: string;
+  initialInstrumentId?: InstrumentId;
 }
 
 const ICON_MAP: Record<string, React.ReactNode> = {
@@ -25,8 +28,17 @@ export const AddInstrumentModal: React.FC<AddInstrumentModalProps> = ({
   isOpen,
   onClose,
   onSelectInstrument,
+  title = 'Adicionar Instrumento',
+  subtitle = 'Instrumentos autênticos do Black Desert Online para composição Marni',
+  initialInstrumentId = 'grand-piano',
 }) => {
-  const [selectedId, setSelectedId] = useState<InstrumentId>('grand-piano');
+  const [selectedId, setSelectedId] = useState<InstrumentId>(initialInstrumentId);
+
+  React.useEffect(() => {
+    if (isOpen) {
+      setSelectedId(initialInstrumentId);
+    }
+  }, [isOpen, initialInstrumentId]);
 
   if (!isOpen) return null;
 
@@ -51,9 +63,9 @@ export const AddInstrumentModal: React.FC<AddInstrumentModalProps> = ({
         <div className="flex items-center justify-between border-b border-[#2d2722] pb-4 mb-4">
           <div>
             <h2 id="add-inst-title" className="text-xl font-bold tracking-wide text-amber-400 font-serif">
-              Adicionar Instrumento
+              {title}
             </h2>
-            <p className="text-xs text-stone-400 mt-0.5">Instrumentos autênticos do Black Desert Online para composição Marni</p>
+            <p className="text-xs text-stone-400 mt-0.5">{subtitle}</p>
           </div>
           <button
             onClick={onClose}

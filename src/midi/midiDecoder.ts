@@ -5,6 +5,7 @@
 
 import type { Track, Note, InstrumentId, TimeSignature } from '../types/music.ts';
 import { BDO_INSTRUMENTS } from '../types/music.ts';
+import { detectBdoInstrument } from '../utils/instrumentDetection.ts';
 
 export interface DecodedMidiSong {
   title: string;
@@ -13,7 +14,7 @@ export interface DecodedMidiSong {
   tracks: Track[];
 }
 
-export function parseStandardMidiFile(data: Uint8Array | ArrayBuffer): DecodedMidiSong {
+export function parseStandardMidiFile(data: Uint8Array | ArrayBuffer, fileName?: string): DecodedMidiSong {
   const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
   let offset = 0;
 
@@ -228,16 +229,16 @@ export function parseStandardMidiFile(data: Uint8Array | ArrayBuffer): DecodedMi
         const metaData = bytes.subarray(offset, offset + metaLen);
         offset += metaLen;
 
-        if (metaType === 0x01 || metaType === 0x03) {
-          // Text / Track Name
+        if (metaType === 0x01 || metaType === 0x03 || metaType === 0x04) {
+          // Text (0x01), Track Name (0x03), or Instrument Name (0x04)
           let name = '';
           for (let i = 0; i < metaData.length; i++) {
             name += String.fromCharCode(metaData[i]);
           }
-          if (t === 0 && !songTitle) {
+          if (t === 0 && !songTitle && metaType !== 0x04) {
             songTitle = name;
           }
-          if (!trackName) {
+          if (!trackName || metaType === 0x03 || metaType === 0x04) {
             trackName = name;
           }
         } else if (metaType === 0x51 && metaLen === 3) {
@@ -295,22 +296,6 @@ export function parseStandardMidiFile(data: Uint8Array | ArrayBuffer): DecodedMi
     });
   }
 
-  // 3. Convert Raw Tracks to Marni DAW Tracks
-  function mapGmToBdoInstrument(channel: number, program?: number): InstrumentId {
-    if (channel === 9) return 'percussion';
-    if (program === undefined) return 'grand-piano';
-    if (program >= 112 && program <= 127) return 'percussion';
-    if (program === 24 || program === 25) return 'guitar';
-    if (program >= 32 && program <= 39) return 'bass';
-    if (program === 42) return 'cello';
-    if (program === 46) return 'harp';
-    if (program >= 40 && program <= 51) return 'violin';
-    if (program >= 56 && program <= 63) return 'trumpet';
-    if (program >= 71 && program <= 79) return 'flute';
-    if (program >= 80 && program <= 103) return 'marnisynth';
-    return 'grand-piano';
-  }
-
   const resultTracks: Track[] = [];
 
   parsedTracks.forEach((pTrack, idx) => {
@@ -326,13 +311,19 @@ export function parseStandardMidiFile(data: Uint8Array | ArrayBuffer): DecodedMi
 
       channelNotes.forEach((notes, ch) => {
         const prog = pTrack.channelPrograms.get(ch);
-        const instId = mapGmToBdoInstrument(ch, prog);
+        const instId = detectBdoInstrument({
+          name: pTrack.name,
+          fileName,
+          program: prog,
+          channel: ch,
+          notes,
+        });
         const inst = BDO_INSTRUMENTS.find((i) => i.id === instId);
         const trackId = `track-mid-${idx}-ch${ch}-${Date.now()}`;
 
         resultTracks.push({
           id: trackId,
-          name: ch === 9 ? 'Percussão' : `${inst?.name || 'Instrumento'} (Ch ${ch + 1})`,
+          name: ch === 9 ? 'Percussão' : (pTrack.name.trim() || `${inst?.name || 'Instrumento'} (Ch ${ch + 1})`),
           instrumentId: instId,
           color: inst?.color || '#d4a373',
           volume: inst?.defaultVolume || 75,
@@ -355,10 +346,16 @@ export function parseStandardMidiFile(data: Uint8Array | ArrayBuffer): DecodedMi
       return;
     }
 
-    // Format 1 handling (Multi-track)
+    // Format 1 handling (Multi-track) or single-channel Format 0
     const isDrums = pTrack.channelsUsed.has(9);
     const firstProg = Array.from(pTrack.channelPrograms.values())[0];
-    const instId = mapGmToBdoInstrument(isDrums ? 9 : 0, firstProg);
+    const instId = detectBdoInstrument({
+      name: pTrack.name,
+      fileName,
+      program: firstProg,
+      channel: isDrums ? 9 : 0,
+      notes: pTrack.notes,
+    });
     const inst = BDO_INSTRUMENTS.find((i) => i.id === instId);
 
     const trackId = `track-mid-${idx}-${Date.now()}`;

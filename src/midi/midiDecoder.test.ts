@@ -109,3 +109,29 @@ test('parseStandardMidiFile handles Format 0 single track multi-channel split', 
   assert.equal(melTrack.notes[0].pitch, 60);
   assert.equal(dTrack.notes[0].pitch, 48);
 });
+
+test('parseStandardMidiFile automatically detects instrument from fileName', () => {
+  const singleTrack: Track[] = [
+    {
+      id: 't-unknown',
+      name: 'Track 1',
+      instrumentId: 'grand-piano',
+      color: '#d4a373',
+      volume: 80,
+      pan: 0,
+      isMuted: false,
+      isSolo: false,
+      auxSend: true,
+      notes: [
+        { id: 'n1', trackId: 't-unknown', pitch: 36, startTick: 0, durationTicks: 480, velocity: 90 },
+      ],
+    },
+  ];
+
+  const midiBytes = createStandardMidiFile(singleTrack, 120, 480);
+  const decodedBass = parseStandardMidiFile(midiBytes, '02_Acoustic_Bass.mid');
+  assert.equal(decodedBass.tracks[0].instrumentId, 'bass');
+
+  const decodedFlute = parseStandardMidiFile(midiBytes, 'Flute_Melody.mid');
+  assert.equal(decodedFlute.tracks[0].instrumentId, 'flute');
+});
