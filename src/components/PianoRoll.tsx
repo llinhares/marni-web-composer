@@ -1631,41 +1631,41 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
 
       {/* Floating Multi-Selection & Proportional Transform Toolbar */}
       {selectedNoteIds.size > 0 && (
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 p-1.5 px-3 rounded-xl bg-[#1c1917]/95 border border-amber-500/70 shadow-2xl backdrop-blur-md z-40 text-xs">
-          <div className="flex items-center gap-2 pr-2 border-r border-[#3e342b]">
-            <span className="px-2 py-0.5 rounded-md bg-amber-500 text-stone-950 font-bold text-xs shadow-sm">
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 p-1.5 px-3 rounded-xl bg-[#1c1917]/95 border border-amber-500/70 shadow-2xl backdrop-blur-md z-40 text-xs whitespace-nowrap max-w-[calc(100vw-2rem)] overflow-x-auto">
+          <div className="flex items-center gap-2 pr-2 border-r border-[#3e342b] shrink-0 whitespace-nowrap">
+            <span className="px-2 py-0.5 rounded-md bg-amber-500 text-stone-950 font-bold text-xs shadow-sm whitespace-nowrap">
               {selectedNoteIds.size} notas
             </span>
-            <span className="text-[11px] text-stone-300 font-medium hidden md:inline">
+            <span className="text-[11px] text-stone-300 font-medium hidden md:inline whitespace-nowrap">
               Selecionadas
             </span>
           </div>
 
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 shrink-0 whitespace-nowrap">
             {/* Proportional 2x Expand */}
             <button
               onClick={() => handleScaleSelection(2)}
-              className="px-2.5 py-1 rounded-lg bg-stone-900 hover:bg-stone-800 border border-[#3e342b] hover:border-amber-500 text-stone-200 text-xs font-semibold flex items-center gap-1 transition-colors shadow-sm"
+              className="px-2.5 py-1 rounded-lg bg-stone-900 hover:bg-stone-800 border border-[#3e342b] hover:border-amber-500 text-stone-200 text-xs font-semibold flex items-center gap-1 transition-colors shadow-sm whitespace-nowrap shrink-0"
               title="Expandir todas as notas e compassos selecionados proporcionalmente em 2x"
             >
-              <Maximize2 className="w-3.5 h-3.5 text-amber-400" />
-              <span>2x Expandir</span>
+              <Maximize2 className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span className="whitespace-nowrap">2x Expandir</span>
             </button>
 
             {/* Proportional 0.5x Shrink */}
             <button
               onClick={() => handleScaleSelection(0.5)}
-              className="px-2.5 py-1 rounded-lg bg-stone-900 hover:bg-stone-800 border border-[#3e342b] hover:border-amber-500 text-stone-200 text-xs font-semibold flex items-center gap-1 transition-colors shadow-sm"
+              className="px-2.5 py-1 rounded-lg bg-stone-900 hover:bg-stone-800 border border-[#3e342b] hover:border-amber-500 text-stone-200 text-xs font-semibold flex items-center gap-1 transition-colors shadow-sm whitespace-nowrap shrink-0"
               title="Encolher todas as notas e compassos selecionados proporcionalmente em 0.5x"
             >
-              <Minimize2 className="w-3.5 h-3.5 text-amber-400" />
-              <span>0.5x Encolher</span>
+              <Minimize2 className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span className="whitespace-nowrap">0.5x Encolher</span>
             </button>
 
             {/* Transpose Up +1 */}
             <button
               onClick={() => handleTransposeSelection(1)}
-              className="p-1.5 rounded-lg bg-stone-900 hover:bg-stone-800 border border-[#3e342b] hover:border-amber-500 text-stone-300 transition-colors"
+              className="p-1.5 rounded-lg bg-stone-900 hover:bg-stone-800 border border-[#3e342b] hover:border-amber-500 text-stone-300 transition-colors shrink-0"
               title="Transpor +1 Semitom (Subir)"
             >
               <ArrowUp className="w-3.5 h-3.5 text-amber-400" />
@@ -1674,7 +1674,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
             {/* Transpose Down -1 */}
             <button
               onClick={() => handleTransposeSelection(-1)}
-              className="p-1.5 rounded-lg bg-stone-900 hover:bg-stone-800 border border-[#3e342b] hover:border-amber-500 text-stone-300 transition-colors"
+              className="p-1.5 rounded-lg bg-stone-900 hover:bg-stone-800 border border-[#3e342b] hover:border-amber-500 text-stone-300 transition-colors shrink-0"
               title="Transpor -1 Semitom (Descer)"
             >
               <ArrowDown className="w-3.5 h-3.5 text-amber-400" />
@@ -1683,7 +1683,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
             {/* Sustenido (#) Toggle for Selected Notes */}
             <button
               onClick={handleToggleSelectionSharp}
-              className={`px-2.5 py-1 rounded-lg border text-xs font-semibold flex items-center gap-1 transition-all shadow-sm ${
+              className={`px-2.5 py-1 rounded-lg border text-xs font-semibold flex items-center gap-1 transition-all shadow-sm whitespace-nowrap shrink-0 ${
                 isSelectionSharp
                   ? 'bg-amber-500 text-stone-950 border-amber-400 font-bold shadow-[0_0_8px_rgba(245,158,11,0.4)]'
                   : 'bg-stone-900 hover:bg-stone-800 border-[#3e342b] hover:border-amber-500 text-stone-200'
@@ -1694,14 +1694,14 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
                   : 'Ligar Sustenido para a(s) nota(s) selecionada(s) (+1 semitom para sustenido)'
               }
             >
-              <span className="font-mono font-bold text-sm leading-none">#</span>
-              <span>{isSelectionSharp ? 'Sustenido (#)' : 'Natural'}</span>
+              <span className="font-mono font-bold text-sm leading-none shrink-0">#</span>
+              <span className="whitespace-nowrap">{isSelectionSharp ? 'Sustenido (#)' : 'Natural'}</span>
             </button>
 
             {/* Pedal de Sustain Toggle for Selected Notes */}
             <button
               onClick={handleToggleSelectionSustain}
-              className={`px-2.5 py-1 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition-all shadow-sm ${
+              className={`px-2.5 py-1 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition-all shadow-sm whitespace-nowrap shrink-0 ${
                 isSelectionSustained
                   ? 'bg-amber-400 text-stone-950 border-amber-300 font-bold shadow-[0_0_10px_rgba(251,191,36,0.5)]'
                   : 'bg-stone-900 hover:bg-stone-800 border-[#3e342b] hover:border-amber-500 text-stone-200'
@@ -1712,19 +1712,19 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
                   : 'Ativar Pedal de Sustain nas notas selecionadas (ressonância do BDO, gravado como byte 11)'
               }
             >
-              <span className="text-xs font-serif font-bold italic tracking-tighter">Ped</span>
-              <span>{isSelectionSustained ? 'Pedal Ativo' : 'Pedal'}</span>
+              <span className="text-xs font-serif font-bold italic tracking-tighter shrink-0">Ped</span>
+              <span className="whitespace-nowrap">{isSelectionSustained ? 'Pedal Ativo' : 'Pedal'}</span>
             </button>
 
             {/* Intensidade (Velocity) Controls */}
-            <div className="flex items-center gap-1 pl-2 pr-1 border-l border-[#3e342b]">
-              <span className="text-[11px] text-amber-400 font-bold flex items-center gap-1 mr-0.5">
-                <Volume2 className="w-3.5 h-3.5 text-amber-400" />
-                <span className="hidden sm:inline">Vel:</span>
+            <div className="flex items-center gap-1 pl-2 pr-1 border-l border-[#3e342b] whitespace-nowrap shrink-0">
+              <span className="text-[11px] text-amber-400 font-bold flex items-center gap-1 mr-0.5 whitespace-nowrap shrink-0">
+                <Volume2 className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <span className="hidden sm:inline whitespace-nowrap">Vel:</span>
               </span>
               <button
                 onClick={() => handleAdjustVelocity(-5)}
-                className="w-6 h-6 rounded bg-stone-900 hover:bg-stone-800 border border-[#3e342b] hover:border-amber-500 text-stone-200 font-bold text-xs flex items-center justify-center transition-colors shadow-sm"
+                className="w-6 h-6 rounded bg-stone-900 hover:bg-stone-800 border border-[#3e342b] hover:border-amber-500 text-stone-200 font-bold text-xs flex items-center justify-center transition-colors shadow-sm shrink-0"
                 title="Diminuir intensidade (-5) de todas as notas selecionadas"
               >
                 -
@@ -1740,19 +1740,19 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
                     handleSetVelocity(val);
                   }
                 }}
-                className="w-11 h-6 bg-stone-900 border border-[#3e342b] focus:border-amber-400 rounded text-center text-xs text-amber-300 font-bold focus:outline-none"
+                className="w-11 h-6 bg-stone-900 border border-[#3e342b] focus:border-amber-400 rounded text-center text-xs text-amber-300 font-bold focus:outline-none shrink-0"
                 title="Intensidade / Velocity (1 a 127) de todas as notas selecionadas"
               />
               <button
                 onClick={() => handleAdjustVelocity(5)}
-                className="w-6 h-6 rounded bg-stone-900 hover:bg-stone-800 border border-[#3e342b] hover:border-amber-500 text-stone-200 font-bold text-xs flex items-center justify-center transition-colors shadow-sm"
+                className="w-6 h-6 rounded bg-stone-900 hover:bg-stone-800 border border-[#3e342b] hover:border-amber-500 text-stone-200 font-bold text-xs flex items-center justify-center transition-colors shadow-sm shrink-0"
                 title="Aumentar intensidade (+5) de todas as notas selecionadas"
               >
                 +
               </button>
 
               {/* Dynamic Presets: p, mp, mf, f, ff */}
-              <div className="flex items-center gap-0.5 ml-1">
+              <div className="flex items-center gap-0.5 ml-1 shrink-0 whitespace-nowrap">
                 {[
                   { label: 'p', vel: 55, title: 'Piano (Suave, 55)' },
                   { label: 'mp', vel: 75, title: 'Mezzo-piano (Médio-baixo, 75)' },
@@ -1765,7 +1765,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
                     <button
                       key={preset.label}
                       onClick={() => handleSetVelocity(preset.vel)}
-                      className={`px-1.5 h-6 rounded text-[10px] font-serif font-bold italic transition-colors ${
+                      className={`px-1.5 h-6 rounded text-[10px] font-serif font-bold italic transition-colors shrink-0 whitespace-nowrap ${
                         isCurrent
                           ? 'bg-amber-500 text-stone-950 shadow-sm font-black'
                           : 'bg-stone-900 hover:bg-stone-800 border border-[#3e342b] text-stone-300 hover:text-amber-300'
@@ -1782,7 +1782,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
             {/* Duplicate */}
             <button
               onClick={handleDuplicateSelection}
-              className="p-1.5 rounded-lg bg-stone-900 hover:bg-stone-800 border border-[#3e342b] hover:border-amber-500 text-stone-300 transition-colors"
+              className="p-1.5 rounded-lg bg-stone-900 hover:bg-stone-800 border border-[#3e342b] hover:border-amber-500 text-stone-300 transition-colors shrink-0"
               title="Duplicar Notas Selecionadas (Ctrl+D)"
             >
               <Copy className="w-3.5 h-3.5 text-amber-400" />
@@ -1791,7 +1791,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
             {/* Delete */}
             <button
               onClick={handleDeleteSelection}
-              className="p-1.5 rounded-lg bg-stone-900 hover:bg-red-950/60 border border-[#3e342b] hover:border-red-500 text-stone-300 hover:text-red-400 transition-colors"
+              className="p-1.5 rounded-lg bg-stone-900 hover:bg-red-950/60 border border-[#3e342b] hover:border-red-500 text-stone-300 hover:text-red-400 transition-colors shrink-0"
               title="Apagar Notas Selecionadas (Del)"
             >
               <Trash2 className="w-3.5 h-3.5" />
@@ -1800,7 +1800,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
             {/* Deselect All */}
             <button
               onClick={handleDeselectAll}
-              className="p-1.5 rounded-lg bg-stone-900 hover:bg-stone-800 border border-[#3e342b] text-stone-400 hover:text-stone-200 transition-colors ml-1"
+              className="p-1.5 rounded-lg bg-stone-900 hover:bg-stone-800 border border-[#3e342b] text-stone-400 hover:text-stone-200 transition-colors ml-1 shrink-0"
               title="Desmarcar Todas (Esc)"
             >
               <CloseIcon className="w-3.5 h-3.5" />

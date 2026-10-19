@@ -27,7 +27,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
   const [audioMenuOpen, setAudioMenuOpen] = useState(false);
 
   return (
-    <footer className="h-14 bg-[#141210] border-t border-[#2d2722] px-3 sm:px-4 flex items-center justify-between gap-3 shrink-0 z-20 text-xs text-stone-300">
+    <footer className="relative h-14 bg-[#141210] border-t border-[#2d2722] px-3 sm:px-4 flex items-center justify-between gap-3 shrink-0 z-40 text-xs text-stone-300">
       {/* Left / Song Title & Author Input */}
       <div className="flex-1 max-w-lg flex items-center gap-2">
         <input
@@ -109,34 +109,45 @@ export const BottomBar: React.FC<BottomBarProps> = ({
           </button>
 
           {audioMenuOpen && (
-            <div className="absolute right-0 bottom-full mb-1 w-48 rounded-xl bg-stone-900 border border-[#3e342b] shadow-2xl py-1 text-xs text-stone-300 z-30">
-              <button
-                onClick={() => {
-                  setAudioMenuOpen(false);
-                  onExportWav(24);
-                }}
-                className="w-full px-3 py-2 flex items-center gap-2 hover:bg-stone-800 text-left"
-              >
-                <Disc className="w-3.5 h-3.5 text-amber-400" />
-                <div>
-                  <div className="font-semibold text-stone-200">Studio Master (24-bit)</div>
-                  <div className="text-[10px] text-stone-400">48kHz • Qualidade máxima</div>
-                </div>
-              </button>
-              <button
-                onClick={() => {
-                  setAudioMenuOpen(false);
-                  onExportWav(16);
-                }}
-                className="w-full px-3 py-2 flex items-center gap-2 hover:bg-stone-800 text-left"
-              >
-                <Disc className="w-3.5 h-3.5 text-stone-400" />
-                <div>
-                  <div className="font-semibold text-stone-200">Padrão CD (16-bit)</div>
-                  <div className="text-[10px] text-stone-400">44.1kHz • Compatibilidade</div>
-                </div>
-              </button>
-            </div>
+            <>
+              {/* Backdrop overlay for click-outside */}
+              <div
+                className="fixed inset-0 z-40"
+                onClick={() => setAudioMenuOpen(false)}
+              />
+              <div className="absolute right-0 bottom-full mb-2 w-52 rounded-xl bg-stone-900 border border-[#3e342b] shadow-2xl py-1.5 text-xs text-stone-300 z-50 animate-in fade-in zoom-in-95 duration-100">
+                <button
+                  onClick={() => {
+                    setAudioMenuOpen(false);
+                    onExportWav(24);
+                  }}
+                  className="w-full px-3 py-2 flex items-center gap-2.5 hover:bg-stone-850 text-left transition-colors cursor-pointer group"
+                >
+                  <Disc className="w-4 h-4 text-amber-400 group-hover:scale-110 transition-transform shrink-0" />
+                  <div>
+                    <div className="font-semibold text-stone-200 group-hover:text-amber-300 transition-colors">
+                      Studio Master (24-bit)
+                    </div>
+                    <div className="text-[10px] text-stone-400">48kHz • Qualidade máxima</div>
+                  </div>
+                </button>
+                <button
+                  onClick={() => {
+                    setAudioMenuOpen(false);
+                    onExportWav(16);
+                  }}
+                  className="w-full px-3 py-2 flex items-center gap-2.5 hover:bg-stone-850 text-left transition-colors cursor-pointer group"
+                >
+                  <Disc className="w-4 h-4 text-stone-400 group-hover:text-amber-400 group-hover:scale-110 transition-transform shrink-0" />
+                  <div>
+                    <div className="font-semibold text-stone-200 group-hover:text-amber-300 transition-colors">
+                      Padrão CD (16-bit)
+                    </div>
+                    <div className="text-[10px] text-stone-400">44.1kHz • Compatibilidade</div>
+                  </div>
+                </button>
+              </div>
+            </>
           )}
         </div>
 

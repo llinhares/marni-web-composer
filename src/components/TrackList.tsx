@@ -333,16 +333,21 @@ export const TrackList: React.FC<TrackListProps> = ({
           <span>Restaurar Tudo</span>
         </button>
 
-        {/* Creator Footer matching image 1 */}
-        <div className="pt-2 text-center text-[10px] text-stone-400">
-          <span>by </span>
-          <span className="font-semibold text-stone-300">Lucas Linhares</span>
-          <span> (Tchepper) </span>
+        {/* Creator Footer & Version */}
+        <div className="pt-2 text-center text-[10px] text-stone-400 flex items-center justify-center gap-1.5 flex-wrap">
+          <span className="px-1.5 py-0.5 rounded bg-amber-950/70 border border-amber-800/60 text-amber-300 font-mono text-[9px] font-bold">
+            v2.0.0
+          </span>
+          <span className="text-stone-600">•</span>
+          <span>
+            by <span className="font-semibold text-stone-300">Lucas Linhares</span> (Tchepper)
+          </span>
+          <span className="text-stone-600">•</span>
           <a
             href="https://github.com/llinhares/marni-web-composer"
             target="_blank"
             rel="noreferrer"
-            className="text-amber-500/80 hover:text-amber-400 underline underline-offset-2 ml-1"
+            className="text-amber-500/80 hover:text-amber-400 underline underline-offset-2"
           >
             GitHub
           </a>
