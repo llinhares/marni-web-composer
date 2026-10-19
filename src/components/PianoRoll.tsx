@@ -1266,22 +1266,36 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
       });
 
       if (isRightEdge) {
+        try {
+          e.currentTarget.setPointerCapture(e.pointerId);
+        } catch {
+          // ignore
+        }
         setDragAction({
           type: 'resize',
           targetNoteId: clickedNote.id,
           initialNotes: selectedMap,
           startX: x,
           startY: y,
+          startScrollX: scrollX,
+          startScrollY: scrollY,
           startTick: clickedNote.startTick,
           startPitch: clickedNote.pitch,
         });
       } else {
+        try {
+          e.currentTarget.setPointerCapture(e.pointerId);
+        } catch {
+          // ignore
+        }
         setDragAction({
           type: 'move',
           targetNoteId: clickedNote.id,
           initialNotes: selectedMap,
           startX: x,
           startY: y,
+          startScrollX: scrollX,
+          startScrollY: scrollY,
           startTick: clickedNote.startTick,
           startPitch: clickedNote.pitch,
         });
@@ -1296,6 +1310,11 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
             activeNotes.map((n) => ({ ...n, selected: false })),
             false
           );
+        }
+        try {
+          e.currentTarget.setPointerCapture(e.pointerId);
+        } catch {
+          // ignore
         }
         setDragAction({
           type: 'selectBox',
@@ -1344,12 +1363,19 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
         const map = new Map<string, Note>();
         map.set(newNote.id, { ...newNote });
 
+        try {
+          e.currentTarget.setPointerCapture(e.pointerId);
+        } catch {
+          // ignore
+        }
         setDragAction({
           type: 'resize',
           targetNoteId: newNote.id,
           initialNotes: map,
           startX: x,
           startY: y,
+          startScrollX: scrollX,
+          startScrollY: scrollY,
           startTick: newNote.startTick,
           startPitch: newNote.pitch,
         });
@@ -1519,17 +1545,28 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
 
       onUpdateNotes(activeTrack.id, updated, false);
     } else if (dragAction.type === 'move' && dragAction.initialNotes) {
-      const dxTicks = snapTickToGrid(xToTick(x) - xToTick(dragAction.startX), gridSnap);
+      const allInitials = Array.from(dragAction.initialNotes.values());
+      const minInitialTick = Math.min(...allInitials.map((n) => n.startTick));
+      const minInitialPitch = Math.min(...allInitials.map((n) => n.pitch));
+      const maxInitialPitch = Math.max(...allInitials.map((n) => n.pitch));
+
+      const rawDxTicks =
+        ((x + scrollX) - (dragAction.startX + (dragAction.startScrollX ?? scrollX))) /
+        pixelsPerTick;
+      const dxTicks = snapTickToGrid(rawDxTicks, gridSnap);
+      const clampedDxTicks = Math.max(-minInitialTick, dxTicks);
+
       const dyPitch = Math.round(yToPitch(y) - dragAction.startPitch);
+      const clampedDyPitch = Math.max(
+        MIN_PITCH - minInitialPitch,
+        Math.min(MAX_PITCH - maxInitialPitch, dyPitch)
+      );
 
       const updated = activeNotes.map((note) => {
         const initial = dragAction.initialNotes?.get(note.id);
         if (initial) {
-          const newStartTick = Math.max(
-            0,
-            snapTickToGrid(initial.startTick + dxTicks, gridSnap)
-          );
-          const newPitch = Math.max(MIN_PITCH, Math.min(MAX_PITCH, initial.pitch + dyPitch));
+          const newStartTick = Math.max(0, initial.startTick + clampedDxTicks);
+          const newPitch = initial.pitch + clampedDyPitch;
           return { ...note, startTick: newStartTick, pitch: newPitch };
         }
         return note;
@@ -1540,13 +1577,12 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
   };
 
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (dragAction?.type === 'pan') {
-      try {
-        e.currentTarget.releasePointerCapture(e.pointerId);
-      } catch {
-        // ignore
-      }
-    } else if (
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+    if (
       dragAction?.type === 'resize' ||
       dragAction?.type === 'move' ||
       dragAction?.type === 'velocityLane'

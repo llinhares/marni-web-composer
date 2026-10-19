@@ -92,8 +92,8 @@ export function getGridSnapTicks(snap: GridSnap, ticksPerBeat = TICKS_PER_BEAT):
 
 export function snapTickToGrid(tick: number, snap: GridSnap, ticksPerBeat = TICKS_PER_BEAT): number {
   const snapTicks = getGridSnapTicks(snap, ticksPerBeat);
-  if (snapTicks <= 1) return Math.max(0, Math.round(tick));
-  return Math.max(0, Math.round(tick / snapTicks) * snapTicks);
+  const rounded = snapTicks <= 1 ? Math.round(tick) : Math.round(tick / snapTicks) * snapTicks;
+  return rounded === 0 ? 0 : rounded;
 }
 
 export function ticksToMeasureBeat(ticks: number, timeSig: TimeSignature, ticksPerBeat = TICKS_PER_BEAT): {

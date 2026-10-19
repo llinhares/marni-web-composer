@@ -57,6 +57,14 @@ test('snapTickToGrid snaps to specified subdivisions', () => {
   assert.equal(snapTickToGrid(200, '1/4'), 0);
   // 1/16 note = 120 ticks
   assert.equal(snapTickToGrid(125, '1/16'), 120);
+
+  // Negative delta snapping (moving backwards in time)
+  assert.equal(snapTickToGrid(-470, '1/4'), -480);
+  assert.equal(snapTickToGrid(-200, '1/4'), 0);
+  assert.equal(snapTickToGrid(-125, '1/16'), -120);
+  assert.equal(snapTickToGrid(-70, '1/16'), -120);
+  assert.equal(snapTickToGrid(-50, '1/16'), 0);
+  assert.equal(snapTickToGrid(-15, 'off'), -15);
 });
 
 test('scale checking correctly classifies notes in major scale', () => {
