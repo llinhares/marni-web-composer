@@ -10,6 +10,9 @@ import {
   Copy,
   Music,
   Sparkles,
+  ListPlus,
+  FileUp,
+  ChevronUp,
 } from 'lucide-react';
 import type { Track, InstrumentId } from '../types/music.ts';
 import { BDO_INSTRUMENTS } from '../types/music.ts';
@@ -23,7 +26,7 @@ interface TrackListProps {
   onDuplicateTrack: (trackId: string) => void;
   onUpdateTrack: (trackId: string, updates: Partial<Track>) => void;
   onResetAll: () => void;
-  onImportClick: () => void;
+  onImportClick: (mode: 'replace' | 'append') => void;
   onOpenAiSheetScanner?: () => void;
   totalNotes: number;
   maxNotes: number;
@@ -48,6 +51,7 @@ export const TrackList: React.FC<TrackListProps> = ({
   isOpenOnMobile = false,
 }) => {
   const [menuOpenTrackId, setMenuOpenTrackId] = useState<string | null>(null);
+  const [isImportMenuOpen, setIsImportMenuOpen] = useState(false);
 
   return (
     <aside
@@ -233,15 +237,79 @@ export const TrackList: React.FC<TrackListProps> = ({
             <span>Adicionar</span>
           </button>
 
-          {/* Import Button */}
-          <button
-            onClick={onImportClick}
-            className="p-2 rounded-lg bg-stone-900 hover:bg-stone-850 border border-[#2d2722] hover:border-amber-700/60 text-stone-400 hover:text-stone-200 transition-colors"
-            title="Importar Arquivo MIDI ou BDO"
-            aria-label="Importar"
-          >
-            <Upload className="w-4 h-4" />
-          </button>
+          {/* Import Dropdown Menu */}
+          <div className="relative">
+            <button
+              onClick={() => setIsImportMenuOpen((prev) => !prev)}
+              className={`p-2 rounded-lg border transition-colors flex items-center gap-1 ${
+                isImportMenuOpen
+                  ? 'bg-stone-800 border-amber-600/70 text-amber-300'
+                  : 'bg-stone-900 hover:bg-stone-850 border-[#2d2722] hover:border-amber-700/60 text-stone-400 hover:text-stone-200'
+              }`}
+              title="Opções de Importação"
+              aria-label="Opções de Importação"
+            >
+              <Upload className="w-4 h-4" />
+              <ChevronUp
+                className={`w-3 h-3 text-stone-400 transition-transform duration-200 ${
+                  isImportMenuOpen ? 'rotate-180 text-amber-400' : ''
+                }`}
+              />
+            </button>
+
+            {isImportMenuOpen && (
+              <>
+                {/* Backdrop overlay for click-outside */}
+                <div
+                  className="fixed inset-0 z-40"
+                  onClick={() => setIsImportMenuOpen(false)}
+                />
+
+                {/* Dropdown Menu */}
+                <div className="absolute left-0 bottom-full mb-2 w-64 rounded-xl bg-[#1c1917] border border-[#3e342b] shadow-2xl p-1.5 text-xs text-stone-300 z-50 animate-in fade-in zoom-in-95 duration-100">
+                  <div className="px-2.5 py-1.5 text-[10px] uppercase font-bold text-stone-500 tracking-wider border-b border-[#2d2722] mb-1">
+                    Opções de Importação
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      setIsImportMenuOpen(false);
+                      onImportClick('append');
+                    }}
+                    className="w-full p-2 rounded-lg flex items-start gap-2.5 hover:bg-stone-850 text-left transition-colors group cursor-pointer"
+                  >
+                    <ListPlus className="w-4 h-4 text-amber-400 mt-0.5 shrink-0 group-hover:scale-110 transition-transform" />
+                    <div>
+                      <div className="font-semibold text-stone-200 group-hover:text-amber-300 transition-colors">
+                        Importar como Faixa
+                      </div>
+                      <div className="text-[10px] text-stone-400 leading-tight mt-0.5">
+                        Adiciona ao projeto atual como nova faixa (sem apagar as existentes)
+                      </div>
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setIsImportMenuOpen(false);
+                      onImportClick('replace');
+                    }}
+                    className="w-full p-2 rounded-lg flex items-start gap-2.5 hover:bg-stone-850 text-left transition-colors group cursor-pointer"
+                  >
+                    <FileUp className="w-4 h-4 text-stone-400 group-hover:text-amber-400 mt-0.5 shrink-0 group-hover:scale-110 transition-transform" />
+                    <div>
+                      <div className="font-semibold text-stone-200 group-hover:text-amber-300 transition-colors">
+                        Importar e Sobrescrever
+                      </div>
+                      <div className="text-[10px] text-stone-400 leading-tight mt-0.5">
+                        Substitui completamente o projeto aberto pelo novo arquivo
+                      </div>
+                    </div>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
 
           {/* AI Sheet Music Scanner Button */}
           {onOpenAiSheetScanner && (

@@ -24,6 +24,7 @@ import { exportWavFile } from './export/audioExporter.ts';
 import { isBlackKey } from './utils/musicMath.ts';
 import { isMusicXmlContent, parseMusicXml } from './musicxml/musicXmlDecoder.ts';
 import { isBdoBinaryContent, parseBdoBinaryFile } from './bdo/bdoDecoder.ts';
+import { mergeImportedTracks, type ImportMode } from './utils/trackImport.ts';
 import { Header } from './components/Header.tsx';
 import { TrackList } from './components/TrackList.tsx';
 import { PianoRoll } from './components/PianoRoll.tsx';
@@ -603,6 +604,78 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isPlaying, handlePlay, handlePause, handleStop, handleUndo, handleRedo]);
 
+  // Import Mode ('replace' | 'append')
+  const importModeRef = useRef<ImportMode>('replace');
+
+  const handleTriggerImport = useCallback((mode: ImportMode) => {
+    importModeRef.current = mode;
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+      fileInputRef.current.click();
+    }
+  }, []);
+
+  const applyImportedData = useCallback(
+    (data: {
+      importedTracks: Track[];
+      bpm?: number;
+      title?: string;
+      timeSignature?: TimeSignature;
+      bdoMeta?: {
+        author: string;
+        composer: string;
+        arranger: string;
+        ownerId?: number | null;
+        effectorSettings?: EffectorSettings;
+      };
+    }) => {
+      const { importedTracks, bpm: impBpm, title: impTitle, timeSignature: impTimeSig, bdoMeta } = data;
+      if (!importedTracks || importedTracks.length === 0) return;
+
+      handleStop();
+
+      const currentTracks = tracksRef.current;
+      const mode = importModeRef.current;
+      const result = mergeImportedTracks(currentTracks, importedTracks, mode);
+
+      if (result.isAppended) {
+        setTracks(result.tracks);
+        setActiveTrackId(result.activeTrackId);
+        pushHistory(result.tracks, result.activeTrackId);
+      } else {
+        // Replace mode (or empty canvas)
+        if (bdoMeta) {
+          setIsBdoProtected(true);
+          setOriginalBdoAuthor(bdoMeta.author);
+          setOriginalBdoComposer(bdoMeta.composer);
+          setOriginalBdoArranger(bdoMeta.arranger);
+          setOriginalBdoOwnerId(bdoMeta.ownerId ?? null);
+          setAuthor(bdoMeta.author);
+          if (typeof bdoMeta.ownerId === 'number') {
+            setBdoOwnerId(bdoMeta.ownerId);
+          }
+          if (bdoMeta.effectorSettings) {
+            setEffectorSettings(bdoMeta.effectorSettings);
+          }
+        } else {
+          setIsBdoProtected(false);
+          setOriginalBdoAuthor('');
+          setOriginalBdoComposer('');
+          setOriginalBdoArranger('');
+          setOriginalBdoOwnerId(null);
+        }
+
+        setTracks(result.tracks);
+        setActiveTrackId(result.activeTrackId);
+        if (impBpm) setBpm(impBpm);
+        if (impTitle) setTitle(impTitle);
+        if (impTimeSig) setTimeSignature(impTimeSig);
+        pushHistory(result.tracks, result.activeTrackId);
+      }
+    },
+    [handleStop, pushHistory]
+  );
+
   // Handle File Import (MIDI / XML / JSON)
   const handleFileImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -625,18 +698,12 @@ export default function App() {
       if (isMidi) {
         const decoded = parseStandardMidiFile(buffer);
         if (decoded.tracks.length > 0) {
-          handleStop();
-          setIsBdoProtected(false);
-          setOriginalBdoAuthor('');
-          setOriginalBdoComposer('');
-          setOriginalBdoArranger('');
-          setOriginalBdoOwnerId(null);
-          setTracks(decoded.tracks);
-          setActiveTrackId(decoded.tracks[0].id);
-          if (decoded.bpm) setBpm(decoded.bpm);
-          if (decoded.title) setTitle(decoded.title);
-          if (decoded.timeSignature) setTimeSignature(decoded.timeSignature);
-          pushHistory(decoded.tracks, decoded.tracks[0].id);
+          applyImportedData({
+            importedTracks: decoded.tracks,
+            bpm: decoded.bpm,
+            title: decoded.title,
+            timeSignature: decoded.timeSignature,
+          });
         } else {
           alert('O arquivo MIDI foi lido, mas nenhuma nota ou faixa com notas foi encontrada.');
         }
@@ -648,30 +715,22 @@ export default function App() {
         const fileTitle = file.name.replace(/\.[^/.]+$/, '').trim();
         const decoded = parseBdoBinaryFile(bytes, fileTitle);
         if (decoded.tracks.length > 0) {
-          handleStop();
-          setTracks(decoded.tracks);
-          setActiveTrackId(decoded.tracks[0].id);
-          if (decoded.bpm) setBpm(decoded.bpm);
-          if (fileTitle) {
-            setTitle(fileTitle);
-          } else if (decoded.title) {
-            setTitle(decoded.title);
-          }
           const detectedComposer = decoded.composer.trim();
           const detectedArranger = decoded.arranger.trim();
           const detectedAuthor = (decoded.author || detectedComposer || detectedArranger || 'Desconhecido').trim();
-          setIsBdoProtected(true);
-          setOriginalBdoAuthor(detectedAuthor);
-          setOriginalBdoComposer(detectedComposer);
-          setOriginalBdoArranger(detectedArranger);
-          setOriginalBdoOwnerId(decoded.ownerId);
-          setAuthor(detectedAuthor);
-          setBdoOwnerId(decoded.ownerId);
-          if (decoded.timeSignature) setTimeSignature(decoded.timeSignature);
-          if (decoded.effectorSettings) {
-            setEffectorSettings(decoded.effectorSettings);
-          }
-          pushHistory(decoded.tracks, decoded.tracks[0].id);
+          applyImportedData({
+            importedTracks: decoded.tracks,
+            bpm: decoded.bpm,
+            title: fileTitle || decoded.title,
+            timeSignature: decoded.timeSignature,
+            bdoMeta: {
+              author: detectedAuthor,
+              composer: detectedComposer,
+              arranger: detectedArranger,
+              ownerId: decoded.ownerId,
+              effectorSettings: decoded.effectorSettings,
+            },
+          });
         } else {
           alert('O arquivo de partitura do Black Desert foi lido, mas nenhuma nota foi encontrada.');
         }
@@ -684,18 +743,12 @@ export default function App() {
       if (isMusicXmlContent(text) || file.name.toLowerCase().endsWith('.musicxml')) {
         const decoded = parseMusicXml(text);
         if (decoded.tracks.length > 0) {
-          handleStop();
-          setIsBdoProtected(false);
-          setOriginalBdoAuthor('');
-          setOriginalBdoComposer('');
-          setOriginalBdoArranger('');
-          setOriginalBdoOwnerId(null);
-          setTracks(decoded.tracks);
-          setActiveTrackId(decoded.tracks[0].id);
-          if (decoded.bpm) setBpm(decoded.bpm);
-          if (decoded.title) setTitle(decoded.title);
-          if (decoded.timeSignature) setTimeSignature(decoded.timeSignature);
-          pushHistory(decoded.tracks, decoded.tracks[0].id);
+          applyImportedData({
+            importedTracks: decoded.tracks,
+            bpm: decoded.bpm,
+            title: decoded.title,
+            timeSignature: decoded.timeSignature,
+          });
         } else {
           alert('O arquivo MusicXML foi lido, mas nenhuma nota foi encontrada.');
         }
@@ -708,8 +761,8 @@ export default function App() {
         const xmlDoc = parser.parseFromString(text, 'text/xml');
         const titleEl = xmlDoc.querySelector('Title');
         const bpmEl = xmlDoc.querySelector('BPM');
-        if (titleEl?.textContent) setTitle(titleEl.textContent);
-        if (bpmEl?.textContent) setBpm(Number(bpmEl.textContent) || 120);
+        const xmlTitle = titleEl?.textContent || undefined;
+        const xmlBpm = bpmEl?.textContent ? Number(bpmEl.textContent) : undefined;
 
         const trackElements = xmlDoc.querySelectorAll('Track');
         if (trackElements.length > 0) {
@@ -747,32 +800,27 @@ export default function App() {
             });
           });
 
-          handleStop();
-          setIsBdoProtected(false);
-          setOriginalBdoAuthor('');
-          setOriginalBdoComposer('');
-          setOriginalBdoArranger('');
-          setOriginalBdoOwnerId(null);
-          setTracks(importedTracks);
-          setActiveTrackId(importedTracks[0].id);
-          pushHistory(importedTracks, importedTracks[0].id);
+          applyImportedData({
+            importedTracks,
+            bpm: xmlBpm,
+            title: xmlTitle,
+          });
         }
-      } else if (text.trim().startsWith('{')) {
+        return;
+      }
+
+      if (text.trim().startsWith('{')) {
         // Parse JSON project
         const parsed = JSON.parse(text);
         if (Array.isArray(parsed.tracks) && parsed.tracks.length > 0) {
-          handleStop();
-          setIsBdoProtected(false);
-          setOriginalBdoAuthor('');
-          setOriginalBdoComposer('');
-          setOriginalBdoArranger('');
-          setOriginalBdoOwnerId(null);
-          setTracks(parsed.tracks);
-          setActiveTrackId(parsed.tracks[0].id);
-          if (parsed.bpm) setBpm(parsed.bpm);
-          if (parsed.title) setTitle(parsed.title);
-          pushHistory(parsed.tracks, parsed.tracks[0].id);
+          applyImportedData({
+            importedTracks: parsed.tracks,
+            bpm: parsed.bpm,
+            title: parsed.title,
+            timeSignature: parsed.timeSignature,
+          });
         }
+        return;
       }
     } catch (err) {
       console.error('Falha ao importar partitura:', err);
@@ -931,7 +979,7 @@ export default function App() {
           onDuplicateTrack={handleDuplicateTrack}
           onUpdateTrack={handleUpdateTrack}
           onResetAll={handleResetAll}
-          onImportClick={() => fileInputRef.current?.click()}
+          onImportClick={handleTriggerImport}
           onOpenAiSheetScanner={() => setIsAiSheetScannerOpen(true)}
           totalNotes={totalNotes}
           maxNotes={maxNotesAllowed}
