@@ -8,6 +8,8 @@ export interface AudioToMidiOptions {
   minPitch?: number; // default 21 (A0)
   maxPitch?: number; // default 108 (C8)
   minDurationSec?: number; // default 0.08s
+  startTime?: number; // Crop start in seconds (trims intro)
+  endTime?: number; // Crop end in seconds (trims outro)
   onProgress?: (progress: number, stage: string) => void;
 }
 
@@ -25,7 +27,7 @@ export async function extractAudioBufferFromFile(file: File): Promise<AudioBuffe
   const AudioContextClass =
     window.AudioContext ||
     (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-  
+
   if (!AudioContextClass) {
     throw new Error('Navegador não suporta Web Audio API.');
   }
@@ -46,13 +48,20 @@ export async function extractAudioBufferFromFile(file: File): Promise<AudioBuffe
 /**
  * Estimate BPM using spectral flux onset novelty curve and autocorrelation.
  */
-export function estimateBpmFromAudioBuffer(audioBuffer: AudioBuffer): number {
+export function estimateBpmFromAudioBuffer(audioBuffer: AudioBuffer, startTime = 0, endTime?: number): number {
   const sampleRate = audioBuffer.sampleRate;
-  const channelData = audioBuffer.getChannelData(0);
+  const fullChannelData = audioBuffer.getChannelData(0);
+
+  const startSample = Math.max(0, Math.floor(startTime * sampleRate));
+  const endSample = endTime && endTime > 0
+    ? Math.min(fullChannelData.length, Math.floor(endTime * sampleRate))
+    : fullChannelData.length;
+
+  const channelData = fullChannelData.subarray(startSample, endSample);
   const hopSize = Math.floor(sampleRate / 100); // 10ms hop
   const numFrames = Math.floor(channelData.length / hopSize);
 
-  if (numFrames < 200) return 120; // Default if audio is too short
+  if (numFrames < 200) return 120; // Default if audio segment is too short
 
   // Energy envelope
   const envelope = new Float32Array(numFrames);
@@ -97,7 +106,8 @@ export function estimateBpmFromAudioBuffer(audioBuffer: AudioBuffer): number {
 
 /**
  * Pure client-side polyphonic audio-to-MIDI transcription using Goertzel spectral bins,
- * local peak-picking, onset surge detection, and harmonic suppression.
+ * frequency-dependent loudness weighting, adaptive noise floor, peak-picking, onset surge detection,
+ * and harmonic suppression.
  */
 export async function transcribeAudioBufferToNotes(
   audioBuffer: AudioBuffer,
@@ -108,22 +118,37 @@ export async function transcribeAudioBufferToNotes(
     minPitch = 21,
     maxPitch = 108,
     minDurationSec = 0.08,
+    startTime = 0,
+    endTime,
     onProgress,
   } = options;
 
-  const durationSeconds = audioBuffer.duration;
   const sampleRate = audioBuffer.sampleRate;
-  const channelData = audioBuffer.getChannelData(0);
+  const fullChannelData = audioBuffer.getChannelData(0);
+
+  // Subarray to support trimming intro / outro
+  const startSample = Math.max(0, Math.floor(startTime * sampleRate));
+  const endSample = endTime && endTime > 0
+    ? Math.min(fullChannelData.length, Math.floor(endTime * sampleRate))
+    : fullChannelData.length;
+
+  const channelData = fullChannelData.subarray(startSample, endSample);
+  const durationSeconds = channelData.length / sampleRate;
 
   onProgress?.(0.1, 'Estimando andamento (BPM)...');
-  const detectedBpm = options.bpm || estimateBpmFromAudioBuffer(audioBuffer);
+  const detectedBpm = options.bpm || estimateBpmFromAudioBuffer(audioBuffer, startTime, endTime);
 
   onProgress?.(0.2, 'Analisando frequências e transientes...');
 
-  // Pre-calculate target frequencies for piano pitches
+  // Pre-calculate target frequencies and frequency weighting for piano pitches
   const pitchFrequencies = new Map<number, number>();
+  const pitchWeights = new Map<number, number>();
   for (let p = minPitch; p <= maxPitch; p++) {
-    pitchFrequencies.set(p, pitchToFrequency(p));
+    const freq = pitchToFrequency(p);
+    pitchFrequencies.set(p, freq);
+    // Weight treble slightly relative to heavy bass to balance sensitivity
+    const weight = Math.min(2.2, Math.max(0.65, Math.pow(freq / 261.63, 0.28)));
+    pitchWeights.set(p, weight);
   }
 
   const fftSize = 4096;
@@ -140,8 +165,8 @@ export async function transcribeAudioBufferToNotes(
     window[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (fftSize - 1)));
   }
 
-  // Target energy threshold based on sensitivity
-  const baseThreshold = 0.02 * Math.pow(1 - sensitivity * 0.6, 2);
+  // Base threshold scaled by sensitivity
+  const baseThreshold = 0.016 * Math.pow(1 - sensitivity * 0.6, 2);
 
   interface ActiveNoteCandidate {
     pitch: number;
@@ -186,11 +211,11 @@ export async function transcribeAudioBufferToNotes(
       await new Promise((r) => setTimeout(r, 0));
     }
 
-    const startSample = frameIdx * hopSize;
+    const startPos = frameIdx * hopSize;
     const energies = new Map<number, number>();
     let totalFrameEnergy = 0;
 
-    // 1. Compute magnitude for each pitch
+    // 1. Compute magnitude for each pitch using Goertzel algorithm
     for (const bin of pitchBins) {
       let q0 = 0;
       let q1 = 0;
@@ -198,7 +223,7 @@ export async function transcribeAudioBufferToNotes(
       const coeff = 2 * bin.cosW;
 
       for (let i = 0; i < fftSize; i++) {
-        const x = channelData[startSample + i] * window[i];
+        const x = channelData[startPos + i] * window[i];
         q0 = x + coeff * q1 - q2;
         q2 = q1;
         q1 = q0;
@@ -206,27 +231,39 @@ export async function transcribeAudioBufferToNotes(
 
       const real = q1 - q2 * bin.cosW;
       const imag = q2 * bin.sinW;
-      const mag = Math.sqrt(real * real + imag * imag) / fftSize;
-      energies.set(bin.pitch, mag);
-      totalFrameEnergy += mag;
+      const rawMag = Math.sqrt(real * real + imag * imag) / fftSize;
+      const weight = pitchWeights.get(bin.pitch) || 1.0;
+      const weightedMag = rawMag * weight;
+
+      energies.set(bin.pitch, weightedMag);
+      totalFrameEnergy += weightedMag;
     }
 
     const avgFrameEnergy = totalFrameEnergy / pitchBins.length;
 
-    // 2. Harmonic suppression: attenuate octave (2P, +12) and 3rd harmonic (+19)
+    // 2. Multi-order Harmonic suppression: attenuate octave (2P, +12), fifth (3P, +19), double octave (4P, +24)
     for (let p = minPitch; p <= maxPitch; p++) {
       const fundamental = energies.get(p) || 0;
-      if (fundamental > baseThreshold * 1.5) {
-        const octavePitch = p + 12;
-        if (octavePitch <= maxPitch) {
-          const octaveEnergy = energies.get(octavePitch) || 0;
-          energies.set(octavePitch, Math.max(0, octaveEnergy - fundamental * 0.5));
+      if (fundamental > baseThreshold * 1.4) {
+        // Octave (2nd harmonic)
+        const p12 = p + 12;
+        if (p12 <= maxPitch) {
+          const e = energies.get(p12) || 0;
+          energies.set(p12, Math.max(0, e - fundamental * 0.52));
         }
 
-        const fifthPitch = p + 19;
-        if (fifthPitch <= maxPitch) {
-          const fifthEnergy = energies.get(fifthPitch) || 0;
-          energies.set(fifthPitch, Math.max(0, fifthEnergy - fundamental * 0.35));
+        // Octave + Fifth (3rd harmonic)
+        const p19 = p + 19;
+        if (p19 <= maxPitch) {
+          const e = energies.get(p19) || 0;
+          energies.set(p19, Math.max(0, e - fundamental * 0.35));
+        }
+
+        // Double Octave (4th harmonic)
+        const p24 = p + 24;
+        if (p24 <= maxPitch) {
+          const e = energies.get(p24) || 0;
+          energies.set(p24, Math.max(0, e - fundamental * 0.25));
         }
       }
     }
@@ -241,14 +278,14 @@ export async function transcribeAudioBufferToNotes(
       const leftEnergy = energies.get(p - 1) || 0;
       const rightEnergy = energies.get(p + 1) || 0;
 
-      // Must be above noise floor AND higher than adjacent pitches (local peak!)
+      // Must be above adaptive noise floor AND higher than adjacent pitches (local peak!)
       const isPeak = energy > leftEnergy * 1.15 && energy > rightEnergy * 1.15;
-      const isAboveNoise = energy > Math.max(baseThreshold, avgFrameEnergy * 1.4);
-      const isSurge = energy - prevEnergy > baseThreshold * 0.5;
+      const isAboveNoise = energy > Math.max(baseThreshold, avgFrameEnergy * 1.35);
+      const isSurge = energy - prevEnergy > baseThreshold * 0.45;
 
       if (isAboveNoise && (isPeak || activeNotes.has(p))) {
         if (!activeNotes.has(p)) {
-          // Trigger onset only if it's a peak or sudden energy surge
+          // Trigger onset only if it's a prominent peak or sudden energy surge
           if (isPeak || isSurge) {
             currentActivePitches.add(p);
             activeNotes.set(p, {
@@ -263,7 +300,7 @@ export async function transcribeAudioBufferToNotes(
           // Note continuing: check if not decayed below 35% of peak
           const candidate = activeNotes.get(p)!;
           const isDecayed = energy < candidate.peakEnergy * 0.35;
-          const isTooLong = (frameIdx - candidate.startFrame) * timePerFrame > 3.0; // Max 3s per piano note
+          const isTooLong = (frameIdx - candidate.startFrame) * timePerFrame > 3.2; // Max 3.2s per piano note
 
           if (!isDecayed && !isTooLong) {
             currentActivePitches.add(p);

@@ -14,9 +14,13 @@ import {
   Split,
   Eye,
   RefreshCw,
+  Scissors,
+  Pipette,
+  RotateCcw,
+  Palette,
 } from 'lucide-react';
 import type { Track, Note, InstrumentId, TimeSignature } from '../types/music.ts';
-import { BDO_INSTRUMENTS } from '../types/music.ts';
+import { TICKS_PER_BEAT, BDO_INSTRUMENTS } from '../types/music.ts';
 import {
   extractAudioBufferFromFile,
   transcribeAudioBufferToNotes,
@@ -26,9 +30,11 @@ import {
   scanVideoFrames,
   fuseAudioAndVisionNotes,
   detectBarsInImageData,
+  hexToRgb,
+  rgbToHex,
   VisualNoteEvent,
 } from '../utils/videoScanner.ts';
-import { pitchToNoteName } from '../utils/musicMath.ts';
+import { pitchToNoteName, formatTimecode } from '../utils/musicMath.ts';
 
 interface VideoAudioTranscriberModalProps {
   isOpen: boolean;
@@ -56,6 +62,17 @@ interface VideoAudioTranscriberModalProps {
   }) => void;
 }
 
+const COLOR_PRESETS = [
+  { name: 'Verde', hex: '#22c55e' },
+  { name: 'Azul Céu', hex: '#38bdf8' },
+  { name: 'Roxo', hex: '#a855f7' },
+  { name: 'Laranja', hex: '#f97316' },
+  { name: 'Vermelho', hex: '#ef4444' },
+  { name: 'Amarelo', hex: '#eab308' },
+  { name: 'Rosa', hex: '#ec4899' },
+  { name: 'Ciano', hex: '#06b6d4' },
+];
+
 export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProps> = ({
   isOpen,
   onClose,
@@ -77,15 +94,28 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
   const [autoApplyBpm, setAutoApplyBpm] = useState<boolean>(true);
   const [sensitivity, setSensitivity] = useState<number>(0.55);
 
+  // Timeline Cropping (Intro & Outro Trimmer)
+  const [cropStartTime, setCropStartTime] = useState<number>(0);
+  const [cropEndTime, setCropEndTime] = useState<number>(0);
+  const [isDraggingHandle, setIsDraggingHandle] = useState<'start' | 'end' | 'scrub' | null>(null);
+
+  // Color Selection & Hand Classification
+  const [colorMode, setColorMode] = useState<'two-colors' | 'single-color'>('two-colors');
+  const [hand1ColorHex, setHand1ColorHex] = useState<string>('#22c55e'); // Green default (Right hand)
+  const [hand2ColorHex, setHand2ColorHex] = useState<string>('#38bdf8'); // Sky blue default (Left hand)
+  const [splitPitch, setSplitPitch] = useState<number>(60); // Middle C default
+  const [eyedropperTarget, setEyedropperTarget] = useState<'hand1' | 'hand2' | null>(null);
+  const [hoveredColor, setHoveredColor] = useState<{ r: number; g: number; b: number; x: number; y: number } | null>(null);
+
   // Video Calibration
-  const [scanlineY, setScanlineY] = useState<number>(68); // 68% from top (comfortably above flames/smoke)
+  const [scanlineY, setScanlineY] = useState<number>(68); // 68% from top
   const [keyboardXStart, setKeyboardXStart] = useState<number>(0); // 0% from left
   const [keyboardXEnd, setKeyboardXEnd] = useState<number>(100); // 100% from left
   const [brightnessThreshold, setBrightnessThreshold] = useState<number>(45);
   const [minSaturation, setMinSaturation] = useState<number>(0.28);
   const [liveBars, setLiveBars] = useState<{ right: number; left: number }>({ right: 0, left: 0 });
 
-  // Playback state for video preview
+  // Playback state
   const [isVideoPlaying, setIsVideoPlaying] = useState<boolean>(false);
   const [videoCurrentTime, setVideoCurrentTime] = useState<number>(0);
   const [videoDuration, setVideoDuration] = useState<number>(0);
@@ -103,12 +133,13 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
     allNotes: Note[];
     detectedBpm: number;
     durationSec: number;
-    suppressedHarmonics: number;
+    matchedVisualCount: number;
   } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasOverlayRef = useRef<HTMLCanvasElement>(null);
+  const timelineTrackRef = useRef<HTMLDivElement>(null);
 
   // Reset or initialize on open
   useEffect(() => {
@@ -124,6 +155,11 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
       setTranscriptionResult(null);
       setIsProcessing(false);
       setProgress(0);
+      setCropStartTime(0);
+      setCropEndTime(0);
+      setVideoDuration(0);
+      setEyedropperTarget(null);
+      setHoveredColor(null);
     }
   }, [isOpen, activeTrackId]);
 
@@ -144,6 +180,118 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
     setFileUrl(url);
     setTranscriptionResult(null);
     setErrorMessage(null);
+    setCropStartTime(0);
+    setCropEndTime(0);
+
+    // If pure audio, read duration via temporary Audio instance
+    if (!isVid) {
+      const audio = new Audio(url);
+      audio.onloadedmetadata = () => {
+        if (audio.duration && !isNaN(audio.duration)) {
+          setVideoDuration(audio.duration);
+          setCropStartTime(0);
+          setCropEndTime(audio.duration);
+        }
+      };
+    }
+  };
+
+  // Sample a pixel from video accounting for letterboxing (object-contain)
+  const sampleVideoPixel = (canvasX: number, canvasY: number): { r: number; g: number; b: number } | null => {
+    const video = videoRef.current;
+    const canvas = canvasOverlayRef.current;
+    if (!video || !canvas || video.videoWidth === 0 || video.videoHeight === 0) return null;
+
+    const cWidth = canvas.clientWidth;
+    const cHeight = canvas.clientHeight;
+    const vAspect = video.videoWidth / video.videoHeight;
+    const cAspect = cWidth / cHeight;
+
+    let renderW = cWidth;
+    let renderH = cHeight;
+    let renderX = 0;
+    let renderY = 0;
+
+    if (cAspect > vAspect) {
+      renderW = cHeight * vAspect;
+      renderX = (cWidth - renderW) / 2;
+    } else {
+      renderH = cWidth / vAspect;
+      renderY = (cHeight - renderH) / 2;
+    }
+
+    if (canvasX < renderX || canvasX > renderX + renderW || canvasY < renderY || canvasY > renderY + renderH) {
+      return null;
+    }
+
+    const normX = (canvasX - renderX) / renderW;
+    const normY = (canvasY - renderY) / renderH;
+
+    const vX = Math.floor(normX * video.videoWidth);
+    const vY = Math.floor(normY * video.videoHeight);
+
+    const off = document.createElement('canvas');
+    off.width = 1;
+    off.height = 1;
+    const offCtx = off.getContext('2d', { willReadFrequently: true });
+    if (!offCtx) return null;
+
+    offCtx.drawImage(video, vX, vY, 1, 1, 0, 0, 1, 1);
+    const data = offCtx.getImageData(0, 0, 1, 1).data;
+    return { r: data[0], g: data[1], b: data[2] };
+  };
+
+  // Canvas Eyedropper Pointer handlers
+  const handleCanvasPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!eyedropperTarget) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const sampled = sampleVideoPixel(x, y);
+    if (sampled) {
+      setHoveredColor({ ...sampled, x, y });
+    } else {
+      setHoveredColor(null);
+    }
+  };
+
+  const handleCanvasPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!eyedropperTarget) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const sampled = sampleVideoPixel(x, y);
+    if (sampled) {
+      const hex = rgbToHex(sampled.r, sampled.g, sampled.b);
+      if (eyedropperTarget === 'hand1') {
+        setHand1ColorHex(hex);
+      } else {
+        setHand2ColorHex(hex);
+      }
+      setEyedropperTarget(null);
+      setHoveredColor(null);
+    }
+  };
+
+  // Native EyeDropper API fallback (if supported in Chromium)
+  const triggerNativeEyedropper = async (target: 'hand1' | 'hand2') => {
+    // @ts-expect-error window.EyeDropper is a modern Web API
+    if (typeof window !== 'undefined' && window.EyeDropper) {
+      try {
+        // @ts-expect-error window.EyeDropper
+        const eyeDropper = new window.EyeDropper();
+        const result = await eyeDropper.open();
+        if (result?.sRGBHex) {
+          if (target === 'hand1') setHand1ColorHex(result.sRGBHex);
+          else setHand2ColorHex(result.sRGBHex);
+          return;
+        }
+      } catch {
+        // User cancelled or native eyedropper threw
+      }
+    }
+    // Activate canvas eyedropper
+    setEyedropperTarget(target);
   };
 
   // Draw calibration overlay on video
@@ -220,7 +368,13 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
               21,
               108,
               minSaturation,
-              brightnessThreshold
+              brightnessThreshold,
+              {
+                colorMode,
+                hand1Color: hexToRgb(hand1ColorHex),
+                hand2Color: hexToRgb(hand2ColorHex),
+                splitPitch,
+              }
             );
 
             for (const seg of segments) {
@@ -229,11 +383,15 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
               if (isRight) rCount++;
               else lCount++;
 
-              // Glowing indicator circle
-              ctx.fillStyle = isRight ? '#22c55e' : '#38bdf8';
+              // Glowing indicator circle in user-configured hand color
+              ctx.fillStyle = isRight ? hand1ColorHex : hand2ColorHex;
               ctx.beginPath();
               ctx.arc(canvasX, y, 6, 0, 2 * Math.PI);
               ctx.fill();
+
+              ctx.strokeStyle = '#ffffff';
+              ctx.lineWidth = 1;
+              ctx.stroke();
 
               // Note Name badge
               ctx.fillStyle = '#ffffff';
@@ -243,7 +401,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
             }
           }
         } catch {
-          // ignore
+          // ignore offscreen extraction errors on cross-origin or unloaded video
         }
       }
 
@@ -251,7 +409,80 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
     };
 
     renderOverlay();
-  }, [isVideo, fileUrl, scanlineY, keyboardXStart, keyboardXEnd, minSaturation, brightnessThreshold]);
+  }, [
+    isVideo,
+    fileUrl,
+    scanlineY,
+    keyboardXStart,
+    keyboardXEnd,
+    minSaturation,
+    brightnessThreshold,
+    colorMode,
+    hand1ColorHex,
+    hand2ColorHex,
+    splitPitch,
+  ]);
+
+  // Timeline Trimmer Pointer interactions (Dual handles & scrubber)
+  const handleTimelinePointerDown = (
+    e: React.PointerEvent<HTMLDivElement>,
+    handleType: 'start' | 'end' | 'scrub'
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingHandle(handleType);
+
+    const track = timelineTrackRef.current;
+    if (!track) return;
+
+    const dur = videoDuration > 0 ? videoDuration : 1;
+
+    const onPointerMove = (ev: PointerEvent) => {
+      const rect = track.getBoundingClientRect();
+      const clientX = Math.max(rect.left, Math.min(rect.right, ev.clientX));
+      const ratio = (clientX - rect.left) / rect.width;
+      const time = Math.max(0, Math.min(dur, ratio * dur));
+
+      if (handleType === 'start') {
+        const safeStart = Math.min(time, Math.max(0, (cropEndTime || dur) - 0.5));
+        setCropStartTime(safeStart);
+        if (videoRef.current) {
+          videoRef.current.currentTime = safeStart;
+        }
+      } else if (handleType === 'end') {
+        const safeEnd = Math.max(time, cropStartTime + 0.5);
+        setCropEndTime(safeEnd);
+        if (videoRef.current) {
+          videoRef.current.currentTime = safeEnd;
+        }
+      } else if (handleType === 'scrub') {
+        if (videoRef.current) {
+          videoRef.current.currentTime = time;
+        }
+      }
+    };
+
+    const onPointerUp = () => {
+      setIsDraggingHandle(null);
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+    };
+
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+  };
+
+  const handleTimelineClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (isDraggingHandle) return;
+    const track = timelineTrackRef.current;
+    if (!track) return;
+    const rect = track.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const time = ratio * (videoDuration > 0 ? videoDuration : 1);
+    if (videoRef.current) {
+      videoRef.current.currentTime = time;
+    }
+  };
 
   // Execute Transcription
   const handleStartTranscription = async () => {
@@ -264,6 +495,8 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
     setStatusMessage('Iniciando processamento...');
 
     try {
+      const effEndTime = cropEndTime > cropStartTime ? cropEndTime : undefined;
+
       // 1. Audio Transcription Phase
       setStatusMessage('Extraindo e decodificando áudio via Web Audio API...');
       const audioBuffer = await extractAudioBufferFromFile(selectedFile);
@@ -272,8 +505,9 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
       const audioResult: AudioTranscriptionResult = await transcribeAudioBufferToNotes(audioBuffer, {
         bpm: autoApplyBpm ? undefined : currentBpm,
         sensitivity,
+        startTime: cropStartTime,
+        endTime: effEndTime,
         onProgress: (p, stage) => {
-          // Allocate 0% to 50% for audio phase
           const scaled = isVideo && transcriptionMode === 'hybrid' ? p * 0.5 : p;
           setProgress(scaled);
           setStatusMessage(stage);
@@ -293,9 +527,14 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
           keyboardXEndRatio: keyboardXEnd / 100,
           brightnessThreshold,
           minSaturation,
-          fps: 15,
+          fps: 12,
+          startTime: cropStartTime,
+          endTime: effEndTime,
+          colorMode,
+          hand1Color: hexToRgb(hand1ColorHex),
+          hand2Color: hexToRgb(hand2ColorHex),
+          splitPitch,
           onProgress: (p, stage) => {
-            // Allocate 50% to 90% for visual phase
             setProgress(0.5 + p * 0.4);
             setStatusMessage(stage);
           },
@@ -305,7 +544,9 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
         const fused = fuseAudioAndVisionNotes(
           audioResult.notes,
           videoScanResult.visualNotes,
-          effectiveBpm
+          effectiveBpm,
+          TICKS_PER_BEAT,
+          splitPitch
         );
 
         setTranscriptionResult({
@@ -314,14 +555,14 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
           allNotes: fused.allNotes,
           detectedBpm: effectiveBpm,
           durationSec: audioResult.durationSeconds,
-          suppressedHarmonics: fused.suppressedHarmonicsCount,
+          matchedVisualCount: fused.matchedVisualCount,
         });
       } else {
-        // Audio-only mode: separate hands by Middle C (60) heuristic
+        // Audio-only mode: separate hands by Middle C (or splitPitch) heuristic
         const rightNotes: Note[] = [];
         const leftNotes: Note[] = [];
         for (const n of audioResult.notes) {
-          if (n.pitch >= 60) {
+          if (n.pitch >= splitPitch) {
             rightNotes.push(n);
           } else {
             leftNotes.push(n);
@@ -334,7 +575,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
           allNotes: audioResult.notes,
           detectedBpm: effectiveBpm,
           durationSec: audioResult.durationSeconds,
-          suppressedHarmonics: 0,
+          matchedVisualCount: 0,
         });
       }
 
@@ -358,7 +599,6 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
       : 'Transcrição IA';
 
     if (splitHands && transcriptionResult.rightHandNotes.length > 0 && transcriptionResult.leftHandNotes.length > 0) {
-      // 2 Tracks: Right Hand + Left Hand
       const rightTrackId = `track-trans-rh-${Date.now()}`;
       const leftTrackId = `track-trans-lh-${Date.now() + 1}`;
 
@@ -391,7 +631,6 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
         title: baseTitle,
       });
     } else {
-      // Single Track
       const trackId = destinationMode === 'existing' ? targetTrackId : `track-trans-${Date.now()}`;
       const notes = transcriptionResult.allNotes.map((n) => ({
         ...n,
@@ -420,6 +659,12 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
 
   if (!isOpen) return null;
 
+  const totalDur = videoDuration > 0 ? videoDuration : 100;
+  const effectiveEnd = cropEndTime > 0 ? Math.min(totalDur, cropEndTime) : totalDur;
+  const startPct = Math.max(0, Math.min(100, (cropStartTime / totalDur) * 100));
+  const endPct = Math.max(0, Math.min(100, (effectiveEnd / totalDur) * 100));
+  const playheadPct = Math.max(0, Math.min(100, (videoCurrentTime / totalDur) * 100));
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
       <div className="bg-[#191614] border border-[#382f27] rounded-xl shadow-2xl w-full max-w-4xl max-h-[92vh] flex flex-col overflow-hidden text-stone-200">
@@ -438,11 +683,11 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
                   HÍBRIDO IA
                 </span>
                 <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
-                  NOVO
+                  V2.1
                 </span>
               </div>
               <p className="text-xs text-stone-400">
-                Converte vídeos de teclado em cascata e áudios diretamente para faixas MIDI com dinâmicas e separação de mãos.
+                Converte vídeos Synthesia e gravações para MIDI com corte de intro/outro, paleta de cores e separação de mãos.
               </p>
             </div>
           </div>
@@ -465,7 +710,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
             </label>
             <div
               onClick={() => fileInputRef.current?.click()}
-              className={`border-2 border-dashed rounded-xl p-5 text-center cursor-pointer transition-all ${
+              className={`border-2 border-dashed rounded-xl p-4 text-center cursor-pointer transition-all ${
                 selectedFile
                   ? 'border-amber-500/50 bg-amber-950/10'
                   : 'border-[#382f27] hover:border-amber-500/40 bg-stone-900/40 hover:bg-stone-900/80'
@@ -478,16 +723,17 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
                 onChange={handleFileChange}
                 className="hidden"
               />
-              <div className="flex flex-col items-center justify-center gap-2">
-                <div className="p-3 rounded-full bg-stone-800/80 border border-[#2d2722] text-amber-400">
-                  {isVideo ? <Video className="w-6 h-6" /> : <Upload className="w-6 h-6" />}
+              <div className="flex flex-col items-center justify-center gap-1.5">
+                <div className="p-2.5 rounded-full bg-stone-800/80 border border-[#2d2722] text-amber-400">
+                  {isVideo ? <Video className="w-5 h-5" /> : <Upload className="w-5 h-5" />}
                 </div>
                 {selectedFile ? (
                   <div>
                     <span className="text-sm font-semibold text-amber-300">{selectedFile.name}</span>
                     <p className="text-[11px] text-stone-400">
                       {(selectedFile.size / (1024 * 1024)).toFixed(2)} MB •{' '}
-                      {isVideo ? 'Vídeo detectado (Suporta calibragem visual)' : 'Áudio detectado'}
+                      {isVideo ? 'Vídeo Synthesia detectado' : 'Áudio detectado'} •{' '}
+                      Duração: {formatTimecode(videoDuration)}
                     </p>
                   </div>
                 ) : (
@@ -504,7 +750,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
             </div>
           </div>
 
-          {/* Interactive Video Preview with Calibration Scanline */}
+          {/* Interactive Video Preview with Calibration Scanline & Eyedropper */}
           {isVideo && fileUrl && (
             <div className="bg-stone-900/60 border border-[#2d2722] rounded-xl p-3.5 space-y-3">
               <div className="flex items-center justify-between">
@@ -513,32 +759,81 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
                   Calibração da Visão Computacional (Cascata Synthesia)
                 </span>
                 <span className="text-[11px] text-stone-400">
-                  Ajuste a linha amarela para que fique exatamente acima das teclas do piano
+                  {eyedropperTarget ? 'Clique no vídeo para capturar a cor!' : 'Ajuste a linha amarela acima das teclas'}
                 </span>
               </div>
 
+              {/* Eyedropper Active Banner */}
+              {eyedropperTarget && (
+                <div className="p-2 rounded-lg bg-amber-500/20 border border-amber-500/50 text-amber-300 flex items-center justify-between animate-pulse">
+                  <span className="flex items-center gap-1.5 font-bold">
+                    <Pipette className="w-4 h-4" />
+                    Modo Pipeta Ativo: Clique em cima de uma barra no vídeo para capturar a cor da{' '}
+                    {eyedropperTarget === 'hand1' ? 'Mão Direita' : 'Mão Esquerda'}.
+                  </span>
+                  <button
+                    onClick={() => {
+                      setEyedropperTarget(null);
+                      setHoveredColor(null);
+                    }}
+                    className="px-2 py-0.5 rounded bg-stone-800 hover:bg-stone-700 text-stone-200 text-[10px] font-semibold"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              )}
+
               {/* Video with Canvas Overlay */}
-              <div className="relative aspect-video bg-black rounded-lg overflow-hidden border border-stone-800 flex items-center justify-center">
+              <div className="relative aspect-video bg-black rounded-lg overflow-hidden border border-stone-800 flex items-center justify-center select-none">
                 <video
                   ref={videoRef}
                   src={fileUrl}
                   className="w-full h-full object-contain"
                   onTimeUpdate={() => {
                     if (videoRef.current) {
-                      setVideoCurrentTime(videoRef.current.currentTime);
+                      const cur = videoRef.current.currentTime;
+                      setVideoCurrentTime(cur);
+                      if (cropEndTime > cropStartTime && cur >= cropEndTime && isVideoPlaying) {
+                        videoRef.current.pause();
+                        setIsVideoPlaying(false);
+                        videoRef.current.currentTime = cropStartTime;
+                      }
                     }
                   }}
                   onLoadedMetadata={() => {
                     if (videoRef.current) {
-                      setVideoDuration(videoRef.current.duration);
+                      const dur = videoRef.current.duration;
+                      setVideoDuration(dur);
+                      setCropStartTime(0);
+                      setCropEndTime(dur);
                     }
                   }}
                   playsInline
                 />
                 <canvas
                   ref={canvasOverlayRef}
-                  className="absolute inset-0 w-full h-full pointer-events-none"
+                  className={`absolute inset-0 w-full h-full ${
+                    eyedropperTarget ? 'cursor-crosshair' : 'pointer-events-none'
+                  }`}
+                  onPointerMove={handleCanvasPointerMove}
+                  onPointerDown={handleCanvasPointerDown}
                 />
+
+                {/* Eyedropper Hover Loupe Swatch */}
+                {eyedropperTarget && hoveredColor && (
+                  <div
+                    className="absolute pointer-events-none transform -translate-x-1/2 -translate-y-full mb-3 flex items-center gap-1.5 px-2 py-1 rounded bg-black/90 border border-white/40 shadow-xl text-[10px] text-white z-40"
+                    style={{ left: hoveredColor.x, top: hoveredColor.y }}
+                  >
+                    <span
+                      className="w-3.5 h-3.5 rounded-full border border-white"
+                      style={{ backgroundColor: rgbToHex(hoveredColor.r, hoveredColor.g, hoveredColor.b) }}
+                    />
+                    <span className="font-mono font-bold">
+                      {rgbToHex(hoveredColor.r, hoveredColor.g, hoveredColor.b).toUpperCase()}
+                    </span>
+                  </div>
+                )}
 
                 {/* Video Play/Pause Overlay Button */}
                 <button
@@ -553,7 +848,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
                       setIsVideoPlaying(false);
                     }
                   }}
-                  className="absolute bottom-3 left-3 p-2 rounded-lg bg-black/70 hover:bg-black/90 text-amber-400 border border-stone-700 transition-colors shadow-lg"
+                  className="absolute bottom-3 left-3 p-2 rounded-lg bg-black/70 hover:bg-black/90 text-amber-400 border border-stone-700 transition-colors shadow-lg z-30"
                   title={isVideoPlaying ? 'Pausar vídeo' : 'Tocar vídeo'}
                 >
                   {isVideoPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 fill-current ml-0.5" />}
@@ -564,24 +859,34 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
               <div className="flex items-center justify-between text-[11px] pt-1 border-t border-stone-800/80 flex-wrap gap-2">
                 <div className="flex items-center gap-2">
                   <span className="text-stone-400">Detecção no Frame Atual:</span>
-                  <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-semibold flex items-center gap-1">
-                    🟢 Mão Direita: {liveBars.right}
+                  <span
+                    className="px-2 py-0.5 rounded font-semibold flex items-center gap-1.5 border"
+                    style={{
+                      backgroundColor: `${hand1ColorHex}20`,
+                      borderColor: `${hand1ColorHex}50`,
+                      color: hand1ColorHex,
+                    }}
+                  >
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: hand1ColorHex }} />
+                    Mão Direita: {liveBars.right}
                   </span>
-                  <span className="px-2 py-0.5 rounded bg-sky-500/10 text-sky-400 border border-sky-500/30 font-semibold flex items-center gap-1">
-                    🔵 Mão Esquerda: {liveBars.left}
-                  </span>
+                  {colorMode === 'two-colors' && (
+                    <span
+                      className="px-2 py-0.5 rounded font-semibold flex items-center gap-1.5 border"
+                      style={{
+                        backgroundColor: `${hand2ColorHex}20`,
+                        borderColor: `${hand2ColorHex}50`,
+                        color: hand2ColorHex,
+                      }}
+                    >
+                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: hand2ColorHex }} />
+                      Mão Esquerda: {liveBars.left}
+                    </span>
+                  )}
                 </div>
                 <span className="text-stone-500 text-[10px]">
-                  Filtro Ativo: Chamas e teclas brancas ignoradas
+                  Filtro Ativo: Faíscas, chamas e teclas brancas ignoradas
                 </span>
-              </div>
-
-              {/* Helpful Tip Box */}
-              <div className="p-2.5 rounded-lg bg-amber-950/20 border border-amber-500/30 text-amber-300 text-[11px] leading-relaxed flex items-start gap-2">
-                <span className="text-base leading-none">💡</span>
-                <div>
-                  <strong>Dica de Posicionamento:</strong> Posicione a <em>Linha de Leitura (Y)</em> ligeiramente <strong>ACIMA</strong> dos efeitos de faísca/chamas das teclas (ex: entre <strong>60% e 72%</strong>). O scanner ignora automaticamente o clarão branco e captura com perfeição as barras caindo!
-                </div>
               </div>
 
               {/* Calibration Sliders */}
@@ -634,6 +939,322 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
             </div>
           )}
 
+          {/* Visual Timeline Trimmer (Intro & Outro Trimmer) */}
+          {fileUrl && (
+            <div className="bg-stone-900/60 border border-[#2d2722] rounded-xl p-3.5 space-y-3">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <span className="font-semibold text-amber-400 flex items-center gap-1.5">
+                  <Scissors className="w-4 h-4" />
+                  Corte Visual de Intro & Outro (Seleção de Trecho)
+                </span>
+                <div className="flex items-center gap-2 text-[11px] font-mono">
+                  <span className="text-stone-400">Duração do Trecho:</span>
+                  <span className="px-2 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/30 font-bold">
+                    {formatTimecode(Math.max(0, effectiveEnd - cropStartTime))}
+                  </span>
+                  <span className="text-stone-500">de {formatTimecode(videoDuration)}</span>
+                </div>
+              </div>
+
+              {/* Dual-handle Timeline Bar */}
+              <div
+                ref={timelineTrackRef}
+                onClick={handleTimelineClick}
+                className="relative h-11 bg-stone-950 rounded-lg overflow-hidden border border-stone-800 select-none cursor-pointer"
+              >
+                {/* Intro Darkened Area */}
+                <div
+                  className="absolute top-0 bottom-0 left-0 bg-stone-950/80 border-r border-amber-500/40 z-10 flex items-center justify-end pr-1.5"
+                  style={{ width: `${startPct}%` }}
+                >
+                  {startPct > 10 && (
+                    <span className="text-[9px] font-bold text-stone-500 select-none truncate">
+                      INTRO CORTADA
+                    </span>
+                  )}
+                </div>
+
+                {/* Active Selected Region */}
+                <div
+                  className="absolute top-0 bottom-0 bg-amber-500/20 border-y-2 border-amber-500/80 z-0 transition-colors"
+                  style={{
+                    left: `${startPct}%`,
+                    width: `${Math.max(0, endPct - startPct)}%`,
+                  }}
+                />
+
+                {/* Outro Darkened Area */}
+                <div
+                  className="absolute top-0 bottom-0 right-0 bg-stone-950/80 border-l border-amber-500/40 z-10 flex items-center pl-1.5"
+                  style={{ width: `${Math.max(0, 100 - endPct)}%` }}
+                >
+                  {100 - endPct > 10 && (
+                    <span className="text-[9px] font-bold text-stone-500 select-none truncate">
+                      OUTRO CORTADA
+                    </span>
+                  )}
+                </div>
+
+                {/* Playhead Red Needle */}
+                <div
+                  className="absolute top-0 bottom-0 w-0.5 bg-red-400 z-20 pointer-events-none shadow-[0_0_8px_rgba(239,68,68,0.8)]"
+                  style={{ left: `${playheadPct}%` }}
+                >
+                  <div className="w-2 h-2 bg-red-500 rounded-full -ml-[3px] -mt-0.5" />
+                </div>
+
+                {/* Draggable Handle: START (In-Point) */}
+                <div
+                  onPointerDown={(e) => handleTimelinePointerDown(e, 'start')}
+                  className="absolute top-0 bottom-0 -ml-2.5 w-5 z-30 cursor-ew-resize flex items-center justify-center group"
+                  style={{ left: `${startPct}%` }}
+                  title={`Início: ${formatTimecode(cropStartTime)}`}
+                >
+                  <div className="w-2 h-7 rounded bg-amber-400 border border-amber-200 shadow-md group-hover:scale-125 transition-transform" />
+                </div>
+
+                {/* Draggable Handle: END (Out-Point) */}
+                <div
+                  onPointerDown={(e) => handleTimelinePointerDown(e, 'end')}
+                  className="absolute top-0 bottom-0 -ml-2.5 w-5 z-30 cursor-ew-resize flex items-center justify-center group"
+                  style={{ left: `${endPct}%` }}
+                  title={`Fim: ${formatTimecode(effectiveEnd)}`}
+                >
+                  <div className="w-2 h-7 rounded bg-amber-400 border border-amber-200 shadow-md group-hover:scale-125 transition-transform" />
+                </div>
+              </div>
+
+              {/* Timeline Quick Control Buttons & Precise Values */}
+              <div className="flex items-center justify-between flex-wrap gap-2 pt-1 text-[11px]">
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      const cur = videoCurrentTime;
+                      setCropStartTime(Math.min(cur, Math.max(0, effectiveEnd - 0.5)));
+                    }}
+                    className="px-2.5 py-1 rounded bg-stone-800 hover:bg-stone-700 text-stone-200 border border-stone-700 font-semibold flex items-center gap-1 transition-colors"
+                  >
+                    <span>[ ⏵|</span> Marcar Início Aqui
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      const cur = videoCurrentTime;
+                      setCropEndTime(Math.max(cur, cropStartTime + 0.5));
+                    }}
+                    className="px-2.5 py-1 rounded bg-stone-800 hover:bg-stone-700 text-stone-200 border border-stone-700 font-semibold flex items-center gap-1 transition-colors"
+                  >
+                    <span>|⏵ ]</span> Marcar Fim Aqui
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setCropStartTime(0);
+                      setCropEndTime(videoDuration);
+                    }}
+                    className="px-2 py-1 rounded text-stone-400 hover:text-stone-200 hover:bg-stone-800 flex items-center gap-1 transition-colors"
+                    title="Redefinir para o vídeo completo"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    Resetar
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-3 font-mono">
+                  <div className="flex items-center gap-1">
+                    <span className="text-stone-400">Início:</span>
+                    <span className="font-bold text-amber-300">{formatTimecode(cropStartTime)}</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="text-stone-400">Fim:</span>
+                    <span className="font-bold text-amber-300">{formatTimecode(effectiveEnd)}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Color Picker & Hand Separation Section */}
+          {isVideo && transcriptionMode === 'hybrid' && (
+            <div className="bg-stone-900/60 border border-[#2d2722] rounded-xl p-3.5 space-y-3.5">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-amber-400 flex items-center gap-1.5">
+                  <Palette className="w-4 h-4" />
+                  Cores das Barras & Separação de Mãos
+                </span>
+                <span className="text-[11px] text-stone-400">
+                  Configure as cores do vídeo para separar mão direita e esquerda com precisão
+                </span>
+              </div>
+
+              {/* Mode Toggle: 2 Colors vs Single Color */}
+              <div className="flex items-center gap-4 bg-stone-950/60 p-2 rounded-lg border border-stone-800">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="colorMode"
+                    value="two-colors"
+                    checked={colorMode === 'two-colors'}
+                    onChange={() => setColorMode('two-colors')}
+                    className="accent-amber-500"
+                  />
+                  <span className="font-medium text-stone-200">2 Cores Diferentes (Mão Direita e Esquerda)</span>
+                </label>
+
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="colorMode"
+                    value="single-color"
+                    checked={colorMode === 'single-color'}
+                    onChange={() => setColorMode('single-color')}
+                    className="accent-amber-500"
+                  />
+                  <span className="font-medium text-stone-200">Cor Única (Vídeo Monocromático)</span>
+                </label>
+              </div>
+
+              {/* Hand 1 Color (Right Hand or Single Color) */}
+              <div className="space-y-2 p-3 rounded-lg bg-stone-950/40 border border-stone-800/80">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="w-3.5 h-3.5 rounded-full border border-white/60 shadow"
+                      style={{ backgroundColor: hand1ColorHex }}
+                    />
+                    <span className="font-semibold text-stone-200">
+                      {colorMode === 'two-colors'
+                        ? 'Cor da Mão Direita (Melodia / Agudos)'
+                        : 'Cor de Todas as Barras do Vídeo'}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="color"
+                      value={hand1ColorHex}
+                      onChange={(e) => setHand1ColorHex(e.target.value)}
+                      className="w-7 h-7 rounded border border-stone-700 bg-transparent cursor-pointer"
+                      title="Selecionar cor"
+                    />
+                    <span className="font-mono text-stone-300 font-bold text-[11px] uppercase">
+                      {hand1ColorHex}
+                    </span>
+                    <button
+                      onClick={() => triggerNativeEyedropper('hand1')}
+                      className={`px-2 py-1 rounded border text-[11px] font-semibold flex items-center gap-1 transition-colors ${
+                        eyedropperTarget === 'hand1'
+                          ? 'bg-amber-500 text-stone-950 border-amber-400 font-bold'
+                          : 'bg-stone-800 hover:bg-stone-700 text-stone-200 border-stone-700'
+                      }`}
+                      title="Clique para ativar a pipeta e clicar na barra no vídeo"
+                    >
+                      <Pipette className="w-3.5 h-3.5" />
+                      Pipeta no Vídeo
+                    </button>
+                  </div>
+                </div>
+
+                {/* Preset Chips */}
+                <div className="flex items-center gap-1.5 flex-wrap pt-1">
+                  <span className="text-[10px] text-stone-400 mr-1">Paleta Rápida:</span>
+                  {COLOR_PRESETS.map((preset) => (
+                    <button
+                      key={preset.hex}
+                      onClick={() => setHand1ColorHex(preset.hex)}
+                      className={`w-5 h-5 rounded-full border transition-transform hover:scale-125 ${
+                        hand1ColorHex.toLowerCase() === preset.hex.toLowerCase()
+                          ? 'border-white scale-110 shadow-lg'
+                          : 'border-transparent'
+                      }`}
+                      style={{ backgroundColor: preset.hex }}
+                      title={preset.name}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              {/* Hand 2 Color (Left Hand - only in two-colors mode) */}
+              {colorMode === 'two-colors' ? (
+                <div className="space-y-2 p-3 rounded-lg bg-stone-950/40 border border-stone-800/80">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="w-3.5 h-3.5 rounded-full border border-white/60 shadow"
+                        style={{ backgroundColor: hand2ColorHex }}
+                      />
+                      <span className="font-semibold text-stone-200">
+                        Cor da Mão Esquerda (Baixo / Harmonia)
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={hand2ColorHex}
+                        onChange={(e) => setHand2ColorHex(e.target.value)}
+                        className="w-7 h-7 rounded border border-stone-700 bg-transparent cursor-pointer"
+                        title="Selecionar cor"
+                      />
+                      <span className="font-mono text-stone-300 font-bold text-[11px] uppercase">
+                        {hand2ColorHex}
+                      </span>
+                      <button
+                        onClick={() => triggerNativeEyedropper('hand2')}
+                        className={`px-2 py-1 rounded border text-[11px] font-semibold flex items-center gap-1 transition-colors ${
+                          eyedropperTarget === 'hand2'
+                            ? 'bg-amber-500 text-stone-950 border-amber-400 font-bold'
+                            : 'bg-stone-800 hover:bg-stone-700 text-stone-200 border-stone-700'
+                        }`}
+                        title="Clique para ativar a pipeta e clicar na barra no vídeo"
+                      >
+                        <Pipette className="w-3.5 h-3.5" />
+                        Pipeta no Vídeo
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Preset Chips */}
+                  <div className="flex items-center gap-1.5 flex-wrap pt-1">
+                    <span className="text-[10px] text-stone-400 mr-1">Paleta Rápida:</span>
+                    {COLOR_PRESETS.map((preset) => (
+                      <button
+                        key={preset.hex}
+                        onClick={() => setHand2ColorHex(preset.hex)}
+                        className={`w-5 h-5 rounded-full border transition-transform hover:scale-125 ${
+                          hand2ColorHex.toLowerCase() === preset.hex.toLowerCase()
+                            ? 'border-white scale-110 shadow-lg'
+                            : 'border-transparent'
+                        }`}
+                        style={{ backgroundColor: preset.hex }}
+                        title={preset.name}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                /* Split pitch selector when monochromatic */
+                <div className="p-3 rounded-lg bg-stone-950/40 border border-stone-800/80 flex items-center justify-between flex-wrap gap-3">
+                  <div>
+                    <span className="font-semibold text-stone-200 block">Ponto de Divisão das Mãos</span>
+                    <p className="text-[11px] text-stone-400">
+                      Como todas as notas têm a mesma cor, a divisão será feita pela altura da nota no piano.
+                    </p>
+                  </div>
+                  <select
+                    value={splitPitch}
+                    onChange={(e) => setSplitPitch(Number(e.target.value))}
+                    className="bg-stone-900 border border-stone-700 rounded-lg px-3 py-1.5 text-stone-200 font-mono focus:outline-none focus:border-amber-500"
+                  >
+                    <option value={48}>Dó 3 (Pitch 48 / Grave)</option>
+                    <option value={60}>Dó Central C4 (Pitch 60 / Padrão)</option>
+                    <option value={72}>Dó 5 (Pitch 72 / Agudo)</option>
+                  </select>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Options Grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {/* Mode & Split Hands */}
@@ -655,7 +1276,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
                       Híbrido (Áudio + Visão Computacional)
                     </span>
                     <p className="text-[11px] text-stone-400">
-                      Ideal para vídeos Synthesia: extrai velocity e ritmo pelo áudio e lê as cores e teclas pelo vídeo.
+                      Ideal para Synthesia: mantém todas as notas do áudio e separa as mãos através da cor das barras.
                     </p>
                   </div>
                 </label>
@@ -793,8 +1414,12 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
                   <span className="text-sm font-bold text-sky-400">{transcriptionResult.leftHandNotes.length}</span>
                 </div>
                 <div className="bg-stone-900/60 p-2 rounded-lg border border-stone-800">
-                  <span className="text-[10px] text-stone-400 block font-sans">Harmônicos Filtrados</span>
-                  <span className="text-sm font-bold text-amber-400">{transcriptionResult.suppressedHarmonics}</span>
+                  <span className="text-[10px] text-stone-400 block font-sans">
+                    {isVideo ? 'Sincronizadas com Vídeo' : 'Notas Filtradas'}
+                  </span>
+                  <span className="text-sm font-bold text-amber-400">
+                    {isVideo ? transcriptionResult.matchedVisualCount : transcriptionResult.allNotes.length}
+                  </span>
                 </div>
               </div>
             </div>

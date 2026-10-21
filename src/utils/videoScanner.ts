@@ -18,14 +18,20 @@ export interface DetectedBarSegment {
 }
 
 export interface VideoScanOptions {
-  scanlineYRatio?: number; // 0.0 to 1.0 (default 0.70, above flames/particles)
+  scanlineYRatio?: number; // 0.0 to 1.0 (default 0.68, above flames/particles)
   minPitch?: number; // default 21 (A0)
   maxPitch?: number; // default 108 (C8)
   keyboardXStartRatio?: number; // 0.0 to 1.0 (default 0.0)
   keyboardXEndRatio?: number; // 0.0 to 1.0 (default 1.0)
-  brightnessThreshold?: number; // 0 to 255 (default 50)
-  minSaturation?: number; // 0.0 to 1.0 (default 0.28 - ignores white flames/keys)
-  fps?: number; // sampling fps (default 15 fps)
+  brightnessThreshold?: number; // 0 to 255 (default 45)
+  minSaturation?: number; // 0.0 to 1.0 (default 0.25 - ignores white flames/keys)
+  fps?: number; // sampling fps (default 12 fps)
+  startTime?: number; // Crop start in seconds
+  endTime?: number; // Crop end in seconds
+  colorMode?: 'two-colors' | 'single-color' | 'auto';
+  hand1Color?: { r: number; g: number; b: number }; // Right hand target color
+  hand2Color?: { r: number; g: number; b: number }; // Left hand target color
+  splitPitch?: number; // Pitch to split hands when single-color (default 60 = Middle C)
   onProgress?: (progress: number, stage: string) => void;
 }
 
@@ -36,6 +42,28 @@ export interface VideoScanResult {
     leftHand: { r: number; g: number; b: number };
   };
   totalFramesScanned: number;
+}
+
+/**
+ * Converts Hex string (#22c55e) to RGB object.
+ */
+export function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  const clean = hex.replace('#', '');
+  const bigint = parseInt(clean, 16);
+  if (isNaN(bigint)) return { r: 34, g: 197, b: 94 };
+  const r = (bigint >> 16) & 255;
+  const g = (bigint >> 8) & 255;
+  const b = bigint & 255;
+  return { r, g, b };
+}
+
+/**
+ * Converts RGB numbers to Hex string.
+ */
+export function rgbToHex(r: number, g: number, b: number): string {
+  const clamp = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
+  const toHex = (v: number) => clamp(v).toString(16).padStart(2, '0');
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
 }
 
 /**
@@ -101,22 +129,42 @@ export function xToPianoPitch(
 }
 
 /**
- * Classifies whether a detected color is Right Hand (Green / Warm) or Left Hand (Blue / Cyan / Cool).
+ * Classifies whether a detected color is Right Hand or Left Hand based on user colors,
+ * color mode, or pitch split fallback.
  */
-export function classifyHandColor(r: number, g: number, b: number): 'right' | 'left' {
-  const hsl = rgbToHsl(r, g, b);
-  // In Synthesia:
-  // Green is ~80deg to 160deg (Right Hand)
-  // Blue/Cyan is ~170deg to 260deg (Left Hand)
-  // Orange/Red is 0deg to 45deg (sometimes Right or Left)
-  if (hsl.h >= 70 && hsl.h <= 165) {
-    return 'right'; // Green
+export function classifyHand(
+  r: number,
+  g: number,
+  b: number,
+  pitch: number,
+  options: {
+    colorMode?: 'two-colors' | 'single-color' | 'auto';
+    hand1Color?: { r: number; g: number; b: number };
+    hand2Color?: { r: number; g: number; b: number };
+    splitPitch?: number;
+  } = {}
+): 'right' | 'left' {
+  const {
+    colorMode = 'two-colors',
+    hand1Color = { r: 34, g: 197, b: 94 }, // Green
+    hand2Color = { r: 56, g: 189, b: 248 }, // Blue
+    splitPitch = 60,
+  } = options;
+
+  if (colorMode === 'single-color') {
+    return pitch >= splitPitch ? 'right' : 'left';
   }
-  if (hsl.h >= 170 && hsl.h <= 265) {
-    return 'left'; // Blue / Cyan
+
+  // Compare distance to user-chosen hand colors
+  const d1 = colorDistance({ r, g, b }, hand1Color);
+  const d2 = colorDistance({ r, g, b }, hand2Color);
+
+  if (Math.abs(d1 - d2) < 25) {
+    // Colors are ambiguous, use pitch register fallback
+    return pitch >= splitPitch ? 'right' : 'left';
   }
-  // Fallback: if green is significantly higher than blue -> right, otherwise left
-  return g > b + 20 ? 'right' : 'left';
+
+  return d1 <= d2 ? 'right' : 'left';
 }
 
 /**
@@ -129,8 +177,14 @@ export function detectBarsInImageData(
   kbWidth: number,
   minPitch = 21,
   maxPitch = 108,
-  minSaturation = 0.28,
-  brightnessThreshold = 50
+  minSaturation = 0.25,
+  brightnessThreshold = 45,
+  colorOptions?: {
+    colorMode?: 'two-colors' | 'single-color' | 'auto';
+    hand1Color?: { r: number; g: number; b: number };
+    hand2Color?: { r: number; g: number; b: number };
+    splitPitch?: number;
+  }
 ): DetectedBarSegment[] {
   const segments: DetectedBarSegment[] = [];
 
@@ -152,9 +206,9 @@ export function detectBarsInImageData(
     const delta = brightness - minC;
     const saturation = brightness > 0 ? delta / brightness : 0;
 
-    // A note bar MUST be colorful (saturation >= minSaturation and delta >= 30) and bright enough!
-    // White smoke, flames, and keys have saturation < 0.15 and delta < 25.
-    const isNotePixel = brightness >= brightnessThreshold && saturation >= minSaturation && delta >= 30;
+    // A note bar MUST be colorful (saturation >= minSaturation and delta >= 25) and bright enough!
+    // White smoke, flames, and keys have saturation < 0.15 and delta < 20.
+    const isNotePixel = brightness >= brightnessThreshold && saturation >= minSaturation && delta >= 25;
 
     if (isNotePixel) {
       if (!inSegment) {
@@ -172,14 +226,13 @@ export function detectBarsInImageData(
       }
     } else {
       if (inSegment) {
-        // Segment finished. Must be at least 3 pixels wide to filter out tiny video compression noise.
         if (pixelCount >= 3) {
           const centerX = segmentStartX + pixelCount / 2;
           const avgR = Math.round(rSum / pixelCount);
           const avgG = Math.round(gSum / pixelCount);
           const avgB = Math.round(bSum / pixelCount);
           const pitch = xToPianoPitch(centerX, kbWidth, minPitch, maxPitch);
-          const hand = classifyHandColor(avgR, avgG, avgB);
+          const hand = classifyHand(avgR, avgG, avgB, pitch, colorOptions);
 
           segments.push({
             centerX,
@@ -202,7 +255,7 @@ export function detectBarsInImageData(
     const avgG = Math.round(gSum / pixelCount);
     const avgB = Math.round(bSum / pixelCount);
     const pitch = xToPianoPitch(centerX, kbWidth, minPitch, maxPitch);
-    const hand = classifyHandColor(avgR, avgG, avgB);
+    const hand = classifyHand(avgR, avgG, avgB, pitch, colorOptions);
 
     segments.push({
       centerX,
@@ -218,28 +271,35 @@ export function detectBarsInImageData(
 
 /**
  * Scans an HTML5 Video element frame by frame along a calibrated hit-line,
- * grouping colored pixels into falling bars and tracking their onsets and releases.
+ * grouping colored pixels into falling bars and tracking their onsets and releases
+ * strictly within the [startTime, endTime] cropped window.
  */
 export async function scanVideoFrames(
   videoElement: HTMLVideoElement,
   options: VideoScanOptions = {}
 ): Promise<VideoScanResult> {
   const {
-    scanlineYRatio = 0.70, // Default 70% (comfortably above flame effects)
+    scanlineYRatio = 0.68,
     minPitch = 21,
     maxPitch = 108,
     keyboardXStartRatio = 0.0,
     keyboardXEndRatio = 1.0,
-    brightnessThreshold = 50,
-    minSaturation = 0.28,
-    fps = 15, // 15 fps gives ~66ms resolution, ample for 16th notes while running fast
+    brightnessThreshold = 45,
+    minSaturation = 0.25,
+    fps = 12, // 12 fps provides smooth tracking while running quickly
+    startTime = 0,
+    endTime,
+    colorMode = 'two-colors',
+    hand1Color = { r: 34, g: 197, b: 94 },
+    hand2Color = { r: 56, g: 189, b: 248 },
+    splitPitch = 60,
     onProgress,
   } = options;
 
-  const duration = videoElement.duration;
-  if (!duration || duration <= 0 || isNaN(duration)) {
-    throw new Error('Vídeo inválido ou duração indefinida.');
-  }
+  const totalDuration = videoElement.duration || 0;
+  const startCrop = Math.max(0, startTime);
+  const endCrop = endTime && endTime > startCrop ? Math.min(totalDuration, endTime) : totalDuration;
+  const duration = Math.max(0.5, endCrop - startCrop);
 
   const width = videoElement.videoWidth || 1280;
   const height = videoElement.videoHeight || 720;
@@ -272,17 +332,19 @@ export async function scanVideoFrames(
   const activeNotes = new Map<number, ActiveBarNote>();
   const collectedNotes: VisualNoteEvent[] = [];
 
-  // Seek and sample frame by frame
-  for (let frame = 0; frame < totalFrames; frame++) {
-    const currentTime = frame * frameInterval;
+  const colorOptions = { colorMode, hand1Color, hand2Color, splitPitch };
 
-    if (frame % 10 === 0 && onProgress) {
+  for (let frame = 0; frame < totalFrames; frame++) {
+    const videoCurrentTime = startCrop + frame * frameInterval;
+    const relativeTime = frame * frameInterval;
+
+    if (frame % 8 === 0 && onProgress) {
       const progress = frame / totalFrames;
       onProgress(progress, `Lendo barras coloridas (${Math.round(progress * 100)}%)...`);
     }
 
     // Seek video with timeout safeguard
-    videoElement.currentTime = currentTime;
+    videoElement.currentTime = videoCurrentTime;
     await new Promise<void>((resolve) => {
       let resolved = false;
       const done = () => {
@@ -293,7 +355,7 @@ export async function scanVideoFrames(
         }
       };
       videoElement.addEventListener('seeked', done, { once: true });
-      setTimeout(done, 120); // Safety fallback so it never hangs
+      setTimeout(done, 120);
     });
 
     ctx.drawImage(videoElement, 0, 0, width, height);
@@ -308,7 +370,8 @@ export async function scanVideoFrames(
       minPitch,
       maxPitch,
       minSaturation,
-      brightnessThreshold
+      brightnessThreshold,
+      colorOptions
     );
 
     const currentFramePitches = new Map<number, DetectedBarSegment>();
@@ -319,32 +382,29 @@ export async function scanVideoFrames(
     // 1. Update existing active notes or trigger new onsets
     for (const [pitch, seg] of currentFramePitches.entries()) {
       if (!activeNotes.has(pitch)) {
-        // New note onset
         activeNotes.set(pitch, {
           pitch,
-          startSec: currentTime,
-          lastSec: currentTime,
+          startSec: relativeTime,
+          lastSec: relativeTime,
           hand: seg.hand,
           colors: [seg.color],
         });
       } else {
-        // Continuing note
         const existing = activeNotes.get(pitch)!;
-        existing.lastSec = currentTime;
+        existing.lastSec = relativeTime;
         existing.colors.push(seg.color);
       }
     }
 
-    // 2. Check for released notes (absent in this frame or exceeded max realistic duration)
+    // 2. Check for released notes
     for (const [pitch, note] of activeNotes.entries()) {
-      const durationSoFar = currentTime - note.startSec;
+      const durationSoFar = relativeTime - note.startSec;
       const isMissing = !currentFramePitches.has(pitch);
-      const isTooLong = durationSoFar > 5.0; // Cut off if bar has been continuously on for > 5 seconds
+      const isTooLong = durationSoFar > 4.5;
 
       if (isMissing || isTooLong) {
         const noteDuration = note.lastSec - note.startSec + frameInterval;
         if (noteDuration >= 0.05) {
-          // Average color
           const count = note.colors.length;
           const avgColor = {
             r: Math.round(note.colors.reduce((acc, c) => acc + c.r, 0) / count),
@@ -386,14 +446,13 @@ export async function scanVideoFrames(
     }
   }
 
-  // Sort chronologically
   collectedNotes.sort((a, b) => a.startSec - b.startSec || a.pitch - b.pitch);
 
   return {
     visualNotes: collectedNotes,
     dominantColors: {
-      rightHand: { r: 60, g: 220, b: 90 }, // Green
-      leftHand: { r: 70, g: 150, b: 245 },  // Blue
+      rightHand: hand1Color,
+      leftHand: hand2Color,
     },
     totalFramesScanned: totalFrames,
   };
@@ -401,20 +460,22 @@ export async function scanVideoFrames(
 
 /**
  * Fuses Audio-to-MIDI notes with Video Computer Vision notes:
- * - Uses Visual scanner as ground-truth for pitch, hand separation, and clean note releases.
- * - Uses Audio transcriber for realistic note velocity/dynamics and micro-attacks.
- * - Suppresses audio octave harmonics that have no visual bar.
+ * - Uses the full set of Audio notes as the solid foundational backbone (never throws away notes!).
+ * - Uses Visual detections to accurately partition notes into Right Hand and Left Hand tracks.
+ * - If video had a visual match, inherits exact hand and refines duration.
+ * - If video missed a note (occlusion/dark bar), falls back cleanly to the pitch register split.
  */
 export function fuseAudioAndVisionNotes(
   audioNotes: Note[],
   visualNotes: VisualNoteEvent[],
   bpm: number,
-  ticksPerBeat = TICKS_PER_BEAT
+  ticksPerBeat = TICKS_PER_BEAT,
+  splitPitch = 60
 ): {
   rightHandNotes: Note[];
   leftHandNotes: Note[];
   allNotes: Note[];
-  suppressedHarmonicsCount: number;
+  matchedVisualCount: number;
 } {
   const ticksPerSecond = (bpm * ticksPerBeat) / 60;
 
@@ -422,48 +483,41 @@ export function fuseAudioAndVisionNotes(
   const leftHandNotes: Note[] = [];
   const allNotes: Note[] = [];
 
-  let suppressedHarmonicsCount = 0;
+  let matchedVisualCount = 0;
 
-  for (const vNote of visualNotes) {
-    const startTick = Math.max(0, Math.round(vNote.startSec * ticksPerSecond));
-    const rawDurationTicks = Math.round((vNote.endSec - vNote.startSec) * ticksPerSecond);
-    const durationTicks = Math.max(60, Math.min(480 * 8, rawDurationTicks));
+  for (const aNote of audioNotes) {
+    const noteSec = aNote.startTick / ticksPerSecond;
 
-    // Find closest audio note with identical pitch and time within 250ms tolerance
-    const toleranceTicks = Math.round(0.25 * ticksPerSecond);
-    const matchedAudio = audioNotes.find(
-      (a) => a.pitch === vNote.pitch && Math.abs(a.startTick - startTick) <= toleranceTicks
+    // Find if a visual bar matched this pitch around this time (+- 0.35s tolerance)
+    const matchedVisual = visualNotes.find(
+      (v) => v.pitch === aNote.pitch && Math.abs(v.startSec - noteSec) <= 0.35
     );
 
-    const velocity = matchedAudio?.velocity || 92;
+    let assignedHand: 'right' | 'left';
+    let durationTicks = aNote.durationTicks;
+
+    if (matchedVisual) {
+      matchedVisualCount++;
+      assignedHand = matchedVisual.hand;
+      const vDurTicks = Math.round((matchedVisual.endSec - matchedVisual.startSec) * ticksPerSecond);
+      if (vDurTicks >= 60 && vDurTicks <= 480 * 6) {
+        durationTicks = vDurTicks;
+      }
+    } else {
+      // Natural pitch split heuristic when visual didn't capture that exact frame
+      assignedHand = aNote.pitch >= splitPitch ? 'right' : 'left';
+    }
 
     const note: Note = {
-      id: `fused-note-${Date.now()}-${Math.random()}`,
-      trackId: '',
-      pitch: vNote.pitch,
-      startTick: matchedAudio ? matchedAudio.startTick : startTick,
+      ...aNote,
       durationTicks,
-      velocity,
-      selected: false,
     };
 
     allNotes.push(note);
-    if (vNote.hand === 'right') {
+    if (assignedHand === 'right') {
       rightHandNotes.push(note);
     } else {
       leftHandNotes.push(note);
-    }
-  }
-
-  // Check how many audio notes were suppressed as phantom harmonics
-  for (const aNote of audioNotes) {
-    const hasVisualMatch = visualNotes.some(
-      (v) =>
-        v.pitch === aNote.pitch &&
-        Math.abs(v.startSec * ticksPerSecond - aNote.startTick) <= 0.3 * ticksPerSecond
-    );
-    if (!hasVisualMatch) {
-      suppressedHarmonicsCount++;
     }
   }
 
@@ -476,6 +530,6 @@ export function fuseAudioAndVisionNotes(
     rightHandNotes,
     leftHandNotes,
     allNotes,
-    suppressedHarmonicsCount,
+    matchedVisualCount,
   };
 }

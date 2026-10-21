@@ -89,16 +89,15 @@ test('fuseAudioAndVisionNotes merges velocity and separates right and left hands
 
   const result = fuseAudioAndVisionNotes(audioNotes, visualNotes, 120);
 
-  assert.equal(result.allNotes.length, 2, 'Should only produce 2 fused notes from visual ground truth');
-  assert.equal(result.rightHandNotes.length, 1, 'Right hand track should have 1 note');
+  // All audio notes are preserved as the foundational backbone
+  assert.equal(result.allNotes.length, 3, 'All audio notes should be preserved without dropping');
+  assert.equal(result.rightHandNotes.length, 2, 'Right hand track should have 2 notes (1 matched + 1 split fallback)');
   assert.equal(result.leftHandNotes.length, 1, 'Left hand track should have 1 note');
+  assert.equal(result.matchedVisualCount, 2, 'Should have matched 2 visual notes');
 
   // Verify velocity was inherited from matched audio
   assert.equal(result.rightHandNotes[0].velocity, 110);
   assert.equal(result.leftHandNotes[0].velocity, 85);
-
-  // Verify phantom overtone harmonic was suppressed
-  assert.equal(result.suppressedHarmonicsCount, 1);
 });
 
 test('detectBarsInImageData ignores white smoke and detects colorful Synthesia bars', () => {
