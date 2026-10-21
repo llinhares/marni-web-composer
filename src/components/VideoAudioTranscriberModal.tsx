@@ -24,6 +24,7 @@ import { TICKS_PER_BEAT, BDO_INSTRUMENTS } from '../types/music.ts';
 import {
   extractAudioBufferFromFile,
   transcribeAudioBufferToNotes,
+  estimateBpmFromAudioBuffer,
   AudioTranscriptionResult,
 } from '../utils/audioToMidi.ts';
 import {
@@ -86,7 +87,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
   const [isVideo, setIsVideo] = useState<boolean>(false);
 
   // Settings
-  const [transcriptionMode, setTranscriptionMode] = useState<'hybrid' | 'audio-only'>('hybrid');
+  const [transcriptionMode, setTranscriptionMode] = useState<'hybrid' | 'audio-only' | 'video-only'>('hybrid');
   const [splitHands, setSplitHands] = useState<boolean>(true);
   const [destinationMode, setDestinationMode] = useState<'new-tracks' | 'existing'>('new-tracks');
   const [selectedInstrument, setSelectedInstrument] = useState<InstrumentId>('grand-piano');
@@ -134,6 +135,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
     detectedBpm: number;
     durationSec: number;
     matchedVisualCount: number;
+    mode: 'hybrid' | 'audio-only' | 'video-only';
   } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -497,37 +499,29 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
     try {
       const effEndTime = cropEndTime > cropStartTime ? cropEndTime : undefined;
 
-      // 1. Audio Transcription Phase
-      setStatusMessage('Extraindo e decodificando áudio via Web Audio API...');
-      const audioBuffer = await extractAudioBufferFromFile(selectedFile);
+      // MODE 1: SOMENTE VÍDEO (VISÃO COMPUTACIONAL DIRETA)
+      if (transcriptionMode === 'video-only') {
+        if (!videoRef.current) throw new Error('Vídeo não carregado.');
 
-      setStatusMessage('Detectando notas musicais e dinâmicas pelo áudio...');
-      const audioResult: AudioTranscriptionResult = await transcribeAudioBufferToNotes(audioBuffer, {
-        bpm: autoApplyBpm ? undefined : currentBpm,
-        sensitivity,
-        startTime: cropStartTime,
-        endTime: effEndTime,
-        onProgress: (p, stage) => {
-          const scaled = isVideo && transcriptionMode === 'hybrid' ? p * 0.5 : p;
-          setProgress(scaled);
-          setStatusMessage(stage);
-        },
-      });
+        // Estimate BPM if audio is present and autoApplyBpm is on
+        let effectiveBpm = currentBpm;
+        if (autoApplyBpm) {
+          try {
+            const audioBuffer = await extractAudioBufferFromFile(selectedFile);
+            effectiveBpm = estimateBpmFromAudioBuffer(audioBuffer, cropStartTime, effEndTime);
+          } catch {
+            effectiveBpm = currentBpm;
+          }
+        }
 
-      const effectiveBpm = audioResult.detectedBpm || currentBpm;
-
-      // 2. Video Computer Vision Phase (if video & hybrid mode selected)
-      if (isVideo && transcriptionMode === 'hybrid' && videoRef.current) {
-        setStatusMessage('Iniciando leitura dos frames do teclado do vídeo...');
-        const videoElement = videoRef.current;
-
-        const videoScanResult = await scanVideoFrames(videoElement, {
+        setStatusMessage('Lendo barras coloridas do teclado no vídeo...');
+        const videoScanResult = await scanVideoFrames(videoRef.current, {
           scanlineYRatio: scanlineY / 100,
           keyboardXStartRatio: keyboardXStart / 100,
           keyboardXEndRatio: keyboardXEnd / 100,
           brightnessThreshold,
           minSaturation,
-          fps: 12,
+          fps: 10,
           startTime: cropStartTime,
           endTime: effEndTime,
           colorMode,
@@ -535,30 +529,68 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
           hand2Color: hexToRgb(hand2ColorHex),
           splitPitch,
           onProgress: (p, stage) => {
-            setProgress(0.5 + p * 0.4);
+            setProgress(p);
             setStatusMessage(stage);
           },
         });
 
-        setStatusMessage('Cruzando notas do áudio com visão computacional...');
-        const fused = fuseAudioAndVisionNotes(
-          audioResult.notes,
-          videoScanResult.visualNotes,
-          effectiveBpm,
-          TICKS_PER_BEAT,
-          splitPitch
-        );
+        const ticksPerSecond = (effectiveBpm * TICKS_PER_BEAT) / 60;
+        const rightHandNotes: Note[] = [];
+        const leftHandNotes: Note[] = [];
+        const allNotes: Note[] = [];
+
+        for (let i = 0; i < videoScanResult.visualNotes.length; i++) {
+          const v = videoScanResult.visualNotes[i];
+          const startTick = Math.max(0, Math.round(v.startSec * ticksPerSecond));
+          const durationTicks = Math.max(60, Math.round((v.endSec - v.startSec) * ticksPerSecond));
+          const note: Note = {
+            id: `vnote-${Date.now()}-${i}`,
+            trackId: '',
+            pitch: v.pitch,
+            startTick,
+            durationTicks,
+            velocity: 90,
+          };
+          allNotes.push(note);
+          if (v.hand === 'right') {
+            rightHandNotes.push(note);
+          } else {
+            leftHandNotes.push(note);
+          }
+        }
+
+        rightHandNotes.sort((a, b) => a.startTick - b.startTick || a.pitch - b.pitch);
+        leftHandNotes.sort((a, b) => a.startTick - b.startTick || a.pitch - b.pitch);
+        allNotes.sort((a, b) => a.startTick - b.startTick || a.pitch - b.pitch);
 
         setTranscriptionResult({
-          rightHandNotes: fused.rightHandNotes,
-          leftHandNotes: fused.leftHandNotes,
-          allNotes: fused.allNotes,
+          rightHandNotes,
+          leftHandNotes,
+          allNotes,
           detectedBpm: effectiveBpm,
-          durationSec: audioResult.durationSeconds,
-          matchedVisualCount: fused.matchedVisualCount,
+          durationSec: (effEndTime || videoDuration) - cropStartTime,
+          matchedVisualCount: allNotes.length,
+          mode: 'video-only',
         });
-      } else {
-        // Audio-only mode: separate hands by Middle C (or splitPitch) heuristic
+      }
+      // MODE 2: SOMENTE ÁUDIO
+      else if (transcriptionMode === 'audio-only') {
+        setStatusMessage('Extraindo e decodificando áudio via Web Audio API...');
+        const audioBuffer = await extractAudioBufferFromFile(selectedFile);
+
+        setStatusMessage('Detectando notas musicais e dinâmicas pelo áudio...');
+        const audioResult: AudioTranscriptionResult = await transcribeAudioBufferToNotes(audioBuffer, {
+          bpm: autoApplyBpm ? undefined : currentBpm,
+          sensitivity,
+          startTime: cropStartTime,
+          endTime: effEndTime,
+          onProgress: (p, stage) => {
+            setProgress(p);
+            setStatusMessage(stage);
+          },
+        });
+
+        const effectiveBpm = audioResult.detectedBpm || currentBpm;
         const rightNotes: Note[] = [];
         const leftNotes: Note[] = [];
         for (const n of audioResult.notes) {
@@ -576,7 +608,88 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
           detectedBpm: effectiveBpm,
           durationSec: audioResult.durationSeconds,
           matchedVisualCount: 0,
+          mode: 'audio-only',
         });
+      }
+      // MODE 3: HÍBRIDO (ÁUDIO + VÍDEO)
+      else {
+        setStatusMessage('Extraindo e decodificando áudio via Web Audio API...');
+        const audioBuffer = await extractAudioBufferFromFile(selectedFile);
+
+        setStatusMessage('Detectando notas musicais e dinâmicas pelo áudio...');
+        const audioResult: AudioTranscriptionResult = await transcribeAudioBufferToNotes(audioBuffer, {
+          bpm: autoApplyBpm ? undefined : currentBpm,
+          sensitivity,
+          startTime: cropStartTime,
+          endTime: effEndTime,
+          onProgress: (p, stage) => {
+            setProgress(p * 0.45);
+            setStatusMessage(stage);
+          },
+        });
+
+        const effectiveBpm = audioResult.detectedBpm || currentBpm;
+
+        if (isVideo && videoRef.current) {
+          setStatusMessage('Lendo barras coloridas do teclado no vídeo...');
+          const videoScanResult = await scanVideoFrames(videoRef.current, {
+            scanlineYRatio: scanlineY / 100,
+            keyboardXStartRatio: keyboardXStart / 100,
+            keyboardXEndRatio: keyboardXEnd / 100,
+            brightnessThreshold,
+            minSaturation,
+            fps: 10,
+            startTime: cropStartTime,
+            endTime: effEndTime,
+            colorMode,
+            hand1Color: hexToRgb(hand1ColorHex),
+            hand2Color: hexToRgb(hand2ColorHex),
+            splitPitch,
+            onProgress: (p, stage) => {
+              setProgress(0.45 + p * 0.45);
+              setStatusMessage(stage);
+            },
+          });
+
+          setStatusMessage('Cruzando notas do áudio com visão computacional...');
+          const fused = fuseAudioAndVisionNotes(
+            audioResult.notes,
+            videoScanResult.visualNotes,
+            effectiveBpm,
+            TICKS_PER_BEAT,
+            splitPitch
+          );
+
+          setTranscriptionResult({
+            rightHandNotes: fused.rightHandNotes,
+            leftHandNotes: fused.leftHandNotes,
+            allNotes: fused.allNotes,
+            detectedBpm: effectiveBpm,
+            durationSec: audioResult.durationSeconds,
+            matchedVisualCount: fused.matchedVisualCount,
+            mode: 'hybrid',
+          });
+        } else {
+          const rightNotes: Note[] = [];
+          const leftNotes: Note[] = [];
+          for (const n of audioResult.notes) {
+            if (n.pitch >= splitPitch) {
+              rightNotes.push(n);
+            } else {
+              leftNotes.push(n);
+            }
+          }
+
+          setTranscriptionResult({
+            rightHandNotes: rightNotes,
+            leftHandNotes: leftNotes,
+            allNotes: audioResult.notes,
+            detectedBpm: effectiveBpm,
+            durationSec: audioResult.durationSeconds,
+            matchedVisualCount: 0,
+            mode: 'audio-only',
+          });
+        }
       }
 
       setProgress(1.0);
@@ -1075,7 +1188,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
           )}
 
           {/* Color Picker & Hand Separation Section */}
-          {isVideo && transcriptionMode === 'hybrid' && (
+          {isVideo && transcriptionMode !== 'audio-only' && (
             <div className="bg-stone-900/60 border border-[#2d2722] rounded-xl p-3.5 space-y-3.5">
               <div className="flex items-center justify-between">
                 <span className="font-semibold text-amber-400 flex items-center gap-1.5">
@@ -1260,7 +1373,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
             {/* Mode & Split Hands */}
             <div className="bg-stone-900/50 border border-[#2d2722] rounded-xl p-3.5 space-y-3">
               <span className="font-semibold text-stone-300 block">Modo de Conversão</span>
-              <div className="space-y-2">
+              <div className="space-y-2.5">
                 <label className="flex items-start gap-2.5 cursor-pointer">
                   <input
                     type="radio"
@@ -1273,10 +1386,33 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
                   />
                   <div>
                     <span className="font-medium text-stone-200">
-                      Híbrido (Áudio + Visão Computacional)
+                      Híbrido (Áudio + Vídeo)
                     </span>
                     <p className="text-[11px] text-stone-400">
-                      Ideal para Synthesia: mantém todas as notas do áudio e separa as mãos através da cor das barras.
+                      Combina o ritmo e dinâmicas do áudio com a separação precisa de mãos pelas cores das barras do vídeo.
+                    </p>
+                  </div>
+                </label>
+
+                <label className="flex items-start gap-2.5 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="transcriptionMode"
+                    value="video-only"
+                    checked={transcriptionMode === 'video-only'}
+                    onChange={() => setTranscriptionMode('video-only')}
+                    disabled={!isVideo}
+                    className="mt-0.5 accent-amber-500"
+                  />
+                  <div>
+                    <span className="font-medium text-stone-200 flex items-center gap-1.5">
+                      Apenas Vídeo (Visão Computacional)
+                      <span className="px-1 py-0.2 rounded text-[9px] bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                        DIRETO DO TECLADO
+                      </span>
+                    </span>
+                    <p className="text-[11px] text-stone-400">
+                      Lê 100% das notas diretamente das barras caindo no teclado do vídeo. Ideal para validar calibração e cores.
                     </p>
                   </div>
                 </label>
@@ -1390,11 +1526,20 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
           {/* Transcription Results Preview Card */}
           {transcriptionResult && (
             <div className="bg-emerald-950/20 border border-emerald-500/40 rounded-xl p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-emerald-400 flex items-center gap-1.5">
-                  <CheckCircle2 className="w-4 h-4" />
-                  Transcrição Concluída com Sucesso!
-                </span>
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-emerald-400 flex items-center gap-1.5">
+                    <CheckCircle2 className="w-4 h-4" />
+                    Transcrição Concluída com Sucesso!
+                  </span>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                    {transcriptionResult.mode === 'video-only'
+                      ? 'SOMENTE VÍDEO'
+                      : transcriptionResult.mode === 'audio-only'
+                      ? 'SOMENTE ÁUDIO'
+                      : 'HÍBRIDO (ÁUDIO + VÍDEO)'}
+                  </span>
+                </div>
                 <span className="font-mono text-xs text-stone-300">
                   Andamento: <strong className="text-amber-400">{transcriptionResult.detectedBpm} BPM</strong>
                 </span>
@@ -1415,10 +1560,18 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
                 </div>
                 <div className="bg-stone-900/60 p-2 rounded-lg border border-stone-800">
                   <span className="text-[10px] text-stone-400 block font-sans">
-                    {isVideo ? 'Sincronizadas com Vídeo' : 'Notas Filtradas'}
+                    {transcriptionResult.mode === 'video-only'
+                      ? 'Lidas do Vídeo'
+                      : transcriptionResult.mode === 'hybrid'
+                      ? 'Sincronizadas Vídeo'
+                      : 'Modo Áudio'}
                   </span>
                   <span className="text-sm font-bold text-amber-400">
-                    {isVideo ? transcriptionResult.matchedVisualCount : transcriptionResult.allNotes.length}
+                    {transcriptionResult.mode === 'video-only'
+                      ? transcriptionResult.allNotes.length
+                      : transcriptionResult.mode === 'hybrid'
+                      ? transcriptionResult.matchedVisualCount
+                      : 'Por Registro'}
                   </span>
                 </div>
               </div>

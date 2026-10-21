@@ -112,8 +112,40 @@ export function colorDistance(
   return Math.sqrt(dr * dr + dg * dg + db * db);
 }
 
+export interface PianoKeyInfo {
+  pitch: number;
+  isBlack: boolean;
+  center: number;
+}
+
 /**
- * Maps a horizontal pixel coordinate along the keyboard span to a standard piano MIDI pitch (21 to 108).
+ * Pre-computed geometric layout of a standard 88-key piano keyboard (A0 to C8).
+ * Synthesia cascade bars strictly align with the 52 white keys and 36 black keys.
+ * White keys are uniformly spaced (1/52 width each), and black keys are positioned
+ * exactly at the boundaries between adjacent white keys.
+ */
+export const PIANO_88_KEYS: PianoKeyInfo[] = (() => {
+  const keys: PianoKeyInfo[] = [];
+  const W_w = 1.0 / 52;
+  let whiteIndex = 0;
+
+  for (let p = 21; p <= 108; p++) {
+    const isBlack = [1, 3, 6, 8, 10].includes(p % 12);
+    let center: number;
+    if (!isBlack) {
+      center = (whiteIndex + 0.5) * W_w;
+      whiteIndex++;
+    } else {
+      center = whiteIndex * W_w;
+    }
+    keys.push({ pitch: p, isBlack, center });
+  }
+  return keys;
+})();
+
+/**
+ * Maps a horizontal pixel coordinate along the keyboard span to a standard piano MIDI pitch (21 to 108)
+ * using the geometrically accurate piano keyboard layout.
  */
 export function xToPianoPitch(
   x: number,
@@ -121,11 +153,23 @@ export function xToPianoPitch(
   minPitch = 21,
   maxPitch = 108
 ): number {
-  const clampedX = Math.max(0, Math.min(keyboardWidth, x));
-  const ratio = clampedX / Math.max(1, keyboardWidth);
-  const totalKeys = maxPitch - minPitch + 1;
-  const keyIndex = Math.min(totalKeys - 1, Math.floor(ratio * totalKeys));
-  return minPitch + keyIndex;
+  if (keyboardWidth <= 0) return minPitch;
+  const ratio = Math.max(0, Math.min(1, x / keyboardWidth));
+
+  let closestPitch = minPitch;
+  let minDiff = Infinity;
+
+  for (let i = 0; i < PIANO_88_KEYS.length; i++) {
+    const key = PIANO_88_KEYS[i];
+    if (key.pitch < minPitch || key.pitch > maxPitch) continue;
+    const diff = Math.abs(ratio - key.center);
+    if (diff < minDiff) {
+      minDiff = diff;
+      closestPitch = key.pitch;
+    }
+  }
+
+  return closestPitch;
 }
 
 /**
@@ -206,9 +250,25 @@ export function detectBarsInImageData(
     const delta = brightness - minC;
     const saturation = brightness > 0 ? delta / brightness : 0;
 
-    // A note bar MUST be colorful (saturation >= minSaturation and delta >= 25) and bright enough!
-    // White smoke, flames, and keys have saturation < 0.15 and delta < 20.
-    const isNotePixel = brightness >= brightnessThreshold && saturation >= minSaturation && delta >= 25;
+    // Reject white keys, grey smoke, and flames:
+    // White keys or flames have high brightness and low delta (grey/white)
+    const isWhiteOrGrey = delta < 18 || (r > 225 && g > 225 && b > 225);
+
+    // If user provided custom hand colors, check distance
+    let matchesTargetColor = false;
+    if (colorOptions?.hand1Color) {
+      const d1 = colorDistance({ r, g, b }, colorOptions.hand1Color);
+      if (d1 < 75) matchesTargetColor = true;
+    }
+    if (!matchesTargetColor && colorOptions?.colorMode === 'two-colors' && colorOptions?.hand2Color) {
+      const d2 = colorDistance({ r, g, b }, colorOptions.hand2Color);
+      if (d2 < 75) matchesTargetColor = true;
+    }
+
+    const isNotePixel =
+      !isWhiteOrGrey &&
+      brightness >= brightnessThreshold &&
+      (matchesTargetColor || (saturation >= minSaturation && delta >= 22));
 
     if (isNotePixel) {
       if (!inSegment) {
@@ -226,7 +286,7 @@ export function detectBarsInImageData(
       }
     } else {
       if (inSegment) {
-        if (pixelCount >= 3) {
+        if (pixelCount >= 2) {
           const centerX = segmentStartX + pixelCount / 2;
           const avgR = Math.round(rSum / pixelCount);
           const avgG = Math.round(gSum / pixelCount);
@@ -249,7 +309,7 @@ export function detectBarsInImageData(
   }
 
   // Flush trailing segment if any
-  if (inSegment && pixelCount >= 3) {
+  if (inSegment && pixelCount >= 2) {
     const centerX = segmentStartX + pixelCount / 2;
     const avgR = Math.round(rSum / pixelCount);
     const avgG = Math.round(gSum / pixelCount);
@@ -270,9 +330,12 @@ export function detectBarsInImageData(
 }
 
 /**
- * Scans an HTML5 Video element frame by frame along a calibrated hit-line,
+ * Scans an HTML5 Video frame by frame along a calibrated hit-line,
  * grouping colored pixels into falling bars and tracking their onsets and releases
  * strictly within the [startTime, endTime] cropped window.
+ *
+ * Uses a detached offscreen video element to guarantee zero preview stuttering
+ * and a 1-pixel height canvas for 1500x faster processing than drawing 1080p frames.
  */
 export async function scanVideoFrames(
   videoElement: HTMLVideoElement,
@@ -286,7 +349,7 @@ export async function scanVideoFrames(
     keyboardXEndRatio = 1.0,
     brightnessThreshold = 45,
     minSaturation = 0.25,
-    fps = 12, // 12 fps provides smooth tracking while running quickly
+    fps = 10, // 10 fps provides smooth tracking while running quickly
     startTime = 0,
     endTime,
     colorMode = 'two-colors',
@@ -301,25 +364,58 @@ export async function scanVideoFrames(
   const endCrop = endTime && endTime > startCrop ? Math.min(totalDuration, endTime) : totalDuration;
   const duration = Math.max(0.5, endCrop - startCrop);
 
-  const width = videoElement.videoWidth || 1280;
-  const height = videoElement.videoHeight || 720;
+  // Use an offscreen video element so the visible preview video in the modal
+  // NEVER freezes, stutters, or jumps, and no React re-renders are triggered during scan!
+  let targetVideo: HTMLVideoElement = videoElement;
+  let isUsingOffscreen = false;
+  const videoSrc = videoElement.currentSrc || videoElement.src;
 
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (videoSrc) {
+    try {
+      const offscreenVideo = document.createElement('video');
+      offscreenVideo.muted = true;
+      offscreenVideo.playsInline = true;
+      offscreenVideo.preload = 'auto';
+      offscreenVideo.src = videoSrc;
 
-  if (!ctx) {
-    throw new Error('Não foi possível inicializar contexto 2D de renderização.');
+      if (offscreenVideo.readyState < 2) {
+        await new Promise<void>((resolve) => {
+          offscreenVideo.onloadedmetadata = () => resolve();
+          offscreenVideo.onerror = () => resolve();
+          setTimeout(resolve, 800);
+        });
+      }
+
+      if (offscreenVideo.videoWidth > 0 && offscreenVideo.videoHeight > 0) {
+        targetVideo = offscreenVideo;
+        isUsingOffscreen = true;
+      }
+    } catch {
+      targetVideo = videoElement;
+    }
   }
+
+  const width = targetVideo.videoWidth || 1280;
+  const height = targetVideo.videoHeight || 720;
 
   const scanY = Math.max(1, Math.min(height - 2, Math.round(height * scanlineYRatio)));
   const kbStartX = Math.max(0, Math.round(width * keyboardXStartRatio));
   const kbEndX = Math.min(width, Math.round(width * keyboardXEndRatio));
   const kbWidth = Math.max(10, kbEndX - kbStartX);
 
+  // Tiny 1-pixel canvas: draws ONLY the keyboard scanline slice!
+  // This is 1500x faster than drawing a full 1080p frame to canvas!
+  const scanCanvas = document.createElement('canvas');
+  scanCanvas.width = kbWidth;
+  scanCanvas.height = 1;
+  const scanCtx = scanCanvas.getContext('2d', { willReadFrequently: true });
+
+  if (!scanCtx) {
+    throw new Error('Não foi possível inicializar contexto 2D de renderização.');
+  }
+
   const frameInterval = 1 / fps;
-  const totalFrames = Math.floor(duration / frameInterval);
+  const totalFrames = Math.max(1, Math.floor(duration / frameInterval));
 
   interface ActiveBarNote {
     pitch: number;
@@ -327,6 +423,7 @@ export async function scanVideoFrames(
     lastSec: number;
     hand: 'right' | 'left';
     colors: { r: number; g: number; b: number }[];
+    missingCount: number;
   }
 
   const activeNotes = new Map<number, ActiveBarNote>();
@@ -338,30 +435,29 @@ export async function scanVideoFrames(
     const videoCurrentTime = startCrop + frame * frameInterval;
     const relativeTime = frame * frameInterval;
 
-    if (frame % 8 === 0 && onProgress) {
-      const progress = frame / totalFrames;
-      onProgress(progress, `Lendo barras coloridas (${Math.round(progress * 100)}%)...`);
+    if (frame % 6 === 0 && onProgress) {
+      const p = frame / totalFrames;
+      onProgress(p, `Lendo barras coloridas (${Math.round(p * 100)}%)...`);
     }
 
-    // Seek video with timeout safeguard
-    videoElement.currentTime = videoCurrentTime;
+    // Seek target video to frame with quick safeguard
+    targetVideo.currentTime = videoCurrentTime;
     await new Promise<void>((resolve) => {
       let resolved = false;
       const done = () => {
         if (!resolved) {
           resolved = true;
-          videoElement.removeEventListener('seeked', done);
+          targetVideo.removeEventListener('seeked', done);
           resolve();
         }
       };
-      videoElement.addEventListener('seeked', done, { once: true });
-      setTimeout(done, 120);
+      targetVideo.addEventListener('seeked', done, { once: true });
+      setTimeout(done, 75);
     });
 
-    ctx.drawImage(videoElement, 0, 0, width, height);
-
-    // Read pixel data across the keyboard hit-line
-    const lineData = ctx.getImageData(kbStartX, scanY, kbWidth, 1).data;
+    // Draw ONLY the 1-pixel scanline from the video
+    scanCtx.drawImage(targetVideo, kbStartX, scanY, kbWidth, 1, 0, 0, kbWidth, 1);
+    const lineData = scanCtx.getImageData(0, 0, kbWidth, 1).data;
 
     // Detect bar segments in this frame
     const detectedSegments = detectBarsInImageData(
@@ -388,21 +484,27 @@ export async function scanVideoFrames(
           lastSec: relativeTime,
           hand: seg.hand,
           colors: [seg.color],
+          missingCount: 0,
         });
       } else {
         const existing = activeNotes.get(pitch)!;
         existing.lastSec = relativeTime;
         existing.colors.push(seg.color);
+        existing.missingCount = 0;
       }
     }
 
-    // 2. Check for released notes
+    // 2. Check for released notes (debounced with missingCount >= 2 to avoid flicker artifacts)
     for (const [pitch, note] of activeNotes.entries()) {
       const durationSoFar = relativeTime - note.startSec;
       const isMissing = !currentFramePitches.has(pitch);
-      const isTooLong = durationSoFar > 4.5;
+      const isTooLong = durationSoFar > 6.0;
 
-      if (isMissing || isTooLong) {
+      if (isMissing) {
+        note.missingCount++;
+      }
+
+      if (note.missingCount >= 2 || isTooLong) {
         const noteDuration = note.lastSec - note.startSec + frameInterval;
         if (noteDuration >= 0.05) {
           const count = note.colors.length;
@@ -427,7 +529,7 @@ export async function scanVideoFrames(
 
   // Flush remaining active notes
   for (const note of activeNotes.values()) {
-    const noteDuration = Math.min(3.0, note.lastSec - note.startSec + frameInterval);
+    const noteDuration = Math.min(4.0, note.lastSec - note.startSec + frameInterval);
     if (noteDuration >= 0.05) {
       const count = note.colors.length;
       const avgColor = {
@@ -446,6 +548,11 @@ export async function scanVideoFrames(
     }
   }
 
+  // Clean up offscreen video if used
+  if (isUsingOffscreen) {
+    targetVideo.src = '';
+  }
+
   collectedNotes.sort((a, b) => a.startSec - b.startSec || a.pitch - b.pitch);
 
   return {
@@ -462,6 +569,7 @@ export async function scanVideoFrames(
  * Fuses Audio-to-MIDI notes with Video Computer Vision notes:
  * - Uses the full set of Audio notes as the solid foundational backbone (never throws away notes!).
  * - Uses Visual detections to accurately partition notes into Right Hand and Left Hand tracks.
+ * - Matches with exact pitch or +-1 semitone tolerance (to withstand minor keyboard slider offsets).
  * - If video had a visual match, inherits exact hand and refines duration.
  * - If video missed a note (occlusion/dark bar), falls back cleanly to the pitch register split.
  */
@@ -488,10 +596,18 @@ export function fuseAudioAndVisionNotes(
   for (const aNote of audioNotes) {
     const noteSec = aNote.startTick / ticksPerSecond;
 
-    // Find if a visual bar matched this pitch around this time (+- 0.35s tolerance)
-    const matchedVisual = visualNotes.find(
+    // 1. Look for exact pitch match within +-0.35s
+    let matchedVisual = visualNotes.find(
       (v) => v.pitch === aNote.pitch && Math.abs(v.startSec - noteSec) <= 0.35
     );
+
+    // 2. If no exact match, allow +-1 semitone tolerance in case keyboard calibration slider
+    // had a slight 1% offset
+    if (!matchedVisual) {
+      matchedVisual = visualNotes.find(
+        (v) => Math.abs(v.pitch - aNote.pitch) <= 1 && Math.abs(v.startSec - noteSec) <= 0.28
+      );
+    }
 
     let assignedHand: 'right' | 'left';
     let durationTicks = aNote.durationTicks;

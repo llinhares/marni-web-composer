@@ -144,3 +144,45 @@ test('detectBarsInImageData ignores white smoke and detects colorful Synthesia b
   assert.equal(segments[0].hand, 'right', 'First segment (Green) should be right hand');
   assert.equal(segments[1].hand, 'left', 'Second segment (Blue) should be left hand');
 });
+
+test('xToPianoPitch accurately maps chromatic notes around Middle C using piano geometry', () => {
+  const keyboardWidth = 1000;
+  // In an 88-key piano, Middle C (60) is the 24th white key (index 23 out of 52)
+  // Center is at (23.5 / 52) * 1000 = ~451.9px
+  assert.equal(xToPianoPitch(452, keyboardWidth), 60);
+
+  // C#4 (61) sits right on the boundary between C4 (23) and D4 (24) -> (24 / 52) * 1000 = ~461.5px
+  assert.equal(xToPianoPitch(461.5, keyboardWidth), 61);
+
+  // D4 (62) is the 25th white key (index 24) -> (24.5 / 52) * 1000 = ~471.2px
+  assert.equal(xToPianoPitch(471, keyboardWidth), 62);
+});
+
+test('fuseAudioAndVisionNotes matches with +-1 semitone tolerance when calibration has minor offset', () => {
+  const audioNotes: Note[] = [
+    {
+      id: 'a1',
+      trackId: '',
+      pitch: 60, // Audio heard Middle C
+      startTick: 480,
+      durationTicks: 480,
+      velocity: 100,
+    },
+  ];
+
+  // Visual detected pitch 61 due to slight keyboard slider shift
+  const visualNotes: VisualNoteEvent[] = [
+    {
+      pitch: 61,
+      startSec: 0.5,
+      endSec: 1.0,
+      hand: 'right',
+      color: { r: 34, g: 197, b: 94 },
+    },
+  ];
+
+  const result = fuseAudioAndVisionNotes(audioNotes, visualNotes, 120);
+  assert.equal(result.allNotes.length, 1);
+  assert.equal(result.matchedVisualCount, 1, 'Should match within +-1 semitone tolerance');
+  assert.equal(result.rightHandNotes.length, 1, 'Should assign to right hand from visual note');
+});
