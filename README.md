@@ -1,17 +1,13 @@
 # Marni Web Composer 🎵
 
-![React](https://img.shields.io/badge/react-%2320232a.svg?style=for-the-badge&logo=react&logoColor=%2361DAFB) ![TypeScript](https://img.shields.io/badge/typescript-%23007ACC.svg?style=for-the-badge&logo=typescript&logoColor=white) ![TailwindCSS](https://img.shields.io/badge/tailwindcss-%2338B2AC.svg?style=for-the-badge&logo=tailwind-css&logoColor=white) ![Tone.js](https://img.shields.io/badge/Tone.js-000000?style=for-the-badge&logo=javascript&logoColor=white) ![Zustand](https://img.shields.io/badge/Zustand-4A4A55?style=for-the-badge&logo=react&logoColor=white)
+![React](https://img.shields.io/badge/react-%2320232a.svg?style=for-the-badge&logo=react&logoColor=%2361DAFB) ![TypeScript](https://img.shields.io/badge/typescript-%23007ACC.svg?style=for-the-badge&logo=typescript&logoColor=white) ![TailwindCSS](https://img.shields.io/badge/tailwindcss-%2338B2AC.svg?style=for-the-badge&logo=tailwind-css&logoColor=white) ![Web Audio API](https://img.shields.io/badge/Web%20Audio%20API-FFA500?style=for-the-badge&logo=soundcharts&logoColor=white) ![HTML5 Canvas](https://img.shields.io/badge/HTML5%20Canvas-E34F26?style=for-the-badge&logo=html5&logoColor=white) ![Vite](https://img.shields.io/badge/Vite-646CFF?style=for-the-badge&logo=vite&logoColor=white)
 
-An advanced, open-source, and responsive web composer focused on creating, editing, and exporting musical scores for **Black Desert Online (BDO)**.
-
-> ⚠️ **Work in Progress:**  
-> Currently, the Piano instrument is the most complete and stable implementation.  
-> Other instruments are still under active development and may have incomplete mappings, playback inconsistencies, or missing sample libraries.
+An advanced, open-source, and responsive web-based digital audio workstation (DAW) and music composer specifically tailored for creating, editing, and exporting musical scores for **Black Desert Online (BDO)**.
 
 ---
 <p align="center">
   <a href="https://lucaslinhares.dev.br/marni-web-composer" target="_blank">
-    <img src="https://img.shields.io/badge/Live%20Demo-Open%20Project-8A2BE2?style=for-the-badge&logo=vercel&logoColor=white" />
+    <img src="https://img.shields.io/badge/Live%20Demo-Open%20Project-8A2BE2?style=for-the-badge&logo=vercel&logoColor=white" alt="Live Demo" />
   </a>
 </p>
 
@@ -19,12 +15,16 @@ An advanced, open-source, and responsive web composer focused on creating, editi
 
 ## ✨ Features
 
-- **Professional Piano Roll**: Easily draw, drag, resize, and delete notes with Pencil and Selection tools.
-- **Multiple Instruments**: Support for various instruments (Piano, Acoustic Guitar, Flute, Harp, Drum Kit, etc.) mapped directly to the native BDO engine.
-- **Realistic Audio Engine**: Uses Tone.js combined with real audio samples (`.flac`, `.wav`, `.mp3`) for high-fidelity browser playback.
-- **Smart MIDI Import**: Upload generic `.mid` files and the application will automatically map tracks to the corresponding instruments.
-- **Direct BDO Export**: Native conversion algorithm that compiles browser tracks directly into the binary format read by the game, featuring Velocity Compression and Transpose options.
-- **Global Effects (Effector)**: Fine-tune Reverb, Delay, and Chorus in real-time.
+- **High-Performance HTML5 Canvas Piano Roll**: Ultra-smooth rendering with automatic device pixel ratio (Retina/High-DPI) scaling, marquee selection, note dragging, proportional stretching (0.5x, 2x), transposition, and ghost notes.
+- **Undo / Redo Action Stack**: Comprehensive history tracking with keyboard shortcuts (<kbd>Ctrl</kbd>+<kbd>Z</kbd>, <kbd>Ctrl</kbd>+<kbd>Y</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd>) and dedicated toolbar buttons.
+- **Pure Web Audio API Synthesis Engine**: Procedural and algorithmic synthesis for all 10 BDO instruments (Grand Piano, Flute, Violin, Percussion, Acoustic Guitar, Acoustic Bass, Harp, Trumpet, Cello, and Marnisynth) with instant loading and zero network overhead.
+- **Jitter-Free Worker Timer**: Dedicated background Web Worker timer via inline Blob URL combined with lookahead scheduling (150ms) to eliminate browser tab throttling and audio drift.
+- **Native BDO Percussion Mapping**: Dedicated drum row watermarks, color coding, and quick audition pads mapped to authentic Black Desert drum pieces (Kick, Snare, Rimshot, Flam, Closed/Open Hi-Hats, Pedal, Toms 1–5, Crash, and Ride).
+- **Direct BDO Binary Export (`.bms`)**: Pure TypeScript implementation of the game's proprietary ICE encryption cipher. Supports automatic extraction of Owner ID and Character Name from existing game files, note rank limits (Rank F to S), velocity compression modes, and chunk note partitioning.
+- **Smart Standard MIDI Import & Export**: Pure TypeScript SMF (Format 0 and Format 1) decoder and encoder. Automatically detects tempo (BPM), time signatures, General MIDI instruments, and ensures the drum track is mapped to MIDI Channel 10 (channel 9).
+- **Web MIDI Hardware Support**: Plug-and-play support for external USB MIDI keyboards and controllers for live auditioning.
+- **Lossless Master Audio Exporter**: Fast multitrack rendering using `OfflineAudioContext` directly to 24-bit (48kHz) Studio Master and 16-bit (44.1kHz) CD-quality Lossless PCM WAV audio.
+- **Master Effector Rack**: Real-time Reverb (convolver impulse), Stereo Feedback Delay, and LFO Chorus DSP rack.
 
 ---
 
@@ -33,7 +33,7 @@ An advanced, open-source, and responsive web composer focused on creating, editi
 ### Prerequisites
 
 - Node.js (v18 or higher)
-- npm, yarn, or pnpm
+- npm, pnpm, or yarn
 
 ### Installation
 
@@ -49,33 +49,39 @@ git clone https://github.com/llinhares/marni-web-composer.git
 cd marni-web-composer
 ```
 
-3. Install the dependencies:
+3. Install dependencies:
 
 ```bash
 npm install
-
-# or
-
-yarn install
 ```
 
 4. Start the development server:
 
 ```bash
 npm run dev
-
-# or
-
-yarn dev
 ```
 
-5. Open the following URL in your browser:
+5. Open the local address in your browser:
 
 ```txt
 http://localhost:3000
 ```
 
-> **Note:** For all instruments to sound correctly locally, make sure the audio samples are placed in the `/public/samples/` folder according to the directory structure defined in the code.
+### Running Tests
+
+Execute the native test suite covering MIDI encoding/decoding, BDO conversion, and music mathematics:
+
+```bash
+npm test
+```
+
+### Building for Production
+
+Compile and bundle the production assets:
+
+```bash
+npm run build
+```
 
 ---
 
@@ -83,15 +89,13 @@ http://localhost:3000
 
 ```txt
 src/
-├── components/          # React Components (UI)
-│   ├── controls/        # Modals (Effector, BDO Export, Instruments, Onboarding)
-│   ├── layout/          # Main layout (Header, Sidebar)
-│   └── piano-roll/      # The core editor (Grid, Notes built with Konva.js)
-├── core/
-│   └── audio/           # Audio engine (ToneEngine.js) integrating Tone.js and samples
-├── store/               # Global state management using Zustand
-├── types/               # TypeScript type definitions
-└── utils/               # Utility functions (BDO Export, Constants, Conversions)
+├── audio/               # Web Audio API engine, DSP fx & WorkerTimer scheduler
+├── bdo/                 # BDO ICE cipher, BMS binary exporter & XML/MML converter
+├── components/          # React components (PianoRoll, Header, TrackList, BottomBar, Modals)
+├── export/              # OfflineAudioContext multitrack renderer & WAV PCM encoder
+├── midi/                # Pure TypeScript Standard MIDI File decoder, encoder & Web MIDI manager
+├── types/               # Music domain, track, and score TypeScript definitions
+└── utils/               # Music theory math, scale calculations, drum mapping & timecodes
 ```
 
 ---
@@ -100,7 +104,7 @@ src/
 
 Contributions are more than welcome!
 
-Feel free to open Issues reporting bugs, suggesting improvements, or submit Pull Requests with new features (such as support for new instruments or visualizer optimizations).
+Feel free to open Issues reporting bugs or feature requests, or submit Pull Requests with improvements (such as new visualizers, workflow tools, or musical enhancements).
 
 ---
 
