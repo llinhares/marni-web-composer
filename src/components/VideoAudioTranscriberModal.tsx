@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   X,
   Video,
@@ -30,10 +30,10 @@ import {
 import {
   scanVideoFrames,
   fuseAudioAndVisionNotes,
-  detectBarsInImageData,
+  detectBarsFromVideoContext,
   hexToRgb,
   rgbToHex,
-  VisualNoteEvent,
+  DetectedBarSegment,
 } from '../utils/videoScanner.ts';
 import { pitchToNoteName, formatTimecode } from '../utils/musicMath.ts';
 
@@ -109,11 +109,11 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
   const [hoveredColor, setHoveredColor] = useState<{ r: number; g: number; b: number; x: number; y: number } | null>(null);
 
   // Video Calibration
-  const [scanlineY, setScanlineY] = useState<number>(68); // 68% from top
+  const [scanlineY, setScanlineY] = useState<number>(64); // 64% from top (above white smoke)
   const [keyboardXStart, setKeyboardXStart] = useState<number>(0); // 0% from left
   const [keyboardXEnd, setKeyboardXEnd] = useState<number>(100); // 100% from left
-  const [brightnessThreshold, setBrightnessThreshold] = useState<number>(45);
-  const [minSaturation, setMinSaturation] = useState<number>(0.28);
+  const [brightnessThreshold] = useState<number>(38);
+  const [minSaturation] = useState<number>(0.20);
   const [liveBars, setLiveBars] = useState<{ right: number; left: number }>({ right: 0, left: 0 });
 
   // Playback state
@@ -296,40 +296,66 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
     setEyedropperTarget(target);
   };
 
-  // Draw calibration overlay on video
-  useEffect(() => {
-    if (!isVideo || !fileUrl) return;
+  // Draw calibration overlay & real-time bar detections on video
+  const renderOverlay = useCallback(
+    (overrideSegments?: DetectedBarSegment[]) => {
+      if (!isVideo || !fileUrl) return;
 
-    const canvas = canvasOverlayRef.current;
-    const video = videoRef.current;
-    if (!canvas || !video) return;
+      const canvas = canvasOverlayRef.current;
+      const video = videoRef.current;
+      if (!canvas || !video) return;
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
 
-    const renderOverlay = () => {
       canvas.width = canvas.clientWidth;
       canvas.height = canvas.clientHeight;
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      const y = (scanlineY / 100) * canvas.height;
-      const x1 = (keyboardXStart / 100) * canvas.width;
-      const x2 = (keyboardXEnd / 100) * canvas.width;
+      // Account for object-contain letterboxing
+      const cWidth = canvas.width;
+      const cHeight = canvas.height;
+      const vW = video.videoWidth || 1280;
+      const vH = video.videoHeight || 720;
+      const vAspect = vW / vH;
+      const cAspect = cWidth / Math.max(1, cHeight);
+
+      let renderW = cWidth;
+      let renderH = cHeight;
+      let renderX = 0;
+      let renderY = 0;
+
+      if (cAspect > vAspect) {
+        renderW = cHeight * vAspect;
+        renderX = (cWidth - renderW) / 2;
+      } else {
+        renderH = cWidth / vAspect;
+        renderY = (cHeight - renderH) / 2;
+      }
+
+      const y = renderY + (scanlineY / 100) * renderH;
+      const stripH = Math.max(6, renderH * 0.04);
+      const x1 = renderX + (keyboardXStart / 100) * renderW;
+      const x2 = renderX + (keyboardXEnd / 100) * renderW;
+
+      // Draw shaded 4% vertical capture strip above scanline
+      ctx.fillStyle = 'rgba(245, 158, 11, 0.14)';
+      ctx.fillRect(x1, Math.max(renderY, y - stripH), x2 - x1, stripH);
 
       // Draw keyboard bounds
-      ctx.strokeStyle = 'rgba(245, 158, 11, 0.4)';
+      ctx.strokeStyle = 'rgba(245, 158, 11, 0.45)';
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 4]);
 
       ctx.beginPath();
-      ctx.moveTo(x1, 0);
-      ctx.lineTo(x1, canvas.height);
+      ctx.moveTo(x1, renderY);
+      ctx.lineTo(x1, renderY + renderH);
       ctx.stroke();
 
       ctx.beginPath();
-      ctx.moveTo(x2, 0);
-      ctx.lineTo(x2, canvas.height);
+      ctx.moveTo(x2, renderY);
+      ctx.lineTo(x2, renderY + renderH);
       ctx.stroke();
 
       // Draw active scanline
@@ -343,87 +369,92 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
 
       // Scanline label
       ctx.fillStyle = '#f59e0b';
-      ctx.font = '10px monospace';
-      ctx.fillText(`LINHA DE IMPACTO (${scanlineY}%)`, x1 + 8, y - 6);
+      ctx.font = 'bold 10px monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText(`FAIXA DE LEITURA (${scanlineY}%)`, x1 + 8, Math.max(12, y - stripH - 4));
 
       // Real-time Bar Detection Preview on current frame
       let rCount = 0;
       let lCount = 0;
+      const workW = 640;
+      const workH = 360;
+      const vKbWidth = Math.max(
+        10,
+        Math.round(workW * (keyboardXEnd / 100)) - Math.round(workW * (keyboardXStart / 100))
+      );
 
-      if (video.videoWidth > 0 && video.videoHeight > 0) {
+      let segments: DetectedBarSegment[] = [];
+      if (overrideSegments) {
+        segments = overrideSegments;
+      } else if (video.videoWidth > 0 && video.videoHeight > 0 && video.readyState >= 2) {
         try {
           const offCanvas = document.createElement('canvas');
-          offCanvas.width = video.videoWidth;
-          offCanvas.height = 1;
+          offCanvas.width = workW;
+          offCanvas.height = workH;
           const offCtx = offCanvas.getContext('2d', { willReadFrequently: true });
           if (offCtx) {
-            const vY = Math.round((scanlineY / 100) * video.videoHeight);
-            const vX1 = Math.round((keyboardXStart / 100) * video.videoWidth);
-            const vX2 = Math.round((keyboardXEnd / 100) * video.videoWidth);
-            const vKbWidth = Math.max(10, vX2 - vX1);
-
-            offCtx.drawImage(video, vX1, vY, vKbWidth, 1, 0, 0, vKbWidth, 1);
-            const lineData = offCtx.getImageData(0, 0, vKbWidth, 1).data;
-            const segments = detectBarsInImageData(
-              lineData,
-              vKbWidth,
-              21,
-              108,
+            segments = detectBarsFromVideoContext(offCtx, video, workW, workH, {
+              scanlineYRatio: scanlineY / 100,
+              keyboardXStartRatio: keyboardXStart / 100,
+              keyboardXEndRatio: keyboardXEnd / 100,
+              minPitch: 21,
+              maxPitch: 108,
               minSaturation,
               brightnessThreshold,
-              {
-                colorMode,
-                hand1Color: hexToRgb(hand1ColorHex),
-                hand2Color: hexToRgb(hand2ColorHex),
-                splitPitch,
-              }
-            );
-
-            for (const seg of segments) {
-              const canvasX = x1 + (seg.centerX / vKbWidth) * (x2 - x1);
-              const isRight = seg.hand === 'right';
-              if (isRight) rCount++;
-              else lCount++;
-
-              // Glowing indicator circle in user-configured hand color
-              ctx.fillStyle = isRight ? hand1ColorHex : hand2ColorHex;
-              ctx.beginPath();
-              ctx.arc(canvasX, y, 6, 0, 2 * Math.PI);
-              ctx.fill();
-
-              ctx.strokeStyle = '#ffffff';
-              ctx.lineWidth = 1;
-              ctx.stroke();
-
-              // Note Name badge
-              ctx.fillStyle = '#ffffff';
-              ctx.font = 'bold 9px sans-serif';
-              ctx.textAlign = 'center';
-              ctx.fillText(pitchToNoteName(seg.pitch, 'sharp'), canvasX, y - 9);
-            }
+              colorMode,
+              hand1Color: hexToRgb(hand1ColorHex),
+              hand2Color: hexToRgb(hand2ColorHex),
+              splitPitch,
+            });
           }
         } catch {
-          // ignore offscreen extraction errors on cross-origin or unloaded video
+          // ignore offscreen extraction errors on unloaded video
         }
       }
 
-      setLiveBars({ right: rCount, left: lCount });
-    };
+      for (const seg of segments) {
+        const canvasX = x1 + (seg.centerX / Math.max(1, overrideSegments ? 960 * ((keyboardXEnd - keyboardXStart) / 100) : vKbWidth)) * (x2 - x1);
+        const isRight = seg.hand === 'right';
+        if (isRight) rCount++;
+        else lCount++;
 
+        // Glowing indicator circle in user-configured hand color
+        ctx.fillStyle = isRight ? hand1ColorHex : hand2ColorHex;
+        ctx.beginPath();
+        ctx.arc(canvasX, y - stripH / 2, 6.5, 0, 2 * Math.PI);
+        ctx.fill();
+
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        // Note Name badge
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 10px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(pitchToNoteName(seg.pitch, 'sharp'), canvasX, Math.max(12, y - stripH - 4));
+      }
+
+      setLiveBars({ right: rCount, left: lCount });
+    },
+    [
+      isVideo,
+      fileUrl,
+      scanlineY,
+      keyboardXStart,
+      keyboardXEnd,
+      minSaturation,
+      brightnessThreshold,
+      colorMode,
+      hand1ColorHex,
+      hand2ColorHex,
+      splitPitch,
+    ]
+  );
+
+  useEffect(() => {
     renderOverlay();
-  }, [
-    isVideo,
-    fileUrl,
-    scanlineY,
-    keyboardXStart,
-    keyboardXEnd,
-    minSaturation,
-    brightnessThreshold,
-    colorMode,
-    hand1ColorHex,
-    hand2ColorHex,
-    splitPitch,
-  ]);
+  }, [renderOverlay, videoCurrentTime]);
 
   // Timeline Trimmer Pointer interactions (Dual handles & scrubber)
   const handleTimelinePointerDown = (
@@ -528,6 +559,9 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
           hand1Color: hexToRgb(hand1ColorHex),
           hand2Color: hexToRgb(hand2ColorHex),
           splitPitch,
+          onFrameDetections: (segments) => {
+            renderOverlay(segments);
+          },
           onProgress: (p, stage) => {
             setProgress(p);
             setStatusMessage(stage);
@@ -645,6 +679,9 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
             hand1Color: hexToRgb(hand1ColorHex),
             hand2Color: hexToRgb(hand2ColorHex),
             splitPitch,
+            onFrameDetections: (segments) => {
+              renderOverlay(segments);
+            },
             onProgress: (p, stage) => {
               setProgress(0.45 + p * 0.45);
               setStatusMessage(stage);
@@ -905,8 +942,10 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
                   onTimeUpdate={() => {
                     if (videoRef.current) {
                       const cur = videoRef.current.currentTime;
-                      setVideoCurrentTime(cur);
-                      if (cropEndTime > cropStartTime && cur >= cropEndTime && isVideoPlaying) {
+                      if (!isProcessing) {
+                        setVideoCurrentTime(cur);
+                      }
+                      if (!isProcessing && cropEndTime > cropStartTime && cur >= cropEndTime && isVideoPlaying) {
                         videoRef.current.pause();
                         setIsVideoPlaying(false);
                         videoRef.current.currentTime = cropStartTime;
@@ -920,6 +959,13 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
                       setCropStartTime(0);
                       setCropEndTime(dur);
                     }
+                  }}
+                  onLoadedData={() => renderOverlay()}
+                  onSeeked={() => {
+                    if (!isProcessing) renderOverlay();
+                  }}
+                  onPause={() => {
+                    if (!isProcessing) renderOverlay();
                   }}
                   playsInline
                 />
@@ -1011,8 +1057,8 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
                   </div>
                   <input
                     type="range"
-                    min={40}
-                    max={95}
+                    min={20}
+                    max={90}
                     value={scanlineY}
                     onChange={(e) => setScanlineY(Number(e.target.value))}
                     className="w-full accent-amber-500 cursor-pointer"
