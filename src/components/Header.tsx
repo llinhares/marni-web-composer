@@ -17,6 +17,7 @@ import {
   Redo2,
   Hand,
   Sparkles,
+  Video,
 } from 'lucide-react';
 import type { ToolMode, GridSnap, TimeSignature, EffectorSettings } from '../types/music.ts';
 import { formatTimecode, ticksToSeconds } from '../utils/musicMath.ts';
@@ -57,6 +58,7 @@ interface HeaderProps {
   onUndo?: () => void;
   onRedo?: () => void;
   onOpenAiSheetScanner?: () => void;
+  onOpenVideoTranscriber?: () => void;
   onToggleSidebar?: () => void;
   isSidebarOpen?: boolean;
 }
@@ -88,6 +90,7 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleChorus,
   onOpenMidiModal,
   onOpenAiSheetScanner,
+  onOpenVideoTranscriber,
   hasMidiDevices,
   scaleType,
   onScaleChange,
@@ -409,6 +412,22 @@ export const Header: React.FC<HeaderProps> = ({
             <span className="hidden lg:inline text-[11px] font-medium">Partitura IA</span>
             <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-amber-500/20 text-amber-400 border border-amber-500/40">
               BETA
+            </span>
+          </button>
+        )}
+
+        {/* Video & Audio AI Transcriber Button (NEW) */}
+        {onOpenVideoTranscriber && (
+          <button
+            onClick={onOpenVideoTranscriber}
+            className="p-1.5 rounded-md border text-xs transition-colors flex items-center gap-1.5 bg-stone-900 border-[#2d2722] hover:border-amber-500/50 text-stone-300 hover:text-amber-400 shadow-sm"
+            title="Transcrever Vídeo (Cascata Synthesia) ou Áudio para Faixas MIDI com IA"
+            aria-label="Transcritor de Vídeo e Áudio com IA"
+          >
+            <Video className="w-3.5 h-3.5 text-amber-400" />
+            <span className="hidden lg:inline text-[11px] font-medium">Vídeo/Áudio IA</span>
+            <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
+              NOVO
             </span>
           </button>
         )}

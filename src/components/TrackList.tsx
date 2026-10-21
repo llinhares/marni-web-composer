@@ -13,6 +13,7 @@ import {
   ListPlus,
   FileUp,
   ChevronUp,
+  Video,
 } from 'lucide-react';
 import type { Track, InstrumentId } from '../types/music.ts';
 import { BDO_INSTRUMENTS } from '../types/music.ts';
@@ -29,6 +30,7 @@ interface TrackListProps {
   onResetAll: () => void;
   onImportClick: (mode: 'replace' | 'append') => void;
   onOpenAiSheetScanner?: () => void;
+  onOpenVideoTranscriber?: () => void;
   totalNotes: number;
   maxNotes: number;
   bdoGrade: string;
@@ -46,6 +48,7 @@ export const TrackList: React.FC<TrackListProps> = ({
   onResetAll,
   onImportClick,
   onOpenAiSheetScanner,
+  onOpenVideoTranscriber,
   totalNotes,
   maxNotes,
   bdoGrade,
@@ -375,6 +378,18 @@ export const TrackList: React.FC<TrackListProps> = ({
               aria-label="Ler Partitura com IA"
             >
               <Sparkles className="w-4 h-4 text-amber-400" />
+            </button>
+          )}
+
+          {/* Video & Audio AI Transcriber Button */}
+          {onOpenVideoTranscriber && (
+            <button
+              onClick={onOpenVideoTranscriber}
+              className="p-2 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/40 hover:border-emerald-400 text-emerald-300 transition-colors flex items-center justify-center shadow-sm"
+              title="Transcrever Vídeo (Cascata Synthesia) ou Áudio para Faixas MIDI com IA"
+              aria-label="Transcritor de Vídeo e Áudio com IA"
+            >
+              <Video className="w-4 h-4 text-emerald-400" />
             </button>
           )}
         </div>

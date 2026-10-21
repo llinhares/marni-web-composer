@@ -35,6 +35,7 @@ import { AddInstrumentModal } from './components/AddInstrumentModal.tsx';
 import { BdoExportModal } from './components/BdoExportModal.tsx';
 import { MidiSettingsModal } from './components/MidiSettingsModal.tsx';
 import { AiSheetScannerModal } from './components/AiSheetScannerModal.tsx';
+import { VideoAudioTranscriberModal } from './components/VideoAudioTranscriberModal.tsx';
 
 // Initial demo score inspired by Balenos Theme in Black Desert Online
 const INITIAL_TRACKS: Track[] = [
@@ -147,6 +148,7 @@ export default function App() {
   const [isSidebarOpenMobile, setIsSidebarOpenMobile] = useState(false);
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
   const [isAiSheetScannerOpen, setIsAiSheetScannerOpen] = useState(false);
+  const [isVideoTranscriberOpen, setIsVideoTranscriberOpen] = useState(false);
 
   // Hidden file input for importing MIDI / XML / JSON
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -956,6 +958,7 @@ export default function App() {
         }
         onOpenMidiModal={() => setIsMidiModalOpen(true)}
         onOpenAiSheetScanner={() => setIsAiSheetScannerOpen(true)}
+        onOpenVideoTranscriber={() => setIsVideoTranscriberOpen(true)}
         hasMidiDevices={hasMidiDevices}
         scaleType={scaleType}
         onScaleChange={setScaleType}
@@ -986,6 +989,7 @@ export default function App() {
           onResetAll={handleResetAll}
           onImportClick={handleTriggerImport}
           onOpenAiSheetScanner={() => setIsAiSheetScannerOpen(true)}
+          onOpenVideoTranscriber={() => setIsVideoTranscriberOpen(true)}
           totalNotes={totalNotes}
           maxNotes={maxNotesAllowed}
           bdoGrade={bdoGrade}
@@ -1074,6 +1078,16 @@ export default function App() {
         tracks={tracks}
         activeTrackId={activeTrackId}
         onImportScore={handleImportAiScore}
+      />
+
+      {/* Video & Audio AI Transcriber Modal (Synthesia Cascata / Audio-to-MIDI) */}
+      <VideoAudioTranscriberModal
+        isOpen={isVideoTranscriberOpen}
+        onClose={() => setIsVideoTranscriberOpen(false)}
+        tracks={tracks}
+        activeTrackId={activeTrackId}
+        currentBpm={bpm}
+        onImportTranscribedNotes={handleImportAiScore}
       />
 
       {/* Reset All Confirmation Modal */}
