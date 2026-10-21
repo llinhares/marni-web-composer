@@ -31,9 +31,11 @@ import {
   scanVideoFrames,
   fuseAudioAndVisionNotes,
   detectBarsFromVideoContext,
+  detectKeyHitsFromVideoContext,
   hexToRgb,
   rgbToHex,
   DetectedBarSegment,
+  KeyHit,
 } from '../utils/videoScanner.ts';
 import { pitchToNoteName, formatTimecode } from '../utils/musicMath.ts';
 
@@ -112,6 +114,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
   const [scanlineY, setScanlineY] = useState<number>(64); // 64% from top (above white smoke)
   const [keyboardXStart, setKeyboardXStart] = useState<number>(0); // 0% from left
   const [keyboardXEnd, setKeyboardXEnd] = useState<number>(100); // 100% from left
+  const [octaveShift, setOctaveShift] = useState<number>(0); // -2 to +2 octaves
   const [brightnessThreshold] = useState<number>(38);
   const [minSaturation] = useState<number>(0.20);
   const [liveBars, setLiveBars] = useState<{ right: number; left: number }>({ right: 0, left: 0 });
@@ -298,7 +301,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
 
   // Draw calibration overlay & real-time bar detections on video
   const renderOverlay = useCallback(
-    (overrideSegments?: DetectedBarSegment[]) => {
+    (overrideSegments?: (DetectedBarSegment | KeyHit)[]) => {
       if (!isVideo || !fileUrl) return;
 
       const canvas = canvasOverlayRef.current;
@@ -358,6 +361,15 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
       ctx.lineTo(x2, renderY + renderH);
       ctx.stroke();
 
+      // Draw subtle piano key markers along the scanline
+      const totalWhiteKeys = 52;
+      const kw = (x2 - x1) / totalWhiteKeys;
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.20)';
+      for (let k = 0; k <= totalWhiteKeys; k++) {
+        const kx = x1 + k * kw;
+        ctx.fillRect(kx - 0.5, y - 4, 1, 8);
+      }
+
       // Draw active scanline
       ctx.setLineDash([]);
       ctx.strokeStyle = '#f59e0b';
@@ -383,7 +395,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
         Math.round(workW * (keyboardXEnd / 100)) - Math.round(workW * (keyboardXStart / 100))
       );
 
-      let segments: DetectedBarSegment[] = [];
+      let segments: (DetectedBarSegment | KeyHit)[] = [];
       if (overrideSegments) {
         segments = overrideSegments;
       } else if (video.videoWidth > 0 && video.videoHeight > 0 && video.readyState >= 2) {
@@ -393,7 +405,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
           offCanvas.height = workH;
           const offCtx = offCanvas.getContext('2d', { willReadFrequently: true });
           if (offCtx) {
-            segments = detectBarsFromVideoContext(offCtx, video, workW, workH, {
+            segments = detectKeyHitsFromVideoContext(offCtx, video, workW, workH, {
               scanlineYRatio: scanlineY / 100,
               keyboardXStartRatio: keyboardXStart / 100,
               keyboardXEndRatio: keyboardXEnd / 100,
@@ -413,7 +425,13 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
       }
 
       for (const seg of segments) {
-        const canvasX = x1 + (seg.centerX / Math.max(1, overrideSegments ? 960 * ((keyboardXEnd - keyboardXStart) / 100) : vKbWidth)) * (x2 - x1);
+        let canvasX: number;
+        if ('centerRatio' in seg && typeof seg.centerRatio === 'number') {
+          canvasX = renderX + seg.centerRatio * renderW;
+        } else {
+          const rawSeg = seg as DetectedBarSegment;
+          canvasX = x1 + (rawSeg.centerX / Math.max(1, overrideSegments ? 960 * ((keyboardXEnd - keyboardXStart) / 100) : vKbWidth)) * (x2 - x1);
+        }
         const isRight = seg.hand === 'right';
         if (isRight) rCount++;
         else lCount++;
@@ -428,11 +446,12 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
         ctx.lineWidth = 1.5;
         ctx.stroke();
 
-        // Note Name badge
+        // Note Name badge (shifted by octaveShift if applicable)
+        const displayPitch = seg.pitch + octaveShift * 12;
         ctx.fillStyle = '#ffffff';
         ctx.font = 'bold 10px sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillText(pitchToNoteName(seg.pitch, 'sharp'), canvasX, Math.max(12, y - stripH - 4));
+        ctx.fillText(pitchToNoteName(displayPitch, 'sharp'), canvasX, Math.max(12, y - stripH - 4));
       }
 
       setLiveBars({ right: rCount, left: lCount });
@@ -449,6 +468,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
       hand1ColorHex,
       hand2ColorHex,
       splitPitch,
+      octaveShift,
     ]
   );
 
@@ -559,6 +579,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
           hand1Color: hexToRgb(hand1ColorHex),
           hand2Color: hexToRgb(hand2ColorHex),
           splitPitch,
+          octaveShift,
           onFrameDetections: (segments) => {
             renderOverlay(segments);
           },
@@ -679,6 +700,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
             hand1Color: hexToRgb(hand1ColorHex),
             hand2Color: hexToRgb(hand2ColorHex),
             splitPitch,
+            octaveShift,
             onFrameDetections: (segments) => {
               renderOverlay(segments);
             },
@@ -694,7 +716,8 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
             videoScanResult.visualNotes,
             effectiveBpm,
             TICKS_PER_BEAT,
-            splitPitch
+            splitPitch,
+            { backbone: 'auto', autoAlign: true }
           );
 
           setTranscriptionResult({
@@ -1049,10 +1072,10 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
               </div>
 
               {/* Calibration Sliders */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-1">
                 <div>
                   <div className="flex justify-between text-[11px] text-stone-400 mb-1">
-                    <span>Altura da Linha de Leitura (Y)</span>
+                    <span>Altura da Linha (Y)</span>
                     <span className="font-mono text-amber-300 font-bold">{scanlineY}%</span>
                   </div>
                   <input
@@ -1067,7 +1090,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
 
                 <div>
                   <div className="flex justify-between text-[11px] text-stone-400 mb-1">
-                    <span>Início do Teclado (X)</span>
+                    <span>Início Teclado (X)</span>
                     <span className="font-mono text-amber-300 font-bold">{keyboardXStart}%</span>
                   </div>
                   <input
@@ -1082,7 +1105,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
 
                 <div>
                   <div className="flex justify-between text-[11px] text-stone-400 mb-1">
-                    <span>Fim do Teclado (X)</span>
+                    <span>Fim Teclado (X)</span>
                     <span className="font-mono text-amber-300 font-bold">{keyboardXEnd}%</span>
                   </div>
                   <input
@@ -1093,6 +1116,32 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
                     onChange={(e) => setKeyboardXEnd(Number(e.target.value))}
                     className="w-full accent-amber-500 cursor-pointer"
                   />
+                </div>
+
+                <div>
+                  <div className="flex justify-between text-[11px] text-stone-400 mb-1">
+                    <span>Ajuste de Oitava</span>
+                    <span className={`font-mono font-bold ${octaveShift === 0 ? 'text-stone-300' : 'text-amber-400'}`}>
+                      {octaveShift > 0 ? `+${octaveShift}` : octaveShift} {octaveShift === 0 ? '(Padrão)' : '8va'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    {[-2, -1, 0, 1, 2].map((shift) => (
+                      <button
+                        key={shift}
+                        type="button"
+                        onClick={() => setOctaveShift(shift)}
+                        className={`flex-1 py-1 text-xs font-mono rounded border transition-colors ${
+                          octaveShift === shift
+                            ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 font-bold'
+                            : 'bg-stone-800/60 text-stone-400 border-stone-700/50 hover:bg-stone-700/50 hover:text-stone-200'
+                        }`}
+                        title={shift === 0 ? 'Oitava original' : `${shift > 0 ? '+' : ''}${shift} oitava(s)`}
+                      >
+                        {shift > 0 ? `+${shift}` : shift}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>

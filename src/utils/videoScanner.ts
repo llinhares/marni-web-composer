@@ -1,54 +1,81 @@
 import type { Note } from '../types/music.ts';
 import { TICKS_PER_BEAT } from '../types/music.ts';
 
+export type RGB = { r: number; g: number; b: number };
+
 export interface VisualNoteEvent {
   pitch: number;
   startSec: number;
   endSec: number;
   hand: 'right' | 'left';
-  color: { r: number; g: number; b: number };
+  color: RGB;
 }
 
 export interface DetectedBarSegment {
   centerX: number;
   width: number;
   pitch: number;
-  color: { r: number; g: number; b: number };
+  color: RGB;
   hand: 'right' | 'left';
 }
 
+export interface ColorOptions {
+  colorMode?: 'two-colors' | 'single-color' | 'auto';
+  hand1Color?: RGB;
+  hand2Color?: RGB;
+  splitPitch?: number;
+}
+
+/** A key that currently has a bar touching the reading line (used for the live preview). */
+export interface KeyHit {
+  pitch: number;
+  hand: 'right' | 'left';
+  centerRatio: number; // 0..1 of the full video width
+}
+
 export interface VideoScanOptions {
-  scanlineYRatio?: number; // 0.0 to 1.0 (default 0.64, above flames/smoke)
-  minPitch?: number; // default 21 (A0)
-  maxPitch?: number; // default 108 (C8)
-  keyboardXStartRatio?: number; // 0.0 to 1.0 (default 0.0)
-  keyboardXEndRatio?: number; // 0.0 to 1.0 (default 1.0)
-  brightnessThreshold?: number; // 0 to 255 (default 40)
-  minSaturation?: number; // 0.0 to 1.0 (default 0.20 - ignores white flames/smoke/keys)
-  fps?: number; // sampling fps (default 10 fps)
+  scanlineYRatio?: number; // 0.0 to 1.0 - bottom of the note-reading area (just above key glow/smoke)
+  minPitch?: number; // fallback mode only
+  maxPitch?: number; // fallback mode only
+  keyboardXStartRatio?: number; // fallback mode only (no keyboard detected)
+  keyboardXEndRatio?: number; // fallback mode only (no keyboard detected)
+  brightnessThreshold?: number;
+  minSaturation?: number;
+  fps?: number; // sampling fps for the stepped-seek fallback
   startTime?: number; // Crop start in seconds
   endTime?: number; // Crop end in seconds
   colorMode?: 'two-colors' | 'single-color' | 'auto';
-  hand1Color?: { r: number; g: number; b: number }; // Right hand target color
-  hand2Color?: { r: number; g: number; b: number }; // Left hand target color
-  splitPitch?: number; // Pitch to split hands when single-color (default 60 = Middle C)
+  hand1Color?: RGB; // Right hand target color
+  hand2Color?: RGB; // Left hand target color
+  splitPitch?: number; // Pitch used to split hands when colors are ambiguous / single-color
+  keyboardLayout?: KeyboardLayout | null; // Pre-detected keyboard (unshifted). Auto-detected when omitted.
+  octaveShift?: number; // Octave correction applied on top of the detected keyboard
+  playbackRate?: number; // Accelerated playback rate used while scanning (default 4x)
   onProgress?: (progress: number, stage: string) => void;
-  onFrameDetections?: (segments: DetectedBarSegment[], currentTime: number) => void;
+  onFrameDetections?: (hits: KeyHit[], currentTime: number) => void;
 }
 
 export interface VideoScanResult {
   visualNotes: VisualNoteEvent[];
   dominantColors: {
-    rightHand: { r: number; g: number; b: number };
-    leftHand: { r: number; g: number; b: number };
+    rightHand: RGB;
+    leftHand: RGB;
   };
   totalFramesScanned: number;
+  keyboardLayout: KeyboardLayout | null; // detected (unshifted) layout
+  sampleFps: number; // analysed frames per second of media
+  fallSpeedPxPerSec: number | null; // estimated bar fall speed (working-canvas px/s)
+  method: 'tape' | 'scanline';
 }
+
+// ---------------------------------------------------------------------------
+// Color utilities
+// ---------------------------------------------------------------------------
 
 /**
  * Converts Hex string (#22c55e) to RGB object.
  */
-export function hexToRgb(hex: string): { r: number; g: number; b: number } {
+export function hexToRgb(hex: string): RGB {
   const clean = hex.replace('#', '');
   const bigint = parseInt(clean, 16);
   if (isNaN(bigint)) return { r: 34, g: 197, b: 94 };
@@ -111,15 +138,16 @@ export function hueDistance(h1: number, h2: number): number {
 /**
  * Calculates Euclidean color distance between two RGB colors.
  */
-export function colorDistance(
-  c1: { r: number; g: number; b: number },
-  c2: { r: number; g: number; b: number }
-): number {
+export function colorDistance(c1: RGB, c2: RGB): number {
   const dr = c1.r - c2.r;
   const dg = c1.g - c2.g;
   const db = c1.b - c2.b;
   return Math.sqrt(dr * dr + dg * dg + db * db);
 }
+
+// ---------------------------------------------------------------------------
+// Legacy fixed geometry (used only when the keyboard cannot be detected)
+// ---------------------------------------------------------------------------
 
 export interface PianoKeyInfo {
   pitch: number;
@@ -129,7 +157,6 @@ export interface PianoKeyInfo {
 
 /**
  * Pre-computed geometric layout of a standard 88-key piano keyboard (A0 to C8).
- * Synthesia cascade bars strictly align with the 52 white keys and 36 black keys.
  * White keys are uniformly spaced (1/52 width each), and black keys are positioned
  * at the boundaries between adjacent white keys.
  */
@@ -154,7 +181,7 @@ export const PIANO_88_KEYS: PianoKeyInfo[] = (() => {
 
 /**
  * Maps a horizontal pixel coordinate along the keyboard span to a standard piano MIDI pitch (21 to 108)
- * using the geometrically accurate piano keyboard layout.
+ * assuming the keyboard is a full 88-key piano spanning [0, keyboardWidth].
  */
 export function xToPianoPitch(
   x: number,
@@ -181,11 +208,360 @@ export function xToPianoPitch(
   return closestPitch;
 }
 
+// ---------------------------------------------------------------------------
+// Keyboard detection (reads the real keyboard drawn in the video)
+// ---------------------------------------------------------------------------
+
+export interface KeyboardKey {
+  pitch: number;
+  isBlack: boolean;
+  centerRatio: number; // 0..1 of the full frame width
+  widthRatio: number;
+}
+
+export interface KeyboardLayout {
+  keys: KeyboardKey[];
+  whiteKeyWidthRatio: number;
+  blackKeyWidthRatio: number;
+  keyboardYRatio: number; // row (0..1 of frame height) where the black keys were measured
+  lowestPitch: number;
+  highestPitch: number;
+  score: number; // number of black keys that fit the piano pattern
+}
+
+const WHITE_KEY_SEMITONES = [0, 2, 4, 5, 7, 9, 11];
+// Boundaries (counted in white keys from a C) that hold a black key: C#, D#, F#, G#, A#
+const BLACK_KEY_BOUNDARIES = new Set([1, 2, 4, 5, 6]);
+const mod7 = (v: number) => ((v % 7) + 7) % 7;
+
+/** White-key index (C0 = 0, D0 = 1 ... C4 = 28) to MIDI pitch. */
+export function whiteIndexToPitch(whiteIndex: number): number {
+  const octave = Math.floor(whiteIndex / 7);
+  return 12 * (octave + 1) + WHITE_KEY_SEMITONES[mod7(whiteIndex)];
+}
+
+function percentileOf(sorted: ArrayLike<number>, p: number): number {
+  if (sorted.length === 0) return 0;
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.round(p * (sorted.length - 1))));
+  return sorted[idx];
+}
+
 /**
- * Collapses a 2D vertical strip of pixels (kbWidth x stripHeight) into a single 1D line
- * (kbWidth x 1) by selecting, for each X column, the pixel row with the highest chromatic
- * intensity. This completely eliminates white note-name text (e.g. "D", "F#", "A") printed
- * inside Synthesia bars as well as localized smoke wisps at the key impact line.
+ * Detects the piano keyboard from a single pixel row crossing the black keys.
+ * Black keys are located as dark neutral runs; the 2-3-2-3 grouping of their spacing
+ * reveals exactly which keys are C#/D# and F#/G#/A#, so every key position comes from
+ * the video itself (works for 88, 76, 61, 49-key or cropped/zoomed keyboards).
+ */
+export function detectKeyboardLayoutFromRow(
+  rowData: Uint8ClampedArray,
+  width: number,
+  keyboardYRatio = 0
+): KeyboardLayout | null {
+  if (width < 120) return null;
+
+  const lum = new Float32Array(width);
+  const neutral = new Uint8Array(width);
+  for (let px = 0; px < width; px++) {
+    const i = px * 4;
+    const r = rowData[i];
+    const g = rowData[i + 1];
+    const b = rowData[i + 2];
+    lum[px] = 0.299 * r + 0.587 * g + 0.114 * b;
+    neutral[px] = Math.max(r, g, b) - Math.min(r, g, b) < 60 ? 1 : 0;
+  }
+
+  const sortedLum = Float32Array.from(lum).sort();
+  const p10 = percentileOf(sortedLum, 0.1);
+  const p90 = percentileOf(sortedLum, 0.9);
+  if (p90 - p10 < 80 || p90 < 150) return null;
+  const threshold = (p10 + p90) / 2;
+
+  // Dark neutral runs (pressed keys are colored, so they are excluded and treated as "missing")
+  const runs: Array<{ start: number; end: number }> = [];
+  let runStart = -1;
+  for (let px = 0; px <= width; px++) {
+    const dark = px < width && lum[px] < threshold && neutral[px] === 1;
+    if (dark) {
+      if (runStart < 0) runStart = px;
+    } else if (runStart >= 0) {
+      runs.push({ start: runStart, end: px });
+      runStart = -1;
+    }
+  }
+
+  const widths = runs
+    .map((r) => r.end - r.start)
+    .filter((w) => w >= 3)
+    .sort((a, b) => a - b);
+  if (widths.length < 8) return null;
+  const blackW = percentileOf(widths, 0.5);
+
+  const candidates = runs.filter((r) => {
+    const w = r.end - r.start;
+    return w >= Math.max(2, blackW * 0.5) && w <= blackW * 1.6;
+  });
+  if (candidates.length < 8) return null;
+
+  const centers = candidates.map((r) => (r.start + r.end) / 2);
+  const gaps: number[] = [];
+  for (let i = 0; i < centers.length - 1; i++) gaps.push(centers[i + 1] - centers[i]);
+  const sortedGaps = [...gaps].sort((a, b) => a - b);
+  // 3 of every 5 gaps are one white key wide (C#-D#, F#-G#, G#-A#)
+  const unitGuess = percentileOf(sortedGaps, 0.3);
+  if (unitGuess < blackW * 1.15) return null;
+
+  const units = gaps.map((g) => Math.max(1, Math.round(g / unitGuess)));
+  const unitEstimate = gaps.reduce((s, g) => s + g, 0) / units.reduce((s, u) => s + u, 0);
+
+  const boundaries = [0];
+  for (const u of units) boundaries.push(boundaries[boundaries.length - 1] + u);
+
+  let bestShift = 0;
+  let bestAligned = -1;
+  for (let k = 0; k < 7; k++) {
+    let aligned = 0;
+    for (const b of boundaries) if (BLACK_KEY_BOUNDARIES.has(mod7(b + k))) aligned++;
+    if (aligned > bestAligned) {
+      bestAligned = aligned;
+      bestShift = k;
+    }
+  }
+  if (bestAligned < 8 || bestAligned / centers.length < 0.8) return null;
+
+  // Least-squares fit: x = origin + whiteW * boundaryIndex
+  let n = 0;
+  let sB = 0;
+  let sX = 0;
+  let sBB = 0;
+  let sBX = 0;
+  boundaries.forEach((b, i) => {
+    const B = b + bestShift;
+    if (!BLACK_KEY_BOUNDARIES.has(mod7(B))) return;
+    const x = centers[i];
+    n++;
+    sB += B;
+    sX += x;
+    sBB += B * B;
+    sBX += B * x;
+  });
+  const denom = n * sBB - sB * sB;
+  if (n < 8 || denom === 0) return null;
+  const whiteW = (n * sBX - sB * sX) / denom;
+  const origin = (sX - whiteW * sB) / n;
+  if (!(whiteW > 0) || Math.abs(whiteW - unitEstimate) / unitEstimate > 0.2) return null;
+
+  let residual = 0;
+  boundaries.forEach((b, i) => {
+    const B = b + bestShift;
+    if (BLACK_KEY_BOUNDARIES.has(mod7(B))) residual += Math.abs(centers[i] - (origin + whiteW * B));
+  });
+  residual /= n;
+  if (residual > whiteW * 0.25) return null;
+
+  // Visible white keys
+  const jMin = Math.ceil(-origin / whiteW - 0.3);
+  const jMax = Math.floor((width - origin) / whiteW + 0.3) - 1;
+  if (jMax - jMin + 1 < 14) return null;
+
+  // Absolute octave: center the keyboard around E4/F4 (true for 88, 76, 61 and 49-key boards).
+  // The user can still correct it with the octave shift control.
+  const centerJ = (jMin + jMax) / 2;
+  let octaveOffset = Math.round((30.5 - centerJ) / 7);
+  while (jMin + 7 * octaveOffset < 0) octaveOffset++;
+  while (jMax + 7 * octaveOffset > 67) octaveOffset--;
+
+  const keys: KeyboardKey[] = [];
+  for (let j = jMin; j <= jMax; j++) {
+    keys.push({
+      pitch: whiteIndexToPitch(j + 7 * octaveOffset),
+      isBlack: false,
+      centerRatio: (origin + whiteW * (j + 0.5)) / width,
+      widthRatio: whiteW / width,
+    });
+  }
+  for (let B = jMin + 1; B <= jMax; B++) {
+    if (!BLACK_KEY_BOUNDARIES.has(mod7(B))) continue;
+    keys.push({
+      pitch: whiteIndexToPitch(B - 1 + 7 * octaveOffset) + 1,
+      isBlack: true,
+      centerRatio: (origin + whiteW * B) / width,
+      widthRatio: blackW / width,
+    });
+  }
+  keys.sort((a, b) => a.centerRatio - b.centerRatio);
+
+  let lowestPitch = Infinity;
+  let highestPitch = -Infinity;
+  for (const k of keys) {
+    lowestPitch = Math.min(lowestPitch, k.pitch);
+    highestPitch = Math.max(highestPitch, k.pitch);
+  }
+
+  return {
+    keys,
+    whiteKeyWidthRatio: whiteW / width,
+    blackKeyWidthRatio: blackW / width,
+    keyboardYRatio,
+    lowestPitch,
+    highestPitch,
+    score: bestAligned,
+  };
+}
+
+/**
+ * Searches the rows below `minYRatio` of a video frame for the piano keyboard and returns the best layout.
+ */
+export function detectKeyboardLayoutInFrame(
+  ctx: CanvasRenderingContext2D,
+  source: CanvasImageSource,
+  width: number,
+  height: number,
+  minYRatio = 0.4
+): KeyboardLayout | null {
+  ctx.drawImage(source, 0, 0, width, height);
+  const startY = Math.max(0, Math.min(height - 1, Math.floor(height * minYRatio)));
+  const rows = height - startY;
+  if (rows <= 0) return null;
+
+  const data = ctx.getImageData(0, startY, width, rows).data;
+  const step = Math.max(1, Math.round(height * 0.006));
+  let best: KeyboardLayout | null = null;
+
+  for (let y = 0; y < rows; y += step) {
+    const row = data.subarray(y * width * 4, (y + 1) * width * 4);
+    const layout = detectKeyboardLayoutFromRow(row, width, (startY + y) / height);
+    if (layout && (!best || layout.score > best.score)) best = layout;
+  }
+  return best;
+}
+
+/** Transposes a detected layout by whole octaves. */
+export function shiftLayoutOctave(layout: KeyboardLayout, octaves: number): KeyboardLayout {
+  if (!octaves) return layout;
+  const delta = 12 * octaves;
+  return {
+    ...layout,
+    keys: layout.keys.map((k) => ({ ...k, pitch: k.pitch + delta })),
+    lowestPitch: layout.lowestPitch + delta,
+    highestPitch: layout.highestPitch + delta,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Pixel classification
+// ---------------------------------------------------------------------------
+
+const PIXEL_DARK = 0;
+const PIXEL_BRIGHT = 1; // white / grey: note-name letters, smoke, highlights (bridgeable)
+const PIXEL_NOTE = 2;
+
+interface PixelClassifier {
+  minSat: number;
+  minBright: number;
+  h1: number | null;
+  h2: number | null;
+}
+
+function makePixelClassifier(
+  minSaturation: number,
+  brightnessThreshold: number,
+  colorOptions?: ColorOptions
+): PixelClassifier {
+  return {
+    minSat: Math.min(minSaturation, 0.22),
+    minBright: Math.min(brightnessThreshold, 40),
+    h1: colorOptions?.hand1Color
+      ? rgbToHsl(colorOptions.hand1Color.r, colorOptions.hand1Color.g, colorOptions.hand1Color.b).h
+      : null,
+    h2:
+      colorOptions?.colorMode !== 'single-color' && colorOptions?.hand2Color
+        ? rgbToHsl(colorOptions.hand2Color.r, colorOptions.hand2Color.g, colorOptions.hand2Color.b).h
+        : null,
+  };
+}
+
+function classifyPixel(r: number, g: number, b: number, c: PixelClassifier): number {
+  const maxC = Math.max(r, g, b);
+  const minC = Math.min(r, g, b);
+  const delta = maxC - minC;
+  const sat = maxC > 0 ? delta / maxC : 0;
+
+  if (delta < 16 || sat < 0.15 || (r > 222 && g > 222 && b > 222)) {
+    return maxC >= 150 ? PIXEL_BRIGHT : PIXEL_DARK;
+  }
+  if (maxC < c.minBright) return PIXEL_DARK;
+  if (sat >= c.minSat && delta >= 20) return PIXEL_NOTE;
+  if (c.h1 !== null || c.h2 !== null) {
+    const h = rgbToHsl(r, g, b).h;
+    if ((c.h1 !== null && hueDistance(h, c.h1) <= 45) || (c.h2 !== null && hueDistance(h, c.h2) <= 45)) {
+      return PIXEL_NOTE;
+    }
+  }
+  return maxC >= 150 ? PIXEL_BRIGHT : PIXEL_DARK;
+}
+
+// ---------------------------------------------------------------------------
+// Hand classification
+// ---------------------------------------------------------------------------
+
+/**
+ * Classifies whether a detected color is Right Hand or Left Hand based on user colors (Hue + RGB),
+ * color mode, or pitch split fallback.
+ */
+export function classifyHand(
+  r: number,
+  g: number,
+  b: number,
+  pitch: number,
+  options: ColorOptions = {}
+): 'right' | 'left' {
+  const {
+    colorMode = 'two-colors',
+    hand1Color = { r: 34, g: 197, b: 94 }, // Green
+    hand2Color = { r: 56, g: 189, b: 248 }, // Blue
+    splitPitch = 60,
+  } = options;
+
+  if (colorMode === 'single-color') {
+    return pitch >= splitPitch ? 'right' : 'left';
+  }
+
+  // Hue first (invariant to 3D highlights and key-hit glow)
+  const pixHsl = rgbToHsl(r, g, b);
+  const h1Hsl = rgbToHsl(hand1Color.r, hand1Color.g, hand1Color.b);
+  const h2Hsl = rgbToHsl(hand2Color.r, hand2Color.g, hand2Color.b);
+
+  const hDist1 = hueDistance(pixHsl.h, h1Hsl.h);
+  const hDist2 = hueDistance(pixHsl.h, h2Hsl.h);
+
+  if (Math.abs(hDist1 - hDist2) >= 10) {
+    return hDist1 <= hDist2 ? 'right' : 'left';
+  }
+
+  // Tie-breaker using Euclidean RGB distance
+  const d1 = colorDistance({ r, g, b }, hand1Color);
+  const d2 = colorDistance({ r, g, b }, hand2Color);
+
+  if (Math.abs(d1 - d2) < 20) {
+    return pitch >= splitPitch ? 'right' : 'left';
+  }
+
+  return d1 <= d2 ? 'right' : 'left';
+}
+
+function voteHand(right: number, left: number, pitch: number, splitPitch: number): 'right' | 'left' {
+  if (right > left) return 'right';
+  if (left > right) return 'left';
+  return pitch >= splitPitch ? 'right' : 'left';
+}
+
+// ---------------------------------------------------------------------------
+// Legacy single-line detection (fallback when no keyboard is visible)
+// ---------------------------------------------------------------------------
+
+/**
+ * Collapses a 2D strip (kbWidth x stripHeight) into one line by keeping, per column,
+ * the most chromatic pixel (skips white note-name letters and smoke).
  */
 export function collapseStripToBestLine(
   stripData: Uint8ClampedArray,
@@ -195,7 +571,6 @@ export function collapseStripToBestLine(
   if (stripHeight <= 1) return stripData;
 
   const outLine = new Uint8ClampedArray(kbWidth * 4);
-  // Sample up to 6 rows across the strip height
   const stepY = Math.max(1, Math.floor(stripHeight / 6));
 
   for (let px = 0; px < kbWidth; px++) {
@@ -214,7 +589,6 @@ export function collapseStripToBestLine(
       const minC = Math.min(r, g, b);
       const delta = maxC - minC;
 
-      // Penalize pure white/grey pixels (smoke, white text inside bars, white keys)
       const isWhiteTextOrSmoke = (r > 210 && g > 210 && b > 210) || delta < 14;
       const sat = maxC > 0 ? delta / maxC : 0;
       const score = isWhiteTextOrSmoke ? delta * 0.05 : delta * (0.4 + sat);
@@ -238,59 +612,8 @@ export function collapseStripToBestLine(
 }
 
 /**
- * Classifies whether a detected color is Right Hand or Left Hand based on user colors (Hue + RGB),
- * color mode, or pitch split fallback.
- */
-export function classifyHand(
-  r: number,
-  g: number,
-  b: number,
-  pitch: number,
-  options: {
-    colorMode?: 'two-colors' | 'single-color' | 'auto';
-    hand1Color?: { r: number; g: number; b: number };
-    hand2Color?: { r: number; g: number; b: number };
-    splitPitch?: number;
-  } = {}
-): 'right' | 'left' {
-  const {
-    colorMode = 'two-colors',
-    hand1Color = { r: 34, g: 197, b: 94 }, // Green
-    hand2Color = { r: 56, g: 189, b: 248 }, // Blue
-    splitPitch = 60,
-  } = options;
-
-  if (colorMode === 'single-color') {
-    return pitch >= splitPitch ? 'right' : 'left';
-  }
-
-  // Compare Hue angular distance first (invariant to 3D bar highlights and key-hit glow!)
-  const pixHsl = rgbToHsl(r, g, b);
-  const h1Hsl = rgbToHsl(hand1Color.r, hand1Color.g, hand1Color.b);
-  const h2Hsl = rgbToHsl(hand2Color.r, hand2Color.g, hand2Color.b);
-
-  const hDist1 = hueDistance(pixHsl.h, h1Hsl.h);
-  const hDist2 = hueDistance(pixHsl.h, h2Hsl.h);
-
-  if (Math.abs(hDist1 - hDist2) >= 10) {
-    return hDist1 <= hDist2 ? 'right' : 'left';
-  }
-
-  // Tie-breaker using Euclidean RGB distance
-  const d1 = colorDistance({ r, g, b }, hand1Color);
-  const d2 = colorDistance({ r, g, b }, hand2Color);
-
-  if (Math.abs(d1 - d2) < 20) {
-    return pitch >= splitPitch ? 'right' : 'left';
-  }
-
-  return d1 <= d2 ? 'right' : 'left';
-}
-
-/**
- * Scans a horizontal line of image data across the keyboard,
- * grouping adjacent colorful pixels into discrete falling bar segments.
- * Filters out white smoke, flame particles, white note text, white keys, and black keys!
+ * Scans a horizontal line of image data across the keyboard, grouping adjacent colorful
+ * pixels into bar segments mapped with the fixed 88-key geometry.
  */
 export function detectBarsInImageData(
   lineData: Uint8ClampedArray,
@@ -299,12 +622,7 @@ export function detectBarsInImageData(
   maxPitch = 108,
   minSaturation = 0.2,
   brightnessThreshold = 38,
-  colorOptions?: {
-    colorMode?: 'two-colors' | 'single-color' | 'auto';
-    hand1Color?: { r: number; g: number; b: number };
-    hand2Color?: { r: number; g: number; b: number };
-    splitPitch?: number;
-  }
+  colorOptions?: ColorOptions
 ): DetectedBarSegment[] {
   const segments: DetectedBarSegment[] = [];
 
@@ -338,7 +656,6 @@ export function detectBarsInImageData(
       const avgG = Math.round(gSum / pixelCount);
       const avgB = Math.round(bSum / pixelCount);
 
-      // If two or more adjacent keys of the same color are pressed together, split them by key width
       if (segWidth > maxSingleBarWidth && whiteKeyWidth >= 6) {
         const numKeys = Math.max(2, Math.round(segWidth / whiteKeyWidth));
         const subWidth = segWidth / numKeys;
@@ -383,7 +700,6 @@ export function detectBarsInImageData(
     const delta = brightness - minC;
     const saturation = brightness > 0 ? delta / brightness : 0;
 
-    // Reject white keys, grey smoke, and bright white flares
     const isWhiteOrGrey = delta < 16 || saturation < 0.15 || (r > 222 && g > 222 && b > 222);
 
     let matchesTargetColor = false;
@@ -416,11 +732,11 @@ export function detectBarsInImageData(
         pixelCount = 1;
         gapCount = 0;
       } else {
-        // Check if color hand abruptly changed (e.g. Left Hand blue bar immediately adjacent to Right Hand green bar)
-        const prevAvgR = Math.round(rSum / pixelCount);
-        const prevAvgG = Math.round(gSum / pixelCount);
-        const prevAvgB = Math.round(bSum / pixelCount);
-        const prevHsl = rgbToHsl(prevAvgR, prevAvgG, prevAvgB);
+        const prevHsl = rgbToHsl(
+          Math.round(rSum / pixelCount),
+          Math.round(gSum / pixelCount),
+          Math.round(bSum / pixelCount)
+        );
         const curHsl = rgbToHsl(r, g, b);
 
         if (hueDistance(prevHsl.h, curHsl.h) > 55) {
@@ -442,7 +758,6 @@ export function detectBarsInImageData(
       }
     } else if (inSegment) {
       gapCount++;
-      // Bridge tiny 1-2px gaps inside a bar (e.g. letter outline or anti-aliasing)
       if (gapCount > 2) {
         flushSegment(px - gapCount + 1);
       }
@@ -457,11 +772,11 @@ export function detectBarsInImageData(
 }
 
 /**
- * Helper to extract a vertical strip above scanY from a video/canvas context and detect bars.
+ * Legacy helper: reads a small strip above scanY inside the manual keyboard bounds and detects bars.
  */
 export function detectBarsFromVideoContext(
   ctx: CanvasRenderingContext2D,
-  video: HTMLVideoElement,
+  video: CanvasImageSource,
   canvasWidth: number,
   canvasHeight: number,
   options: {
@@ -473,12 +788,11 @@ export function detectBarsFromVideoContext(
     minSaturation: number;
     brightnessThreshold: number;
     colorMode: 'two-colors' | 'single-color' | 'auto';
-    hand1Color: { r: number; g: number; b: number };
-    hand2Color: { r: number; g: number; b: number };
+    hand1Color: RGB;
+    hand2Color: RGB;
     splitPitch: number;
   }
 ): DetectedBarSegment[] {
-  // Draw full frame scaled to working canvas (universally hardware-accelerated on all GPUs)
   ctx.drawImage(video, 0, 0, canvasWidth, canvasHeight);
 
   const scanY = Math.max(2, Math.min(canvasHeight - 2, Math.round(canvasHeight * options.scanlineYRatio)));
@@ -486,9 +800,7 @@ export function detectBarsFromVideoContext(
   const kbEndX = Math.min(canvasWidth, Math.round(canvasWidth * options.keyboardXEndRatio));
   const kbWidth = Math.max(10, kbEndX - kbStartX);
 
-  // Read a 4% vertical strip extending upward from scanY so white note-name letters ("D", "F#", "A")
-  // and key-edge smoke flares are bypassed
-  const stripHeight = Math.max(6, Math.round(canvasHeight * 0.04));
+  const stripHeight = Math.max(3, Math.round(canvasHeight * 0.008));
   const stripTopY = Math.max(0, scanY - stripHeight + 1);
   const actualStripH = scanY - stripTopY + 1;
 
@@ -511,13 +823,492 @@ export function detectBarsFromVideoContext(
   );
 }
 
+// ---------------------------------------------------------------------------
+// Per-key vertical column analysis
+// ---------------------------------------------------------------------------
+
+/** A vertical run of bar color found in one key column of one frame (y in working-canvas px). */
+export interface KeyColumnSegment {
+  pitch: number;
+  yTop: number;
+  yBottom: number;
+  touchesTop: boolean; // bar continues above the reading area (top edge not visible)
+  touchesBottom: boolean; // bar is crossing the reading line (bottom edge not visible)
+  rightVotes: number;
+  leftVotes: number;
+}
+
+export interface FrameRecord {
+  t: number; // media time of the analysed frame (seconds)
+  segments: KeyColumnSegment[];
+}
+
 /**
- * Scans an HTML5 Video element along a calibrated hit-line,
- * grouping colored pixels into falling bars and tracking their onsets and releases
- * strictly within the [startTime, endTime] cropped window.
+ * Walks down the column of every detected key inside the note area and extracts colored runs.
+ * - White keys sample 3 columns around the key center (black-key bars never reach them).
+ * - Black keys require all 3 center columns colored and a narrow colored extent, so two adjacent
+ *   white bars are never mistaken for a black key.
+ * - White/grey rows (note-name letters, highlights) are bridged; dark rows (gaps between repeated
+ *   notes) always split the run.
  *
- * Uses accelerated forward playback on the mounted video element (avoiding H.264 keyframe seek flushes),
- * with automatic fallback to properly-awaited stepped seeking if playback is blocked.
+ * `data` holds `rows` image rows starting at `areaTopY`, full frame width.
+ */
+export function analyzeKeyColumns(
+  data: Uint8ClampedArray,
+  width: number,
+  rows: number,
+  areaTopY: number,
+  layout: KeyboardLayout,
+  opts: {
+    minSaturation?: number;
+    brightnessThreshold?: number;
+    colorOptions?: ColorOptions;
+    bridgeRows?: number;
+  } = {}
+): KeyColumnSegment[] {
+  const classifier = makePixelClassifier(opts.minSaturation ?? 0.2, opts.brightnessThreshold ?? 38, opts.colorOptions);
+  const bridgeRows = opts.bridgeRows ?? 6;
+  const wPx = layout.whiteKeyWidthRatio * width;
+  const blackExtentLimit = wPx * 0.85;
+  const maxScan = Math.ceil(wPx * 0.7);
+  const segments: KeyColumnSegment[] = [];
+
+  const pixelClass = (x: number, y: number): number => {
+    const i = (y * width + x) * 4;
+    return classifyPixel(data[i], data[i + 1], data[i + 2], classifier);
+  };
+
+  for (const key of layout.keys) {
+    const cx = Math.round(key.centerRatio * width);
+    if (cx < 1 || cx >= width - 1) continue;
+    const off = key.isBlack ? 1 : Math.max(1, Math.round(wPx * 0.15));
+    const leftCol = Math.max(0, cx - off);
+    const rightCol = Math.min(width - 1, cx + off);
+
+    let segStart = -1;
+    let lastNote = -1;
+    let bright = 0;
+    let rv = 0;
+    let lv = 0;
+
+    const flush = () => {
+      if (segStart >= 0 && lastNote - segStart + 1 >= 2) {
+        segments.push({
+          pitch: key.pitch,
+          yTop: areaTopY + segStart,
+          yBottom: areaTopY + lastNote,
+          touchesTop: segStart <= 1,
+          touchesBottom: lastNote >= rows - 2,
+          rightVotes: rv,
+          leftVotes: lv,
+        });
+      }
+      segStart = -1;
+      lastNote = -1;
+      bright = 0;
+      rv = 0;
+      lv = 0;
+    };
+
+    for (let y = 0; y < rows; y++) {
+      const centerClass = pixelClass(cx, y);
+      let noteCount = centerClass === PIXEL_NOTE ? 1 : 0;
+      if (pixelClass(leftCol, y) === PIXEL_NOTE) noteCount++;
+      if (pixelClass(rightCol, y) === PIXEL_NOTE) noteCount++;
+
+      let isNote = key.isBlack ? noteCount === 3 : noteCount >= 2;
+
+      if (isNote && key.isBlack) {
+        let left = 0;
+        while (left < maxScan && cx - left - 1 >= 0 && pixelClass(cx - left - 1, y) === PIXEL_NOTE) left++;
+        let right = 0;
+        while (right < maxScan && cx + right + 1 < width && pixelClass(cx + right + 1, y) === PIXEL_NOTE) right++;
+        if (left + right + 1 > blackExtentLimit) isNote = false;
+      }
+
+      if (isNote) {
+        if (segStart < 0) segStart = y;
+        lastNote = y;
+        bright = 0;
+        if ((y & 1) === 0 || rv + lv === 0) {
+          const sx = centerClass === PIXEL_NOTE ? cx : leftCol;
+          const i = (y * width + sx) * 4;
+          if (classifyHand(data[i], data[i + 1], data[i + 2], key.pitch, opts.colorOptions) === 'right') rv++;
+          else lv++;
+        }
+      } else if (segStart >= 0 && centerClass === PIXEL_BRIGHT && bright < bridgeRows) {
+        bright++;
+      } else if (segStart >= 0) {
+        flush();
+      }
+    }
+    flush();
+  }
+
+  return segments;
+}
+
+function segmentsToHits(segments: KeyColumnSegment[], layout: KeyboardLayout, splitPitch: number): KeyHit[] {
+  const centerByPitch = new Map(layout.keys.map((k) => [k.pitch, k.centerRatio]));
+  const byPitch = new Map<number, KeyHit>();
+  for (const s of segments) {
+    if (byPitch.has(s.pitch)) continue;
+    byPitch.set(s.pitch, {
+      pitch: s.pitch,
+      hand: voteHand(s.rightVotes, s.leftVotes, s.pitch, splitPitch),
+      centerRatio: centerByPitch.get(s.pitch) ?? 0,
+    });
+  }
+  return [...byPitch.values()];
+}
+
+export interface KeyHitDetectionOptions {
+  scanlineYRatio: number;
+  keyboardXStartRatio: number;
+  keyboardXEndRatio: number;
+  minPitch: number;
+  maxPitch: number;
+  minSaturation: number;
+  brightnessThreshold: number;
+  colorMode: 'two-colors' | 'single-color' | 'auto';
+  hand1Color: RGB;
+  hand2Color: RGB;
+  splitPitch: number;
+  layout?: KeyboardLayout | null;
+}
+
+/**
+ * Detects which keys have a bar touching the reading line in the current frame (live preview).
+ */
+export function detectKeyHitsFromVideoContext(
+  ctx: CanvasRenderingContext2D,
+  video: CanvasImageSource,
+  width: number,
+  height: number,
+  o: KeyHitDetectionOptions
+): KeyHit[] {
+  const colorOptions: ColorOptions = {
+    colorMode: o.colorMode,
+    hand1Color: o.hand1Color,
+    hand2Color: o.hand2Color,
+    splitPitch: o.splitPitch,
+  };
+
+  if (o.layout) {
+    ctx.drawImage(video, 0, 0, width, height);
+    const scanY = Math.max(4, Math.min(height - 2, Math.round(height * o.scanlineYRatio)));
+    const stripH = Math.max(4, Math.round(height * 0.01));
+    const top = Math.max(0, scanY - stripH + 1);
+    const rows = scanY - top + 1;
+    const data = ctx.getImageData(0, top, width, rows).data;
+    const segments = analyzeKeyColumns(data, width, rows, top, o.layout, {
+      minSaturation: o.minSaturation,
+      brightnessThreshold: o.brightnessThreshold,
+      colorOptions,
+      bridgeRows: 2,
+    });
+    return segmentsToHits(
+      segments.filter((s) => s.touchesBottom),
+      o.layout,
+      o.splitPitch
+    );
+  }
+
+  const segs = detectBarsFromVideoContext(ctx, video, width, height, {
+    scanlineYRatio: o.scanlineYRatio,
+    keyboardXStartRatio: o.keyboardXStartRatio,
+    keyboardXEndRatio: o.keyboardXEndRatio,
+    minPitch: o.minPitch,
+    maxPitch: o.maxPitch,
+    minSaturation: o.minSaturation,
+    brightnessThreshold: o.brightnessThreshold,
+    colorMode: o.colorMode,
+    hand1Color: o.hand1Color,
+    hand2Color: o.hand2Color,
+    splitPitch: o.splitPitch,
+  });
+  const kbStartX = Math.max(0, Math.round(width * o.keyboardXStartRatio));
+  return segs.map((s) => ({ pitch: s.pitch, hand: s.hand, centerRatio: (kbStartX + s.centerX) / width }));
+}
+
+// ---------------------------------------------------------------------------
+// Note reconstruction ("tape" model)
+// ---------------------------------------------------------------------------
+
+/**
+ * Estimates the constant bar fall speed (px/s) by matching bar edges of the same key
+ * between frames ~0.15-0.6 s apart. Static overlays and rising smoke never vote.
+ */
+export function estimateFallSpeed(frames: FrameRecord[], maxSpeed: number): number | null {
+  if (frames.length < 2 || maxSpeed <= 0) return null;
+  const BIN = 2;
+  const binCount = Math.ceil(maxSpeed / BIN) + 2;
+  const hist = new Float64Array(binCount);
+  const samples: number[] = [];
+
+  for (let i = 0; i < frames.length; i++) {
+    const A = frames[i];
+    for (let k = i + 1; k < frames.length; k++) {
+      const dt = frames[k].t - A.t;
+      if (dt < 0.12) continue;
+      if (dt > 0.55) break;
+      const B = frames[k];
+
+      const edgesB = new Map<number, number[]>();
+      const addEdge = (key: number, y: number) => {
+        const list = edgesB.get(key);
+        if (list) list.push(y);
+        else edgesB.set(key, [y]);
+      };
+      for (const s of B.segments) {
+        if (!s.touchesBottom) addEdge(s.pitch * 2, s.yBottom);
+        if (!s.touchesTop) addEdge(s.pitch * 2 + 1, s.yTop);
+      }
+
+      for (const s of A.segments) {
+        const edges: Array<[number, number]> = [];
+        if (!s.touchesBottom) edges.push([s.pitch * 2, s.yBottom]);
+        if (!s.touchesTop) edges.push([s.pitch * 2 + 1, s.yTop]);
+        for (const [key, yA] of edges) {
+          const list = edgesB.get(key);
+          if (!list) continue;
+          for (const yB of list) {
+            const shift = yB - yA;
+            if (shift <= 0) continue;
+            const v = shift / dt;
+            if (v >= maxSpeed) continue;
+            hist[Math.floor(v / BIN)]++;
+            samples.push(v);
+          }
+        }
+      }
+    }
+    if (samples.length > 200000) break;
+  }
+
+  let bestBin = -1;
+  let bestScore = 0;
+  for (let k = 1; k < binCount - 1; k++) {
+    const score = hist[k - 1] + 2 * hist[k] + hist[k + 1];
+    if (score > bestScore) {
+      bestScore = score;
+      bestBin = k;
+    }
+  }
+  if (bestBin < 0 || bestScore < 8) return null;
+
+  const center = (bestBin + 0.5) * BIN;
+  const near = samples.filter((v) => Math.abs(v - center) <= Math.max(BIN * 1.5, center * 0.03));
+  if (near.length < 4) return null;
+  return near.reduce((s, v) => s + v, 0) / near.length;
+}
+
+/**
+ * Rebuilds the notes from every analysed frame. Because bars fall at a constant speed, each frame
+ * reveals a window of the "piano-roll tape": a bar at height y in a frame taken at time t reaches the
+ * reading line at t + (scanY - y) / speed. Every frame votes on that tape and a time bin is active only
+ * when most frames that saw it agree, which removes particles, letters, static overlays and frame drops,
+ * while the small dark gaps between repeated notes are preserved.
+ */
+export function buildNotesFromTape(
+  frames: FrameRecord[],
+  params: {
+    fallSpeed: number;
+    scanY: number;
+    areaTop: number;
+    startTime: number;
+    duration: number;
+    splitPitch?: number;
+    hand1Color?: RGB;
+    hand2Color?: RGB;
+  }
+): VisualNoteEvent[] {
+  const { fallSpeed, scanY, areaTop, startTime, duration } = params;
+  const splitPitch = params.splitPitch ?? 60;
+  const hand1Color = params.hand1Color ?? { r: 34, g: 197, b: 94 };
+  const hand2Color = params.hand2Color ?? { r: 56, g: 189, b: 248 };
+  if (!(fallSpeed > 0)) return [];
+
+  const BIN = 0.01;
+  const lookahead = (scanY - areaTop) / fallSpeed;
+  const totalBins = Math.ceil((duration + lookahead) / BIN) + 2;
+  const observed = new Uint16Array(totalBins);
+  const tapes = new Map<number, { colored: Uint16Array; right: Uint16Array; left: Uint16Array }>();
+
+  const toBin = (sec: number) => Math.max(0, Math.min(totalBins - 1, Math.round(sec / BIN)));
+
+  for (const frame of frames) {
+    const rel = frame.t - startTime;
+    if (rel < -lookahead || rel > duration) continue;
+
+    const b0 = toBin(rel);
+    const b1 = toBin(rel + lookahead);
+    for (let b = b0; b <= b1; b++) if (observed[b] < 65535) observed[b]++;
+
+    for (const s of frame.segments) {
+      const tauBottom = rel + (scanY - s.yBottom) / fallSpeed;
+      const tauTop = rel + (scanY - s.yTop) / fallSpeed;
+      let tape = tapes.get(s.pitch);
+      if (!tape) {
+        tape = {
+          colored: new Uint16Array(totalBins),
+          right: new Uint16Array(totalBins),
+          left: new Uint16Array(totalBins),
+        };
+        tapes.set(s.pitch, tape);
+      }
+      const isRight = voteHand(s.rightVotes, s.leftVotes, s.pitch, splitPitch) === 'right';
+      const sb = Math.max(b0, toBin(tauBottom));
+      const eb = Math.min(b1, toBin(tauTop));
+      for (let b = sb; b <= eb; b++) {
+        if (tape.colored[b] < 65535) tape.colored[b]++;
+        if (isRight) {
+          if (tape.right[b] < 65535) tape.right[b]++;
+        } else if (tape.left[b] < 65535) {
+          tape.left[b]++;
+        }
+      }
+    }
+  }
+
+  const notes: VisualNoteEvent[] = [];
+  for (const [pitch, tape] of tapes) {
+    let start = -1;
+    let rv = 0;
+    let lv = 0;
+    let gapBins = 0;
+    for (let b = 0; b <= totalBins; b++) {
+      const minObs = Math.min(2, Math.max(1, observed[b]));
+      const isColored =
+        b < totalBins &&
+        observed[b] >= 1 &&
+        tape.colored[b] >= minObs &&
+        (tape.colored[b] * 2 >= observed[b] || tape.colored[b] >= 2);
+
+      if (isColored) {
+        if (start < 0) {
+          start = b;
+          rv = 0;
+          lv = 0;
+        }
+        gapBins = 0;
+        rv += tape.right[b];
+        lv += tape.left[b];
+      } else if (start >= 0) {
+        // Bridge single-bin flicker (<= 10ms gap) if the next bin is colored
+        gapBins++;
+        if (gapBins > 1 || b >= totalBins) {
+          const endBin = b - gapBins;
+          const startSec = start * BIN;
+          const endSec = endBin * BIN;
+          if (endSec - startSec >= 0.03 && startSec < duration) {
+            const hand = voteHand(rv, lv, pitch, splitPitch);
+            notes.push({
+              pitch,
+              startSec,
+              endSec,
+              hand,
+              color: hand === 'right' ? hand1Color : hand2Color,
+            });
+          }
+          start = -1;
+          gapBins = 0;
+        }
+      }
+    }
+  }
+
+  notes.sort((a, b) => a.startSec - b.startSec || a.pitch - b.pitch);
+  return notes;
+}
+
+/**
+ * Temporal fallback: tracks keys touching the reading line over time (used when no keyboard
+ * or no fall speed could be established).
+ */
+function createScanlineTracker(splitPitch: number) {
+  interface Tracked {
+    pitch: number;
+    startSec: number;
+    lastSec: number;
+    lastDt: number;
+    frames: number;
+    right: number;
+    left: number;
+  }
+  const active = new Map<number, Tracked>();
+  const notes: Array<{ pitch: number; startSec: number; endSec: number; hand: 'right' | 'left' }> = [];
+
+  const finalize = (n: Tracked) => {
+    const end = n.lastSec + n.lastDt;
+    if (n.frames >= 2 || end - n.startSec >= 0.08) {
+      notes.push({
+        pitch: n.pitch,
+        startSec: n.startSec,
+        endSec: end,
+        hand: voteHand(n.right, n.left, n.pitch, splitPitch),
+      });
+    }
+  };
+
+  return {
+    track(rel: number, dt: number, hits: Array<{ pitch: number; hand: 'right' | 'left' }>) {
+      const present = new Set<number>();
+      for (const h of hits) {
+        present.add(h.pitch);
+        const n = active.get(h.pitch);
+        if (n) {
+          n.lastSec = rel;
+          n.lastDt = dt;
+          n.frames++;
+          if (h.hand === 'right') n.right++;
+          else n.left++;
+        } else {
+          active.set(h.pitch, {
+            pitch: h.pitch,
+            startSec: rel,
+            lastSec: rel,
+            lastDt: dt,
+            frames: 1,
+            right: h.hand === 'right' ? 1 : 0,
+            left: h.hand === 'left' ? 1 : 0,
+          });
+        }
+      }
+      for (const [pitch, n] of active) {
+        if (present.has(pitch)) {
+          if (rel - n.startSec > 12) {
+            finalize(n);
+            active.delete(pitch);
+          }
+          continue;
+        }
+        if (rel - n.lastSec > Math.max(0.045, 1.6 * dt)) {
+          finalize(n);
+          active.delete(pitch);
+        }
+      }
+    },
+    finish() {
+      for (const n of active.values()) finalize(n);
+      active.clear();
+      notes.sort((a, b) => a.startSec - b.startSec || a.pitch - b.pitch);
+      return notes;
+    },
+  };
+}
+
+type FrameCallbackHost = {
+  requestVideoFrameCallback?: (cb: (now: number, metadata: { mediaTime: number }) => void) => number;
+  cancelVideoFrameCallback?: (handle: number) => void;
+};
+
+/**
+ * Scans the video inside [startTime, endTime]:
+ * 1. Detects the real keyboard (or uses the provided layout) to know where every key is.
+ * 2. Plays the video muted at an accelerated rate and analyses every presented frame using
+ *    requestVideoFrameCallback (exact media timestamps), with polling/stepped-seek fallbacks.
+ * 3. Reconstructs the notes with the tape model (falls back to scanline tracking if needed).
  */
 export async function scanVideoFrames(
   videoElement: HTMLVideoElement,
@@ -538,6 +1329,9 @@ export async function scanVideoFrames(
     hand1Color = { r: 34, g: 197, b: 94 },
     hand2Color = { r: 56, g: 189, b: 248 },
     splitPitch = 60,
+    keyboardLayout = null,
+    octaveShift = 0,
+    playbackRate = 4,
     onProgress,
     onFrameDetections,
   } = options;
@@ -547,7 +1341,6 @@ export async function scanVideoFrames(
   const endCrop = endTime && endTime > startCrop ? Math.min(totalDuration, endTime) : totalDuration;
   const duration = Math.max(0.5, endCrop - startCrop);
 
-  // Use a compact 960x540 working canvas for fast, reliable full-frame GPU blits
   const rawW = videoElement.videoWidth || 1280;
   const rawH = videoElement.videoHeight || 720;
   const scale = Math.min(1, 960 / rawW);
@@ -558,107 +1351,70 @@ export async function scanVideoFrames(
   scanCanvas.width = canvasWidth;
   scanCanvas.height = canvasHeight;
   const scanCtx = scanCanvas.getContext('2d', { willReadFrequently: true });
-
   if (!scanCtx) {
     throw new Error('Não foi possível inicializar contexto 2D de renderização.');
   }
 
-  interface ActiveBarNote {
-    pitch: number;
-    startSec: number;
-    lastSec: number;
-    hand: 'right' | 'left';
-    colors: { r: number; g: number; b: number }[];
-    missingCount: number;
-  }
+  const scanY = Math.max(12, Math.min(canvasHeight - 2, Math.round(canvasHeight * scanlineYRatio)));
+  const areaTop = Math.max(0, Math.min(Math.round(canvasHeight * 0.02), scanY - 10));
+  const areaRows = scanY - areaTop + 1;
+  const bridgeRows = Math.max(3, Math.round(canvasHeight * 0.035));
+  const colorOptions: ColorOptions = { colorMode, hand1Color, hand2Color, splitPitch };
 
-  const activeNotes = new Map<number, ActiveBarNote>();
-  const collectedNotes: VisualNoteEvent[] = [];
+  const frames: FrameRecord[] = [];
+  const tracker = createScanlineTracker(splitPitch);
+  let baseLayout: KeyboardLayout | null = keyboardLayout;
+  let layout: KeyboardLayout | null = null;
   let framesScanned = 0;
+  let lastProcessedTime = startCrop;
+  let lastUiUpdate = 0;
 
-  const detectOpts = {
-    scanlineYRatio,
-    keyboardXStartRatio,
-    keyboardXEndRatio,
-    minPitch,
-    maxPitch,
-    minSaturation,
-    brightnessThreshold,
-    colorMode,
-    hand1Color,
-    hand2Color,
-    splitPitch,
+  const emitUi = (t: number, hits: KeyHit[]) => {
+    const now = performance.now();
+    if (now - lastUiUpdate < 100) return;
+    lastUiUpdate = now;
+    onFrameDetections?.(hits, t);
+    const p = Math.max(0, Math.min(1, (t - startCrop) / duration));
+    onProgress?.(p, `Lendo barras no vídeo (${Math.round(p * 100)}%) • ${framesScanned} quadros analisados...`);
   };
 
-  const processFrameAtTime = (videoCurrentTime: number, dt: number) => {
-    const relativeTime = Math.max(0, videoCurrentTime - startCrop);
+  const processFrame = (t: number, dt: number) => {
     framesScanned++;
-
-    const detectedSegments = detectBarsFromVideoContext(
-      scanCtx,
-      videoElement,
-      canvasWidth,
-      canvasHeight,
-      detectOpts
-    );
-
-    onFrameDetections?.(detectedSegments, videoCurrentTime);
-
-    const currentFramePitches = new Map<number, DetectedBarSegment>();
-    for (const seg of detectedSegments) {
-      currentFramePitches.set(seg.pitch, seg);
+    lastProcessedTime = t;
+    let hits: KeyHit[];
+    if (layout) {
+      scanCtx.drawImage(videoElement, 0, 0, canvasWidth, canvasHeight);
+      const data = scanCtx.getImageData(0, areaTop, canvasWidth, areaRows).data;
+      const segments = analyzeKeyColumns(data, canvasWidth, areaRows, areaTop, layout, {
+        minSaturation,
+        brightnessThreshold,
+        colorOptions,
+        bridgeRows,
+      });
+      frames.push({ t, segments });
+      hits = segmentsToHits(
+        segments.filter((s) => s.touchesBottom),
+        layout,
+        splitPitch
+      );
+    } else {
+      hits = detectKeyHitsFromVideoContext(scanCtx, videoElement, canvasWidth, canvasHeight, {
+        scanlineYRatio,
+        keyboardXStartRatio,
+        keyboardXEndRatio,
+        minPitch,
+        maxPitch,
+        minSaturation,
+        brightnessThreshold,
+        colorMode,
+        hand1Color,
+        hand2Color,
+        splitPitch,
+        layout: null,
+      });
     }
-
-    // 1. Update existing active notes or trigger new onsets
-    for (const [pitch, seg] of currentFramePitches.entries()) {
-      if (!activeNotes.has(pitch)) {
-        activeNotes.set(pitch, {
-          pitch,
-          startSec: relativeTime,
-          lastSec: relativeTime,
-          hand: seg.hand,
-          colors: [seg.color],
-          missingCount: 0,
-        });
-      } else {
-        const existing = activeNotes.get(pitch)!;
-        existing.lastSec = relativeTime;
-        existing.colors.push(seg.color);
-        existing.missingCount = 0;
-      }
-    }
-
-    // 2. Check for released notes
-    for (const [pitch, note] of activeNotes.entries()) {
-      const durationSoFar = relativeTime - note.startSec;
-      const isMissing = !currentFramePitches.has(pitch);
-      const isTooLong = durationSoFar > 5.0;
-
-      if (isMissing) {
-        note.missingCount++;
-      }
-
-      if (note.missingCount >= 2 || isTooLong) {
-        const noteDuration = Math.max(dt, note.lastSec - note.startSec + dt);
-        if (noteDuration >= 0.05) {
-          const count = note.colors.length;
-          const avgColor = {
-            r: Math.round(note.colors.reduce((acc, c) => acc + c.r, 0) / count),
-            g: Math.round(note.colors.reduce((acc, c) => acc + c.g, 0) / count),
-            b: Math.round(note.colors.reduce((acc, c) => acc + c.b, 0) / count),
-          };
-
-          collectedNotes.push({
-            pitch: note.pitch,
-            startSec: note.startSec,
-            endSec: note.startSec + noteDuration,
-            hand: note.hand,
-            color: avgColor,
-          });
-        }
-        activeNotes.delete(pitch);
-      }
-    }
+    tracker.track(t - startCrop, dt, hits);
+    emitUi(t, hits);
   };
 
   const seekAndWait = async (targetTime: number, maxWaitMs = 500) => {
@@ -677,89 +1433,129 @@ export async function scanVideoFrames(
     });
   };
 
+  const host = videoElement as unknown as FrameCallbackHost;
+
+  const playWithFrameCallbacks = () =>
+    new Promise<boolean>((resolve) => {
+      let lastMedia = -1;
+      let lastFrameWall = performance.now();
+      let finished = false;
+      let handle = 0;
+
+      const finish = (ok: boolean) => {
+        if (finished) return;
+        finished = true;
+        clearInterval(watchdog);
+        videoElement.removeEventListener('ended', onEnded);
+        if (handle && host.cancelVideoFrameCallback) host.cancelVideoFrameCallback(handle);
+        videoElement.pause();
+        resolve(ok);
+      };
+      const onEnded = () => finish(true);
+
+      const onFrame = (_now: number, metadata: { mediaTime: number }) => {
+        if (finished) return;
+        const t = metadata.mediaTime;
+        lastFrameWall = performance.now();
+        if (t >= endCrop) {
+          finish(true);
+          return;
+        }
+        if (t >= startCrop - 0.005 && t > lastMedia) {
+          const dt = lastMedia < 0 ? 1 / 30 : Math.min(0.25, Math.max(1 / 240, t - lastMedia));
+          processFrame(t, dt);
+          lastMedia = t;
+        }
+        handle = host.requestVideoFrameCallback!(onFrame);
+      };
+
+      videoElement.addEventListener('ended', onEnded);
+      const watchdog = setInterval(() => {
+        if (performance.now() - lastFrameWall > 2500) finish(false);
+      }, 250);
+      handle = host.requestVideoFrameCallback!(onFrame);
+      videoElement.play().catch(() => finish(false));
+    });
+
+  const playWithPolling = () =>
+    new Promise<boolean>((resolve) => {
+      let lastMedia = -1;
+      let lastAdvanceWall = performance.now();
+      const interval = setInterval(() => {
+        const now = performance.now();
+        const t = videoElement.currentTime;
+        if (t >= endCrop || videoElement.ended) {
+          clearInterval(interval);
+          videoElement.pause();
+          resolve(true);
+          return;
+        }
+        if (t - lastMedia >= 1 / 60) {
+          const dt = lastMedia < 0 ? 1 / 30 : Math.min(0.25, t - lastMedia);
+          lastMedia = t;
+          lastAdvanceWall = now;
+          processFrame(t, dt);
+        } else if (now - lastAdvanceWall > 1500) {
+          clearInterval(interval);
+          videoElement.pause();
+          resolve(false);
+        }
+      }, 15);
+      videoElement.play().catch(() => {
+        clearInterval(interval);
+        resolve(false);
+      });
+    });
+
   const wasMuted = videoElement.muted;
   const prevRate = videoElement.playbackRate;
   videoElement.pause();
   videoElement.muted = true;
 
   try {
-    // Seek to startCrop once
-    await seekAndWait(startCrop, 800);
-
-    // Attempt high-speed forward playback first (avoids H.264 GOP keyframe seek flushes!)
-    let playbackSucceeded = false;
-    try {
-      try {
-        videoElement.playbackRate = 3.5;
-      } catch {
-        videoElement.playbackRate = 2.0;
+    if (!baseLayout) {
+      onProgress?.(0, 'Procurando o teclado no vídeo...');
+      for (let i = 0; i < 6; i++) {
+        await seekAndWait(startCrop + (duration * (i + 0.5)) / 6, 900);
+        const found = detectKeyboardLayoutInFrame(
+          scanCtx,
+          videoElement,
+          canvasWidth,
+          canvasHeight,
+          Math.min(0.45, scanlineYRatio * 0.75)
+        );
+        if (found && (!baseLayout || found.score > baseLayout.score)) baseLayout = found;
       }
+    }
+    layout = baseLayout ? shiftLayoutOctave(baseLayout, octaveShift) : null;
 
-      await videoElement.play();
-
-      await new Promise<void>((resolve) => {
-        let lastMediaTime = videoElement.currentTime;
-        let lastAdvanceWallTime = performance.now();
-
-        const interval = setInterval(() => {
-          const now = performance.now();
-          const curTime = videoElement.currentTime;
-
-          if (curTime >= endCrop || videoElement.ended) {
-            clearInterval(interval);
-            videoElement.pause();
-            playbackSucceeded = framesScanned > 3;
-            resolve();
-            return;
-          }
-
-          const dt = curTime - lastMediaTime;
-          if (dt >= 0.05) {
-            lastMediaTime = curTime;
-            lastAdvanceWallTime = now;
-            processFrameAtTime(curTime, Math.min(0.25, dt));
-
-            const p = Math.max(0, Math.min(1, (curTime - startCrop) / duration));
-            onProgress?.(
-              p,
-              `Lendo barras no vídeo (${Math.round(p * 100)}%) • ${
-                collectedNotes.length + activeNotes.size
-              } notas detectadas...`
-            );
-          } else if (now - lastAdvanceWallTime > 900) {
-            // Playback stalled; switch to stepped seek fallback
-            clearInterval(interval);
-            videoElement.pause();
-            resolve();
-          }
-        }, 25);
-      });
+    await seekAndWait(startCrop, 900);
+    try {
+      videoElement.playbackRate = playbackRate;
     } catch {
-      playbackSucceeded = false;
+      videoElement.playbackRate = 2;
     }
 
-    // Fallback: If fast playback was blocked or stalled early, finish from current position via stepped seek
-    if (!playbackSucceeded) {
-      const resumeStart =
-        framesScanned > 0 ? Math.max(startCrop, videoElement.currentTime) : startCrop;
-      const frameInterval = 1 / fps;
-      const remainingDuration = Math.max(0.1, endCrop - resumeStart);
-      const remainingFrames = Math.max(1, Math.floor(remainingDuration / frameInterval));
+    let reachedEnd = false;
+    try {
+      reachedEnd =
+        typeof host.requestVideoFrameCallback === 'function'
+          ? await playWithFrameCallbacks()
+          : await playWithPolling();
+    } catch {
+      reachedEnd = false;
+    }
 
+    // Fallback: finish whatever is left with properly awaited seeks
+    if (!reachedEnd) {
+      videoElement.pause();
+      const frameInterval = 1 / Math.max(8, fps);
+      const resumeStart = Math.max(startCrop, lastProcessedTime + frameInterval);
+      const remainingFrames = Math.max(0, Math.floor((endCrop - resumeStart) / frameInterval));
       for (let f = 0; f < remainingFrames; f++) {
         const t = resumeStart + f * frameInterval;
         await seekAndWait(t, 450);
-        processFrameAtTime(t, frameInterval);
-
-        if (f % 4 === 0 && onProgress) {
-          const p = Math.max(0, Math.min(1, (t - startCrop) / duration));
-          onProgress(
-            p,
-            `Lendo barras no vídeo (${Math.round(p * 100)}%) • ${
-              collectedNotes.length + activeNotes.size
-            } notas detectadas...`
-          );
-        }
+        processFrame(t, frameInterval);
       }
     }
   } finally {
@@ -768,123 +1564,261 @@ export async function scanVideoFrames(
     videoElement.muted = wasMuted;
   }
 
-  // Flush remaining active notes
-  const defaultFrameDt = 1 / fps;
-  for (const note of activeNotes.values()) {
-    const noteDuration = Math.min(4.0, Math.max(defaultFrameDt, note.lastSec - note.startSec + defaultFrameDt));
-    if (noteDuration >= 0.05) {
-      const count = note.colors.length;
-      const avgColor = {
-        r: Math.round(note.colors.reduce((acc, c) => acc + c.r, 0) / count),
-        g: Math.round(note.colors.reduce((acc, c) => acc + c.g, 0) / count),
-        b: Math.round(note.colors.reduce((acc, c) => acc + c.b, 0) / count),
-      };
+  let visualNotes: VisualNoteEvent[] | null = null;
+  let fallSpeed: number | null = null;
+  let method: 'tape' | 'scanline' = 'scanline';
 
-      collectedNotes.push({
-        pitch: note.pitch,
-        startSec: note.startSec,
-        endSec: note.startSec + noteDuration,
-        hand: note.hand,
-        color: avgColor,
+  if (layout && frames.length >= 8) {
+    fallSpeed = estimateFallSpeed(frames, canvasHeight * 4);
+    if (fallSpeed) {
+      const tapeNotes = buildNotesFromTape(frames, {
+        fallSpeed,
+        scanY,
+        areaTop,
+        startTime: startCrop,
+        duration,
+        splitPitch,
+        hand1Color,
+        hand2Color,
       });
+      if (tapeNotes.length > 0) {
+        visualNotes = tapeNotes;
+        method = 'tape';
+      }
     }
   }
 
-  collectedNotes.sort((a, b) => a.startSec - b.startSec || a.pitch - b.pitch);
+  if (!visualNotes) {
+    visualNotes = tracker.finish().map((n) => ({
+      ...n,
+      color: n.hand === 'right' ? hand1Color : hand2Color,
+    }));
+  }
 
   return {
-    visualNotes: collectedNotes,
+    visualNotes,
     dominantColors: {
       rightHand: hand1Color,
       leftHand: hand2Color,
     },
     totalFramesScanned: framesScanned,
+    keyboardLayout: baseLayout,
+    sampleFps: framesScanned / duration,
+    fallSpeedPxPerSec: fallSpeed,
+    method,
   };
 }
 
+// ---------------------------------------------------------------------------
+// Audio + video fusion
+// ---------------------------------------------------------------------------
+
 /**
- * Fuses Audio-to-MIDI notes with Video Computer Vision notes:
- * - If visualNotes has rich detections, combines visual hand separation + durations with audio velocities.
- * - Also includes visual notes that the audio detector missed (e.g. soft bass notes or masked inner chord notes),
- *   so the video scan actively improves both completeness and hand separation!
+ * Estimates the constant time offset between video onsets and audio onsets (the video reading line
+ * sits above the keys, so bars touch it a little before the key sounds). Returns lag such that
+ * audioSec ≈ visualSec + lag.
+ */
+export function estimateAudioVisualLag(
+  audioNotes: Note[],
+  visualNotes: VisualNoteEvent[],
+  ticksPerSecond: number
+): { lagSec: number; votes: number } {
+  if (audioNotes.length === 0 || visualNotes.length === 0 || !(ticksPerSecond > 0)) {
+    return { lagSec: 0, votes: 0 };
+  }
+
+  const byPitch = new Map<number, number[]>();
+  for (const a of audioNotes) {
+    const list = byPitch.get(a.pitch);
+    const sec = a.startTick / ticksPerSecond;
+    if (list) list.push(sec);
+    else byPitch.set(a.pitch, [sec]);
+  }
+
+  const RANGE = 1.5;
+  const BIN = 0.02;
+  const binCount = Math.round((2 * RANGE) / BIN) + 1;
+  const hist = new Float64Array(binCount);
+  const diffs: number[] = [];
+  const step = Math.max(1, Math.floor(visualNotes.length / 800));
+  let sampled = 0;
+
+  for (let i = 0; i < visualNotes.length; i += step) {
+    const v = visualNotes[i];
+    sampled++;
+    const list = byPitch.get(v.pitch);
+    if (!list) continue;
+    for (const sec of list) {
+      const d = sec - v.startSec;
+      if (Math.abs(d) > RANGE) continue;
+      hist[Math.round((d + RANGE) / BIN)]++;
+      diffs.push(d);
+    }
+  }
+
+  let best = -1;
+  let bestScore = 0;
+  for (let k = 1; k < binCount - 1; k++) {
+    const score = hist[k - 1] + 2 * hist[k] + hist[k + 1];
+    if (score > bestScore) {
+      bestScore = score;
+      best = k;
+    }
+  }
+  if (best < 0) return { lagSec: 0, votes: 0 };
+
+  const center = best * BIN - RANGE;
+  const near = diffs.filter((d) => Math.abs(d - center) <= 0.03);
+  const minVotes = Math.max(8, 0.1 * Math.min(sampled, audioNotes.length));
+  if (near.length < minVotes) return { lagSec: 0, votes: near.length };
+
+  return { lagSec: near.reduce((s, d) => s + d, 0) / near.length, votes: near.length };
+}
+
+export interface FusionOptions {
+  /**
+   * 'audio': every audio note is kept, video assigns hands/durations.
+   * 'video': every video note is kept (exact pitches from the keyboard), audio provides velocities.
+   * 'auto': uses video when the video scan produced a rich result.
+   */
+  backbone?: 'audio' | 'video' | 'auto';
+  autoAlign?: boolean;
+}
+
+/**
+ * Fuses Audio-to-MIDI notes with Video Computer Vision notes.
  */
 export function fuseAudioAndVisionNotes(
   audioNotes: Note[],
   visualNotes: VisualNoteEvent[],
   bpm: number,
   ticksPerBeat = TICKS_PER_BEAT,
-  splitPitch = 60
+  splitPitch = 60,
+  options: FusionOptions = {}
 ): {
   rightHandNotes: Note[];
   leftHandNotes: Note[];
   allNotes: Note[];
   matchedVisualCount: number;
+  lagSec: number;
+  backbone: 'audio' | 'video';
 } {
+  const { backbone = 'audio', autoAlign = true } = options;
   const ticksPerSecond = (bpm * ticksPerBeat) / 60;
+
+  const { lagSec } = autoAlign
+    ? estimateAudioVisualLag(audioNotes, visualNotes, ticksPerSecond)
+    : { lagSec: 0 };
+  const aligned = lagSec !== 0;
+  const shifted = visualNotes.map((v) => ({ ...v, startSec: v.startSec + lagSec, endSec: v.endSec + lagSec }));
+
+  const useVideo =
+    backbone === 'video' ||
+    (backbone === 'auto' && visualNotes.length >= 20 && visualNotes.length >= audioNotes.length * 0.3);
 
   const rightHandNotes: Note[] = [];
   const leftHandNotes: Note[] = [];
   const allNotes: Note[] = [];
-
   let matchedVisualCount = 0;
-  const usedVisualIndices = new Set<number>();
 
-  for (const aNote of audioNotes) {
-    const noteSec = aNote.startTick / ticksPerSecond;
-
-    // 1. Look for exact pitch match within +-0.45s
-    let matchedIdx = visualNotes.findIndex(
-      (v, idx) => !usedVisualIndices.has(idx) && v.pitch === aNote.pitch && Math.abs(v.startSec - noteSec) <= 0.45
-    );
-
-    // 2. If no exact match, allow +-1 semitone tolerance in case keyboard calibration slider had a slight 1% offset
-    if (matchedIdx === -1) {
-      matchedIdx = visualNotes.findIndex(
-        (v, idx) =>
-          !usedVisualIndices.has(idx) &&
-          Math.abs(v.pitch - aNote.pitch) <= 1 &&
-          Math.abs(v.startSec - noteSec) <= 0.35
-      );
-    }
-
-    let assignedHand: 'right' | 'left';
-    let durationTicks = aNote.durationTicks;
-
-    if (matchedIdx !== -1) {
-      usedVisualIndices.add(matchedIdx);
-      const matchedVisual = visualNotes[matchedIdx];
-      matchedVisualCount++;
-      assignedHand = matchedVisual.hand;
-      const vDurTicks = Math.round((matchedVisual.endSec - matchedVisual.startSec) * ticksPerSecond);
-      if (vDurTicks >= 60 && vDurTicks <= 480 * 8) {
-        durationTicks = vDurTicks;
-      }
-    } else {
-      assignedHand = aNote.pitch >= splitPitch ? 'right' : 'left';
-    }
-
-    const note: Note = {
-      ...aNote,
-      durationTicks,
-    };
-
+  const push = (note: Note, hand: 'right' | 'left') => {
     allNotes.push(note);
-    if (assignedHand === 'right') {
-      rightHandNotes.push(note);
-    } else {
-      leftHandNotes.push(note);
+    if (hand === 'right') rightHandNotes.push(note);
+    else leftHandNotes.push(note);
+  };
+
+  if (useVideo) {
+    const velocities = audioNotes.map((a) => a.velocity).sort((a, b) => a - b);
+    const defaultVelocity = velocities.length ? velocities[Math.floor(velocities.length / 2)] : 85;
+    const audioByPitch = new Map<number, Array<{ sec: number; idx: number }>>();
+    audioNotes.forEach((a, idx) => {
+      const list = audioByPitch.get(a.pitch);
+      const entry = { sec: a.startTick / ticksPerSecond, idx };
+      if (list) list.push(entry);
+      else audioByPitch.set(a.pitch, [entry]);
+    });
+    const used = new Set<number>();
+    const window = aligned ? 0.12 : 0.3;
+
+    shifted.forEach((v, i) => {
+      let bestIdx = -1;
+      let bestDist = Infinity;
+      for (const a of audioByPitch.get(v.pitch) ?? []) {
+        if (used.has(a.idx)) continue;
+        const d = Math.abs(a.sec - v.startSec);
+        if (d <= window && d < bestDist) {
+          bestDist = d;
+          bestIdx = a.idx;
+        }
+      }
+      if (bestIdx >= 0) {
+        used.add(bestIdx);
+        matchedVisualCount++;
+      }
+      push(
+        {
+          id: `fv-${i}`,
+          trackId: '',
+          pitch: v.pitch,
+          startTick: Math.max(0, Math.round(v.startSec * ticksPerSecond)),
+          durationTicks: Math.max(30, Math.round((v.endSec - v.startSec) * ticksPerSecond)),
+          velocity: bestIdx >= 0 ? audioNotes[bestIdx].velocity : defaultVelocity,
+        },
+        v.hand
+      );
+    });
+  } else {
+    const usedVisualIndices = new Set<number>();
+    const exactWindow = aligned ? 0.2 : 0.45;
+    const nearWindow = aligned ? 0.15 : 0.35;
+
+    for (const aNote of audioNotes) {
+      const noteSec = aNote.startTick / ticksPerSecond;
+
+      let matchedIdx = shifted.findIndex(
+        (v, idx) =>
+          !usedVisualIndices.has(idx) && v.pitch === aNote.pitch && Math.abs(v.startSec - noteSec) <= exactWindow
+      );
+      if (matchedIdx === -1) {
+        matchedIdx = shifted.findIndex(
+          (v, idx) =>
+            !usedVisualIndices.has(idx) &&
+            Math.abs(v.pitch - aNote.pitch) <= 1 &&
+            Math.abs(v.startSec - noteSec) <= nearWindow
+        );
+      }
+
+      let assignedHand: 'right' | 'left';
+      let durationTicks = aNote.durationTicks;
+
+      if (matchedIdx !== -1) {
+        usedVisualIndices.add(matchedIdx);
+        const matchedVisual = shifted[matchedIdx];
+        matchedVisualCount++;
+        assignedHand = matchedVisual.hand;
+        const vDurTicks = Math.round((matchedVisual.endSec - matchedVisual.startSec) * ticksPerSecond);
+        if (vDurTicks >= 60 && vDurTicks <= 480 * 8) {
+          durationTicks = vDurTicks;
+        }
+      } else {
+        assignedHand = aNote.pitch >= splitPitch ? 'right' : 'left';
+      }
+
+      push({ ...aNote, durationTicks }, assignedHand);
     }
   }
 
-  // Sort chronologically
-  rightHandNotes.sort((a, b) => a.startTick - b.startTick || a.pitch - b.pitch);
-  leftHandNotes.sort((a, b) => a.startTick - b.startTick || a.pitch - b.pitch);
-  allNotes.sort((a, b) => a.startTick - b.startTick || a.pitch - b.pitch);
+  const byTime = (a: Note, b: Note) => a.startTick - b.startTick || a.pitch - b.pitch;
+  rightHandNotes.sort(byTime);
+  leftHandNotes.sort(byTime);
+  allNotes.sort(byTime);
 
   return {
     rightHandNotes,
     leftHandNotes,
     allNotes,
     matchedVisualCount,
+    lagSec,
+    backbone: useVideo ? 'video' : 'audio',
   };
 }
