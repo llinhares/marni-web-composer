@@ -63,7 +63,7 @@ export function estimateBpmFromAudioBuffer(audioBuffer: AudioBuffer): number {
     for (let j = start; j < end; j++) {
       sum += channelData[j] * channelData[j];
     }
-    envelope[i] = Math.sqrt(sum / (end - start));
+    envelope[i] = Math.sqrt(sum / Math.max(1, end - start));
   }
 
   // First difference (spectral/energy flux)
@@ -96,8 +96,8 @@ export function estimateBpmFromAudioBuffer(audioBuffer: AudioBuffer): number {
 }
 
 /**
- * Pure client-side polyphonic audio-to-MIDI transcription using Short-Time Fourier Transform (STFT),
- * peak interpolation, harmonic suppression, and energy-tracking.
+ * Pure client-side polyphonic audio-to-MIDI transcription using Goertzel spectral bins,
+ * local peak-picking, onset surge detection, and harmonic suppression.
  */
 export async function transcribeAudioBufferToNotes(
   audioBuffer: AudioBuffer,
@@ -140,15 +140,14 @@ export async function transcribeAudioBufferToNotes(
     window[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (fftSize - 1)));
   }
 
-  // Target energy threshold based on sensitivity (higher sensitivity = lower threshold)
-  const baseThreshold = 0.015 * Math.pow(1 - sensitivity * 0.7, 2);
+  // Target energy threshold based on sensitivity
+  const baseThreshold = 0.02 * Math.pow(1 - sensitivity * 0.6, 2);
 
   interface ActiveNoteCandidate {
     pitch: number;
     startFrame: number;
     lastFrame: number;
     peakEnergy: number;
-    totalEnergy: number;
     frameCount: number;
   }
 
@@ -162,9 +161,7 @@ export async function transcribeAudioBufferToNotes(
 
   const timePerFrame = hopSize / sampleRate;
 
-  // Real/Imaginary arrays for simplified DFT around target frequencies
-  // Instead of full N^2 DFT or heavy FFT, calculate Goertzel / discrete bins for standard 88 piano pitches!
-  // This is order of magnitude faster and yields exact musical note binning.
+  // Goertzel bins for piano pitches
   const pitchBins: { pitch: number; freq: number; k: number; omega: number; cosW: number; sinW: number }[] = [];
   for (let p = minPitch; p <= maxPitch; p++) {
     const freq = pitchFrequencies.get(p)!;
@@ -180,18 +177,20 @@ export async function transcribeAudioBufferToNotes(
     });
   }
 
+  let prevEnergies = new Map<number, number>();
+
   for (let frameIdx = 0; frameIdx < numFrames; frameIdx++) {
-    if (frameIdx % 50 === 0 && onProgress) {
+    if (frameIdx % 40 === 0 && onProgress) {
       const p = 0.2 + 0.6 * (frameIdx / numFrames);
       onProgress(p, `Processando áudio (${Math.round((frameIdx / numFrames) * 100)}%)...`);
-      // Yield to UI thread periodically
       await new Promise((r) => setTimeout(r, 0));
     }
 
     const startSample = frameIdx * hopSize;
     const energies = new Map<number, number>();
+    let totalFrameEnergy = 0;
 
-    // Compute energy for each target pitch bin using Goertzel algorithm
+    // 1. Compute magnitude for each pitch
     for (const bin of pitchBins) {
       let q0 = 0;
       let q1 = 0;
@@ -209,20 +208,21 @@ export async function transcribeAudioBufferToNotes(
       const imag = q2 * bin.sinW;
       const mag = Math.sqrt(real * real + imag * imag) / fftSize;
       energies.set(bin.pitch, mag);
+      totalFrameEnergy += mag;
     }
 
-    // Harmonic suppression: if fundamental pitch P has strong energy, attenuate 2P (+12 semitones) and 3P (+19 semitones)
+    const avgFrameEnergy = totalFrameEnergy / pitchBins.length;
+
+    // 2. Harmonic suppression: attenuate octave (2P, +12) and 3rd harmonic (+19)
     for (let p = minPitch; p <= maxPitch; p++) {
       const fundamental = energies.get(p) || 0;
       if (fundamental > baseThreshold * 1.5) {
-        // Octave overtone (2nd harmonic: +12 semitones)
         const octavePitch = p + 12;
         if (octavePitch <= maxPitch) {
           const octaveEnergy = energies.get(octavePitch) || 0;
-          energies.set(octavePitch, Math.max(0, octaveEnergy - fundamental * 0.45));
+          energies.set(octavePitch, Math.max(0, octaveEnergy - fundamental * 0.5));
         }
 
-        // 3rd harmonic (+19 semitones)
         const fifthPitch = p + 19;
         if (fifthPitch <= maxPitch) {
           const fifthEnergy = energies.get(fifthPitch) || 0;
@@ -231,64 +231,81 @@ export async function transcribeAudioBufferToNotes(
       }
     }
 
-    // Check which pitches are active in this frame
+    // 3. Peak picking and onset surge detection:
+    // A pitch is only active if it is a LOCAL PEAK compared to adjacent semitones!
     const currentActivePitches = new Set<number>();
+
     for (let p = minPitch; p <= maxPitch; p++) {
       const energy = energies.get(p) || 0;
-      if (energy > baseThreshold) {
-        currentActivePitches.add(p);
+      const prevEnergy = prevEnergies.get(p) || 0;
+      const leftEnergy = energies.get(p - 1) || 0;
+      const rightEnergy = energies.get(p + 1) || 0;
 
+      // Must be above noise floor AND higher than adjacent pitches (local peak!)
+      const isPeak = energy > leftEnergy * 1.15 && energy > rightEnergy * 1.15;
+      const isAboveNoise = energy > Math.max(baseThreshold, avgFrameEnergy * 1.4);
+      const isSurge = energy - prevEnergy > baseThreshold * 0.5;
+
+      if (isAboveNoise && (isPeak || activeNotes.has(p))) {
         if (!activeNotes.has(p)) {
-          // New note onset
-          activeNotes.set(p, {
-            pitch: p,
-            startFrame: frameIdx,
-            lastFrame: frameIdx,
-            peakEnergy: energy,
-            totalEnergy: energy,
-            frameCount: 1,
-          });
+          // Trigger onset only if it's a peak or sudden energy surge
+          if (isPeak || isSurge) {
+            currentActivePitches.add(p);
+            activeNotes.set(p, {
+              pitch: p,
+              startFrame: frameIdx,
+              lastFrame: frameIdx,
+              peakEnergy: energy,
+              frameCount: 1,
+            });
+          }
         } else {
-          // Sustained note
-          const existing = activeNotes.get(p)!;
-          existing.lastFrame = frameIdx;
-          existing.frameCount++;
-          existing.totalEnergy += energy;
-          if (energy > existing.peakEnergy) {
-            existing.peakEnergy = energy;
+          // Note continuing: check if not decayed below 35% of peak
+          const candidate = activeNotes.get(p)!;
+          const isDecayed = energy < candidate.peakEnergy * 0.35;
+          const isTooLong = (frameIdx - candidate.startFrame) * timePerFrame > 3.0; // Max 3s per piano note
+
+          if (!isDecayed && !isTooLong) {
+            currentActivePitches.add(p);
+            candidate.lastFrame = frameIdx;
+            candidate.frameCount++;
+            if (energy > candidate.peakEnergy) {
+              candidate.peakEnergy = energy;
+            }
           }
         }
       }
     }
 
-    // Check for released notes (absent in this frame)
+    // 4. Release notes that are no longer active
     for (const [p, candidate] of activeNotes.entries()) {
       if (!currentActivePitches.has(p)) {
-        // Note ended
         const durationSec = (candidate.lastFrame - candidate.startFrame + 1) * timePerFrame;
         if (durationSec >= minDurationSec) {
-          const normVel = Math.min(127, Math.max(25, Math.round(Math.pow(candidate.peakEnergy / 0.15, 0.4) * 127)));
+          const normVel = Math.min(127, Math.max(35, Math.round(Math.pow(candidate.peakEnergy / 0.12, 0.4) * 127)));
           finalizedNotes.push({
             pitch: candidate.pitch,
             startSec: candidate.startFrame * timePerFrame,
-            durationSec,
+            durationSec: Math.min(3.5, durationSec),
             velocity: normVel,
           });
         }
         activeNotes.delete(p);
       }
     }
+
+    prevEnergies = energies;
   }
 
-  // Flush remaining active notes
+  // Flush remaining notes
   for (const candidate of activeNotes.values()) {
     const durationSec = (candidate.lastFrame - candidate.startFrame + 1) * timePerFrame;
     if (durationSec >= minDurationSec) {
-      const normVel = Math.min(127, Math.max(25, Math.round(Math.pow(candidate.peakEnergy / 0.15, 0.4) * 127)));
+      const normVel = Math.min(127, Math.max(35, Math.round(Math.pow(candidate.peakEnergy / 0.12, 0.4) * 127)));
       finalizedNotes.push({
         pitch: candidate.pitch,
         startSec: candidate.startFrame * timePerFrame,
-        durationSec,
+        durationSec: Math.min(2.5, durationSec),
         velocity: normVel,
       });
     }
@@ -296,13 +313,11 @@ export async function transcribeAudioBufferToNotes(
 
   onProgress?.(0.9, 'Convertendo notas para ticks da partitura...');
 
-  // Convert seconds to ticks based on detected BPM
-  // 1 beat = 480 ticks. 1 second = (BPM / 60) beats = (BPM * 480) / 60 ticks = BPM * 8 ticks.
   const ticksPerSecond = (detectedBpm * TICKS_PER_BEAT) / 60;
 
   const notes: Note[] = finalizedNotes.map((n, idx) => {
     const startTick = Math.round(n.startSec * ticksPerSecond);
-    const durationTicks = Math.max(60, Math.round(n.durationSec * ticksPerSecond));
+    const durationTicks = Math.max(60, Math.min(480 * 6, Math.round(n.durationSec * ticksPerSecond)));
     return {
       id: `audio-note-${Date.now()}-${idx}-${Math.random()}`,
       trackId: '',

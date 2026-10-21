@@ -25,8 +25,10 @@ import {
 import {
   scanVideoFrames,
   fuseAudioAndVisionNotes,
+  detectBarsInImageData,
   VisualNoteEvent,
 } from '../utils/videoScanner.ts';
+import { pitchToNoteName } from '../utils/musicMath.ts';
 
 interface VideoAudioTranscriberModalProps {
   isOpen: boolean;
@@ -76,10 +78,12 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
   const [sensitivity, setSensitivity] = useState<number>(0.55);
 
   // Video Calibration
-  const [scanlineY, setScanlineY] = useState<number>(85); // 85% from top
-  const [keyboardXStart, setKeyboardXStart] = useState<number>(2); // 2% from left
-  const [keyboardXEnd, setKeyboardXEnd] = useState<number>(98); // 98% from left
+  const [scanlineY, setScanlineY] = useState<number>(68); // 68% from top (comfortably above flames/smoke)
+  const [keyboardXStart, setKeyboardXStart] = useState<number>(0); // 0% from left
+  const [keyboardXEnd, setKeyboardXEnd] = useState<number>(100); // 100% from left
   const [brightnessThreshold, setBrightnessThreshold] = useState<number>(45);
+  const [minSaturation, setMinSaturation] = useState<number>(0.28);
+  const [liveBars, setLiveBars] = useState<{ right: number; left: number }>({ right: 0, left: 0 });
 
   // Playback state for video preview
   const [isVideoPlaying, setIsVideoPlaying] = useState<boolean>(false);
@@ -191,10 +195,63 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
       ctx.fillStyle = '#f59e0b';
       ctx.font = '10px monospace';
       ctx.fillText(`LINHA DE IMPACTO (${scanlineY}%)`, x1 + 8, y - 6);
+
+      // Real-time Bar Detection Preview on current frame
+      let rCount = 0;
+      let lCount = 0;
+
+      if (video.videoWidth > 0 && video.videoHeight > 0) {
+        try {
+          const offCanvas = document.createElement('canvas');
+          offCanvas.width = video.videoWidth;
+          offCanvas.height = 1;
+          const offCtx = offCanvas.getContext('2d', { willReadFrequently: true });
+          if (offCtx) {
+            const vY = Math.round((scanlineY / 100) * video.videoHeight);
+            const vX1 = Math.round((keyboardXStart / 100) * video.videoWidth);
+            const vX2 = Math.round((keyboardXEnd / 100) * video.videoWidth);
+            const vKbWidth = Math.max(10, vX2 - vX1);
+
+            offCtx.drawImage(video, vX1, vY, vKbWidth, 1, 0, 0, vKbWidth, 1);
+            const lineData = offCtx.getImageData(0, 0, vKbWidth, 1).data;
+            const segments = detectBarsInImageData(
+              lineData,
+              vKbWidth,
+              21,
+              108,
+              minSaturation,
+              brightnessThreshold
+            );
+
+            for (const seg of segments) {
+              const canvasX = x1 + (seg.centerX / vKbWidth) * (x2 - x1);
+              const isRight = seg.hand === 'right';
+              if (isRight) rCount++;
+              else lCount++;
+
+              // Glowing indicator circle
+              ctx.fillStyle = isRight ? '#22c55e' : '#38bdf8';
+              ctx.beginPath();
+              ctx.arc(canvasX, y, 6, 0, 2 * Math.PI);
+              ctx.fill();
+
+              // Note Name badge
+              ctx.fillStyle = '#ffffff';
+              ctx.font = 'bold 9px sans-serif';
+              ctx.textAlign = 'center';
+              ctx.fillText(pitchToNoteName(seg.pitch, 'sharp'), canvasX, y - 9);
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      setLiveBars({ right: rCount, left: lCount });
     };
 
     renderOverlay();
-  }, [isVideo, fileUrl, scanlineY, keyboardXStart, keyboardXEnd]);
+  }, [isVideo, fileUrl, scanlineY, keyboardXStart, keyboardXEnd, minSaturation, brightnessThreshold]);
 
   // Execute Transcription
   const handleStartTranscription = async () => {
@@ -235,7 +292,8 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
           keyboardXStartRatio: keyboardXStart / 100,
           keyboardXEndRatio: keyboardXEnd / 100,
           brightnessThreshold,
-          fps: 25,
+          minSaturation,
+          fps: 15,
           onProgress: (p, stage) => {
             // Allocate 50% to 90% for visual phase
             setProgress(0.5 + p * 0.4);
@@ -502,6 +560,30 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
                 </button>
               </div>
 
+              {/* Real-time Detection Status */}
+              <div className="flex items-center justify-between text-[11px] pt-1 border-t border-stone-800/80 flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-stone-400">Detecção no Frame Atual:</span>
+                  <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-semibold flex items-center gap-1">
+                    🟢 Mão Direita: {liveBars.right}
+                  </span>
+                  <span className="px-2 py-0.5 rounded bg-sky-500/10 text-sky-400 border border-sky-500/30 font-semibold flex items-center gap-1">
+                    🔵 Mão Esquerda: {liveBars.left}
+                  </span>
+                </div>
+                <span className="text-stone-500 text-[10px]">
+                  Filtro Ativo: Chamas e teclas brancas ignoradas
+                </span>
+              </div>
+
+              {/* Helpful Tip Box */}
+              <div className="p-2.5 rounded-lg bg-amber-950/20 border border-amber-500/30 text-amber-300 text-[11px] leading-relaxed flex items-start gap-2">
+                <span className="text-base leading-none">💡</span>
+                <div>
+                  <strong>Dica de Posicionamento:</strong> Posicione a <em>Linha de Leitura (Y)</em> ligeiramente <strong>ACIMA</strong> dos efeitos de faísca/chamas das teclas (ex: entre <strong>60% e 72%</strong>). O scanner ignora automaticamente o clarão branco e captura com perfeição as barras caindo!
+                </div>
+              </div>
+
               {/* Calibration Sliders */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
                 <div>
@@ -511,8 +593,8 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
                   </div>
                   <input
                     type="range"
-                    min={50}
-                    max={98}
+                    min={40}
+                    max={95}
                     value={scanlineY}
                     onChange={(e) => setScanlineY(Number(e.target.value))}
                     className="w-full accent-amber-500 cursor-pointer"

@@ -5,6 +5,7 @@ import {
   colorDistance,
   xToPianoPitch,
   fuseAudioAndVisionNotes,
+  detectBarsInImageData,
 } from './videoScanner.ts';
 import type { VisualNoteEvent } from './videoScanner.ts';
 import type { Note } from '../types/music.ts';
@@ -98,4 +99,49 @@ test('fuseAudioAndVisionNotes merges velocity and separates right and left hands
 
   // Verify phantom overtone harmonic was suppressed
   assert.equal(result.suppressedHarmonicsCount, 1);
+});
+
+test('detectBarsInImageData ignores white smoke and detects colorful Synthesia bars', () => {
+  const kbWidth = 100;
+  // 100 pixels * 4 = 400 bytes
+  const lineData = new Uint8ClampedArray(kbWidth * 4);
+
+  // Pixel 0 to 30: White smoke / keys (rgb 255, 255, 255) -> should be IGNORED
+  for (let i = 0; i < 30; i++) {
+    lineData[i * 4] = 255;
+    lineData[i * 4 + 1] = 255;
+    lineData[i * 4 + 2] = 255;
+    lineData[i * 4 + 3] = 255;
+  }
+
+  // Pixel 31 to 50: Black background (rgb 0, 0, 0) -> should be IGNORED
+  for (let i = 31; i < 50; i++) {
+    lineData[i * 4] = 0;
+    lineData[i * 4 + 1] = 0;
+    lineData[i * 4 + 2] = 0;
+    lineData[i * 4 + 3] = 255;
+  }
+
+  // Pixel 50 to 60: Green Right Hand note (rgb 70, 220, 80)
+  for (let i = 50; i < 60; i++) {
+    lineData[i * 4] = 70;
+    lineData[i * 4 + 1] = 220;
+    lineData[i * 4 + 2] = 80;
+    lineData[i * 4 + 3] = 255;
+  }
+
+  // Pixel 70 to 80: Blue Left Hand note (rgb 60, 150, 240)
+  for (let i = 70; i < 80; i++) {
+    lineData[i * 4] = 60;
+    lineData[i * 4 + 1] = 150;
+    lineData[i * 4 + 2] = 240;
+    lineData[i * 4 + 3] = 255;
+  }
+
+  const segments = detectBarsInImageData(lineData, kbWidth, 21, 108);
+
+  // Exactly 2 bars detected: Green and Blue. White smoke was completely filtered out!
+  assert.equal(segments.length, 2, 'Should detect only the 2 colorful bars and filter out white smoke');
+  assert.equal(segments[0].hand, 'right', 'First segment (Green) should be right hand');
+  assert.equal(segments[1].hand, 'left', 'Second segment (Blue) should be left hand');
 });
