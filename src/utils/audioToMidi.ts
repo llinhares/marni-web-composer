@@ -10,6 +10,7 @@ export interface AudioToMidiOptions {
   minDurationSec?: number; // default 0.08s
   startTime?: number; // Crop start in seconds (trims intro)
   endTime?: number; // Crop end in seconds (trims outro)
+  engine?: 'auto' | 'ml' | 'heuristic'; // 'auto' = ML model with heuristic fallback
   onProgress?: (progress: number, stage: string) => void;
 }
 
@@ -17,6 +18,7 @@ export interface AudioTranscriptionResult {
   notes: Note[];
   detectedBpm: number;
   durationSeconds: number;
+  engine: 'ml' | 'heuristic';
 }
 
 /**
@@ -104,12 +106,168 @@ export function estimateBpmFromAudioBuffer(audioBuffer: AudioBuffer, startTime =
   return Math.max(60, Math.min(220, detectedBpm));
 }
 
+// ---------------------------------------------------------------------------
+// Machine-learning transcription (Spotify basic-pitch, runs locally with TensorFlow.js)
+// ---------------------------------------------------------------------------
+
+const BASIC_PITCH_SAMPLE_RATE = 22050;
+const BASIC_PITCH_FPS = BASIC_PITCH_SAMPLE_RATE / 256;
+
+/** A note as produced by basic-pitch's noteFramesToTime. */
+export interface TimedNoteEvent {
+  startTimeSeconds: number;
+  durationSeconds: number;
+  pitchMidi: number;
+  amplitude: number;
+}
+
 /**
- * Pure client-side polyphonic audio-to-MIDI transcription using Goertzel spectral bins,
- * frequency-dependent loudness weighting, adaptive noise floor, peak-picking, onset surge detection,
- * and harmonic suppression.
+ * Maps the user's sensitivity (0.1..1) to basic-pitch's detection thresholds.
+ * Calibrated on solo piano: the modal default (0.55) gives onset 0.58 / frame 0.33, slightly stricter
+ * than the model authors' generic defaults (0.5 / 0.3), which over-detect octave harmonics on piano.
+ */
+export function basicPitchThresholds(sensitivity: number): { onsetThreshold: number; frameThreshold: number } {
+  const s = Math.max(0.1, Math.min(1, sensitivity));
+  return {
+    onsetThreshold: Math.round((0.85 - 0.5 * s) * 100) / 100,
+    frameThreshold: Math.round((0.44 - 0.2 * s) * 100) / 100,
+  };
+}
+
+/** Converts timed note events (seconds) into project notes (ticks). */
+export function noteEventsToNotes(
+  events: TimedNoteEvent[],
+  bpm: number,
+  opts: { minPitch?: number; maxPitch?: number; minDurationSec?: number } = {}
+): Note[] {
+  const { minPitch = 21, maxPitch = 108, minDurationSec = 0.05 } = opts;
+  const ticksPerSecond = (bpm * TICKS_PER_BEAT) / 60;
+  const stamp = Date.now();
+
+  return events
+    .filter(
+      (e) => e.pitchMidi >= minPitch && e.pitchMidi <= maxPitch && e.durationSeconds >= minDurationSec
+    )
+    .map((e, idx) => ({
+      id: `audio-note-${stamp}-${idx}-${Math.random()}`,
+      trackId: '',
+      pitch: e.pitchMidi,
+      startTick: Math.max(0, Math.round(e.startTimeSeconds * ticksPerSecond)),
+      durationTicks: Math.max(30, Math.round(e.durationSeconds * ticksPerSecond)),
+      // basic-pitch amplitude is the mean note activation (0..1); sqrt spreads typical 0.3-0.9 values
+      velocity: Math.max(30, Math.min(127, Math.round(127 * Math.sqrt(Math.max(0, e.amplitude))))),
+      selected: false,
+    }))
+    .sort((a, b) => a.startTick - b.startTick || a.pitch - b.pitch);
+}
+
+/** Downmixes the crop range to mono and resamples it to the model's 22.05 kHz. */
+async function resampleForBasicPitch(audioBuffer: AudioBuffer, startTime: number, endTime: number): Promise<Float32Array> {
+  const duration = Math.max(0.1, endTime - startTime);
+  const length = Math.ceil(duration * BASIC_PITCH_SAMPLE_RATE);
+  const offline = new OfflineAudioContext(1, length, BASIC_PITCH_SAMPLE_RATE);
+  const source = offline.createBufferSource();
+  source.buffer = audioBuffer;
+  source.connect(offline.destination);
+  source.start(0, startTime, duration);
+  const rendered = await offline.startRendering();
+  return rendered.getChannelData(0);
+}
+
+let basicPitchPromise: Promise<import('@spotify/basic-pitch').BasicPitch> | null = null;
+
+function loadBasicPitch() {
+  if (!basicPitchPromise) {
+    basicPitchPromise = import('@spotify/basic-pitch')
+      .then(({ BasicPitch }) => {
+        const modelUrl = `${import.meta.env.BASE_URL}models/basic-pitch/model.json`;
+        const model = new BasicPitch(modelUrl);
+        return model.model.then(() => model);
+      })
+      .catch((err) => {
+        basicPitchPromise = null;
+        throw err;
+      });
+  }
+  return basicPitchPromise;
+}
+
+async function transcribeWithBasicPitch(
+  audioBuffer: AudioBuffer,
+  options: AudioToMidiOptions
+): Promise<AudioTranscriptionResult> {
+  const {
+    sensitivity = 0.5,
+    minPitch = 21,
+    maxPitch = 108,
+    minDurationSec = 0.08,
+    startTime = 0,
+    endTime,
+    onProgress,
+  } = options;
+
+  const start = Math.max(0, startTime);
+  const end = endTime && endTime > start ? Math.min(audioBuffer.duration, endTime) : audioBuffer.duration;
+
+  onProgress?.(0.05, 'Estimando andamento (BPM)...');
+  const detectedBpm = options.bpm || estimateBpmFromAudioBuffer(audioBuffer, startTime, endTime);
+
+  onProgress?.(0.08, 'Carregando modelo de IA (basic-pitch)...');
+  const [basicPitch, mono] = await Promise.all([loadBasicPitch(), resampleForBasicPitch(audioBuffer, start, end)]);
+  const { outputToNotesPoly, noteFramesToTime } = await import('@spotify/basic-pitch');
+
+  const frames: number[][] = [];
+  const onsets: number[][] = [];
+  await basicPitch.evaluateModel(
+    mono,
+    (f, o) => {
+      for (const row of f) frames.push(row);
+      for (const row of o) onsets.push(row);
+    },
+    (p) => onProgress?.(0.1 + 0.8 * p, `Transcrevendo áudio com IA (${Math.round(p * 100)}%)...`)
+  );
+
+  onProgress?.(0.92, 'Extraindo notas...');
+  const { onsetThreshold, frameThreshold } = basicPitchThresholds(sensitivity);
+  const minNoteFrames = Math.max(3, Math.round(minDurationSec * BASIC_PITCH_FPS));
+  const events = noteFramesToTime(
+    outputToNotesPoly(frames, onsets, onsetThreshold, frameThreshold, minNoteFrames, true, null, null, true)
+  );
+
+  const notes = noteEventsToNotes(events, detectedBpm, { minPitch, maxPitch, minDurationSec: 0 });
+  onProgress?.(1.0, 'Transcrição concluída!');
+  return { notes, detectedBpm, durationSeconds: end - start, engine: 'ml' };
+}
+
+/**
+ * Polyphonic audio-to-MIDI transcription.
+ * Uses the basic-pitch neural network (accurate polyphony, onsets and bass notes) whenever it can run,
+ * and falls back to the lightweight spectral heuristic otherwise (no WebGL/WASM, model unavailable, Node).
  */
 export async function transcribeAudioBufferToNotes(
+  audioBuffer: AudioBuffer,
+  options: AudioToMidiOptions = {}
+): Promise<AudioTranscriptionResult> {
+  const engine = options.engine ?? 'auto';
+  const canRunModel = typeof window !== 'undefined' && typeof OfflineAudioContext !== 'undefined';
+
+  if (engine === 'ml' || (engine === 'auto' && canRunModel)) {
+    try {
+      return await transcribeWithBasicPitch(audioBuffer, options);
+    } catch (err) {
+      if (engine === 'ml') throw err;
+      console.warn('basic-pitch indisponível, usando transcrição espectral:', err);
+    }
+  }
+  return transcribeWithSpectralHeuristic(audioBuffer, options);
+}
+
+/**
+ * Lightweight fallback: Goertzel spectral bins, frequency-dependent loudness weighting, adaptive
+ * noise floor, peak-picking, onset surge detection and harmonic suppression. Weak on bass notes
+ * and dense chords; used only when the ML model cannot run.
+ */
+export async function transcribeWithSpectralHeuristic(
   audioBuffer: AudioBuffer,
   options: AudioToMidiOptions = {}
 ): Promise<AudioTranscriptionResult> {
@@ -156,7 +314,7 @@ export async function transcribeAudioBufferToNotes(
   const numFrames = Math.floor((channelData.length - fftSize) / hopSize);
 
   if (numFrames <= 0) {
-    return { notes: [], detectedBpm, durationSeconds };
+    return { notes: [], detectedBpm, durationSeconds, engine: 'heuristic' };
   }
 
   // Precompute Hann window
@@ -375,5 +533,6 @@ export async function transcribeAudioBufferToNotes(
     notes,
     detectedBpm,
     durationSeconds,
+    engine: 'heuristic',
   };
 }

@@ -16,8 +16,6 @@ import {
   Undo2,
   Redo2,
   Hand,
-  Sparkles,
-  Video,
 } from 'lucide-react';
 import type { ToolMode, GridSnap, TimeSignature, EffectorSettings } from '../types/music.ts';
 import { formatTimecode, ticksToSeconds } from '../utils/musicMath.ts';
@@ -353,39 +351,6 @@ export const Header: React.FC<HeaderProps> = ({
           </select>
         </div>
 
-        {/* Sustenido (#) Toggle */}
-        <button
-          onClick={onToggleAccidentals}
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-[11px] font-semibold transition-all ${(hasSelectedNotes ? isSelectionSharp : sustenidoActive)
-            ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-[0_0_8px_rgba(245,158,11,0.3)]'
-            : 'bg-stone-900/60 border-[#2d2722] text-stone-400 hover:text-stone-200'
-            }`}
-          title={
-            hasSelectedNotes
-              ? isSelectionSharp
-                ? 'Desligar Sustenido da(s) nota(s) selecionada(s) (-1 semitom para natural)'
-                : 'Ligar Sustenido na(s) nota(s) selecionada(s) (+1 semitom para sustenido)'
-              : sustenidoActive
-                ? 'Sustenido ativo: novas notas recebem sustenido (#). Clique para desativar.'
-                : 'Sustenido inativo: novas notas serão naturais. Clique para ativar (#).'
-          }
-        >
-          <span className="font-mono text-sm leading-none font-bold">#</span>
-          <span>
-            {hasSelectedNotes
-              ? isSelectionSharp
-                ? 'Sustenido (#)'
-                : 'Natural (Sem #)'
-              : 'Sustenido'}
-          </span>
-          <span
-            className={`w-2 h-2 rounded-full transition-colors ${(hasSelectedNotes ? isSelectionSharp : sustenidoActive)
-              ? 'bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.9)]'
-              : 'bg-stone-600'
-              }`}
-          />
-        </button>
-
         {/* MIDI Controller Connect */}
         <button
           onClick={onOpenMidiModal}
@@ -399,38 +364,6 @@ export const Header: React.FC<HeaderProps> = ({
           <Radio className="w-3.5 h-3.5" />
           <span className="hidden xl:inline text-[11px]">MIDI</span>
         </button>
-
-        {/* AI Sheet Scanner Button (BETA) */}
-        {onOpenAiSheetScanner && (
-          <button
-            onClick={onOpenAiSheetScanner}
-            className="p-1.5 rounded-md border text-xs transition-colors flex items-center gap-1.5 bg-stone-900 border-[#2d2722] hover:border-amber-500/50 text-stone-300 hover:text-amber-400 shadow-sm"
-            title="Importar Partitura por Imagem com IA (Gemini Vision OMR) - Recurso Experimental em Desenvolvimento"
-            aria-label="Importar Partitura com IA (BETA)"
-          >
-            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-            <span className="hidden lg:inline text-[11px] font-medium">Partitura IA</span>
-            <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-amber-500/20 text-amber-400 border border-amber-500/40">
-              BETA
-            </span>
-          </button>
-        )}
-
-        {/* Video & Audio AI Transcriber Button (NEW) */}
-        {onOpenVideoTranscriber && (
-          <button
-            onClick={onOpenVideoTranscriber}
-            className="p-1.5 rounded-md border text-xs transition-colors flex items-center gap-1.5 bg-stone-900 border-[#2d2722] hover:border-amber-500/50 text-stone-300 hover:text-amber-400 shadow-sm"
-            title="Transcrever Vídeo (Cascata Synthesia) ou Áudio para Faixas MIDI com IA"
-            aria-label="Transcritor de Vídeo e Áudio com IA"
-          >
-            <Video className="w-3.5 h-3.5 text-amber-400" />
-            <span className="hidden lg:inline text-[11px] font-medium">Vídeo/Áudio IA</span>
-            <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
-              NOVO
-            </span>
-          </button>
-        )}
 
         {/* Zoom Controls */}
         <div className="hidden xl:flex items-center rounded-lg bg-stone-900/80 p-0.5 border border-[#2d2722]">

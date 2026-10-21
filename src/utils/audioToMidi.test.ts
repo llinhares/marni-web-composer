@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {
   estimateBpmFromAudioBuffer,
   transcribeAudioBufferToNotes,
+  noteEventsToNotes,
+  basicPitchThresholds,
 } from './audioToMidi.ts';
 
 // Helper to create a synthetic AudioBuffer-like mock
@@ -53,4 +55,35 @@ test('transcribeAudioBufferToNotes returns empty array for silent audio buffer',
   });
 
   assert.equal(result.notes.length, 0, 'Silent buffer should have 0 notes');
+});
+
+test('noteEventsToNotes converts basic-pitch events to ticks and velocities', () => {
+  const notes = noteEventsToNotes(
+    [
+      { startTimeSeconds: 1.0, durationSeconds: 0.5, pitchMidi: 60, amplitude: 0.64 },
+      { startTimeSeconds: 0.5, durationSeconds: 0.25, pitchMidi: 47, amplitude: 1.0 },
+      { startTimeSeconds: 2.0, durationSeconds: 0.5, pitchMidi: 110, amplitude: 0.5 }, // out of piano range
+    ],
+    120
+  );
+
+  assert.equal(notes.length, 2);
+  assert.equal(notes[0].pitch, 47, 'Sorted by start time');
+  assert.equal(notes[1].startTick, 960, '1s at 120 BPM = 2 beats = 960 ticks');
+  assert.equal(notes[1].durationTicks, 480);
+  assert.equal(notes[1].velocity, Math.round(127 * 0.8));
+  assert.equal(notes[0].velocity, 127);
+});
+
+test('basicPitchThresholds is piano-calibrated at the default sensitivity and lowers thresholds when more sensitive', () => {
+  const def = basicPitchThresholds(0.55);
+  assert.ok(Math.abs(def.onsetThreshold - 0.575) <= 0.01 && Math.abs(def.frameThreshold - 0.33) <= 0.01);
+  const low = basicPitchThresholds(0.1);
+  const high = basicPitchThresholds(1);
+  assert.ok(high.onsetThreshold < low.onsetThreshold && high.frameThreshold < low.frameThreshold);
+});
+
+test('transcribeAudioBufferToNotes falls back to the spectral heuristic outside the browser', async () => {
+  const result = await transcribeAudioBufferToNotes(createMockAudioBuffer(1.0, 22050, 440), { bpm: 120 });
+  assert.equal(result.engine, 'heuristic');
 });

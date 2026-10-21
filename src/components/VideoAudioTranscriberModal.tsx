@@ -32,6 +32,9 @@ import {
   fuseAudioAndVisionNotes,
   detectBarsFromVideoContext,
   detectKeyHitsFromVideoContext,
+  detectKeyboardLayoutInFrame,
+  shiftLayoutOctave,
+  KeyboardLayout,
   hexToRgb,
   rgbToHex,
   DetectedBarSegment,
@@ -115,6 +118,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
   const [keyboardXStart, setKeyboardXStart] = useState<number>(0); // 0% from left
   const [keyboardXEnd, setKeyboardXEnd] = useState<number>(100); // 100% from left
   const [octaveShift, setOctaveShift] = useState<number>(0); // -2 to +2 octaves
+  const [detectedLayout, setDetectedLayout] = useState<KeyboardLayout | null>(null);
   const [brightnessThreshold] = useState<number>(38);
   const [minSaturation] = useState<number>(0.20);
   const [liveBars, setLiveBars] = useState<{ right: number; left: number }>({ right: 0, left: 0 });
@@ -165,6 +169,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
       setVideoDuration(0);
       setEyedropperTarget(null);
       setHoveredColor(null);
+      setDetectedLayout(null);
     }
   }, [isOpen, activeTrackId]);
 
@@ -275,6 +280,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
       }
       setEyedropperTarget(null);
       setHoveredColor(null);
+      setDetectedLayout(null);
     }
   };
 
@@ -361,13 +367,41 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
       ctx.lineTo(x2, renderY + renderH);
       ctx.stroke();
 
+      let currentLayout = detectedLayout;
+      if (!currentLayout && video.videoWidth > 0 && video.readyState >= 2) {
+        try {
+          const off = document.createElement('canvas');
+          off.width = 640;
+          off.height = 360;
+          const offCtx = off.getContext('2d', { willReadFrequently: true });
+          if (offCtx) {
+            const found = detectKeyboardLayoutInFrame(offCtx, video, 640, 360, 0.45);
+            if (found) {
+              currentLayout = found;
+              setDetectedLayout(found);
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+
       // Draw subtle piano key markers along the scanline
-      const totalWhiteKeys = 52;
-      const kw = (x2 - x1) / totalWhiteKeys;
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.20)';
-      for (let k = 0; k <= totalWhiteKeys; k++) {
-        const kx = x1 + k * kw;
-        ctx.fillRect(kx - 0.5, y - 4, 1, 8);
+      if (currentLayout) {
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.28)';
+        for (const k of currentLayout.keys) {
+          const kx = renderX + k.centerRatio * renderW;
+          const h = k.isBlack ? 11 : 7;
+          ctx.fillRect(kx - 0.5, y - h / 2, 1, h);
+        }
+      } else {
+        const totalWhiteKeys = 52;
+        const kw = (x2 - x1) / totalWhiteKeys;
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.20)';
+        for (let k = 0; k <= totalWhiteKeys; k++) {
+          const kx = x1 + k * kw;
+          ctx.fillRect(kx - 0.5, y - 4, 1, 8);
+        }
       }
 
       // Draw active scanline
@@ -417,6 +451,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
               hand1Color: hexToRgb(hand1ColorHex),
               hand2Color: hexToRgb(hand2ColorHex),
               splitPitch,
+              layout: currentLayout,
             });
           }
         } catch {
@@ -580,6 +615,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
           hand2Color: hexToRgb(hand2ColorHex),
           splitPitch,
           octaveShift,
+          keyboardLayout: detectedLayout,
           onFrameDetections: (segments) => {
             renderOverlay(segments);
           },
@@ -588,6 +624,10 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
             setStatusMessage(stage);
           },
         });
+
+        if (videoScanResult.keyboardLayout && !detectedLayout) {
+          setDetectedLayout(videoScanResult.keyboardLayout);
+        }
 
         const ticksPerSecond = (effectiveBpm * TICKS_PER_BEAT) / 60;
         const rightHandNotes: Note[] = [];
@@ -701,6 +741,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
             hand2Color: hexToRgb(hand2ColorHex),
             splitPitch,
             octaveShift,
+            keyboardLayout: detectedLayout,
             onFrameDetections: (segments) => {
               renderOverlay(segments);
             },
@@ -710,6 +751,10 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
             },
           });
 
+          if (videoScanResult.keyboardLayout && !detectedLayout) {
+            setDetectedLayout(videoScanResult.keyboardLayout);
+          }
+
           setStatusMessage('Cruzando notas do áudio com visão computacional...');
           const fused = fuseAudioAndVisionNotes(
             audioResult.notes,
@@ -717,7 +762,11 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
             effectiveBpm,
             TICKS_PER_BEAT,
             splitPitch,
-            { backbone: 'auto', autoAlign: true }
+            {
+              // Bars read against the detected keyboard are exact: audio only adds velocities then
+              backbone: videoScanResult.method === 'tape' && videoScanResult.visualNotes.length > 0 ? 'video' : 'auto',
+              autoAlign: true,
+            }
           );
 
           setTranscriptionResult({

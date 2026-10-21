@@ -370,31 +370,57 @@ export function detectKeyboardLayoutFromRow(
   while (jMin + 7 * octaveOffset < 0) octaveOffset++;
   while (jMax + 7 * octaveOffset > 67) octaveOffset--;
 
-  const keys: KeyboardKey[] = [];
-  for (let j = jMin; j <= jMax; j++) {
-    keys.push({
-      pitch: whiteIndexToPitch(j + 7 * octaveOffset),
-      isBlack: false,
-      centerRatio: (origin + whiteW * (j + 0.5)) / width,
-      widthRatio: whiteW / width,
-    });
-  }
+  // Map each black key pitch to its measured candidate center (or fitted line)
+  const blackKeyX = new Map<number, number>();
   for (let B = jMin + 1; B <= jMax; B++) {
     if (!BLACK_KEY_BOUNDARIES.has(mod7(B))) continue;
-    keys.push({
-      pitch: whiteIndexToPitch(B - 1 + 7 * octaveOffset) + 1,
-      isBlack: true,
-      centerRatio: (origin + whiteW * B) / width,
-      widthRatio: blackW / width,
-    });
+    const pitch = whiteIndexToPitch(B - 1 + 7 * octaveOffset) + 1;
+    if (pitch < 21 || pitch > 108) continue;
+    const fittedX = origin + whiteW * B;
+    let bestDist = whiteW * 0.35;
+    let chosenX = fittedX;
+    for (const cx of centers) {
+      const d = Math.abs(cx - fittedX);
+      if (d < bestDist) {
+        bestDist = d;
+        chosenX = cx;
+      }
+    }
+    blackKeyX.set(pitch, chosenX);
   }
-  keys.sort((a, b) => a.centerRatio - b.centerRatio);
 
-  let lowestPitch = Infinity;
-  let highestPitch = -Infinity;
-  for (const k of keys) {
-    lowestPitch = Math.min(lowestPitch, k.pitch);
-    highestPitch = Math.max(highestPitch, k.pitch);
+  // Generate 88 waterfall lane centers (pitches 21 to 108)
+  const keys: KeyboardKey[] = [];
+  for (let p = 21; p <= 108; p++) {
+    const isBlack = [1, 3, 6, 8, 10].includes(p % 12);
+    let cx = 0;
+    if (isBlack) {
+      cx = blackKeyX.get(p) ?? (origin + whiteW * ((p % 12) + 7 * Math.floor((p - 12) / 12)));
+    } else {
+      const note = p % 12;
+      switch (note) {
+        case 0: cx = (blackKeyX.get(p + 1) ?? 0) - 0.55 * whiteW; break;
+        case 2: cx = ((blackKeyX.get(p - 1) ?? 0) + (blackKeyX.get(p + 1) ?? 0)) / 2; break;
+        case 4: cx = (blackKeyX.get(p - 1) ?? 0) + 0.55 * whiteW; break;
+        case 5: cx = (blackKeyX.get(p + 1) ?? 0) - 0.55 * whiteW; break;
+        case 7: cx = ((blackKeyX.get(p - 1) ?? 0) + (blackKeyX.get(p + 1) ?? 0)) / 2; break;
+        case 9:
+          if (p === 21) cx = (blackKeyX.get(22) ?? 0) - 0.55 * whiteW;
+          else cx = ((blackKeyX.get(p - 1) ?? 0) + (blackKeyX.get(p + 1) ?? 0)) / 2;
+          break;
+        case 11:
+          if (p === 23) cx = (blackKeyX.get(22) ?? 0) + 0.55 * whiteW;
+          else cx = (blackKeyX.get(p - 1) ?? 0) + 0.55 * whiteW;
+          break;
+      }
+      if (p === 108) cx = (blackKeyX.get(106) ?? 0) + 1.1 * whiteW;
+    }
+    keys.push({
+      pitch: p,
+      isBlack,
+      centerRatio: cx / width,
+      widthRatio: (isBlack ? blackW : whiteW) / width,
+    });
   }
 
   return {
@@ -402,8 +428,8 @@ export function detectKeyboardLayoutFromRow(
     whiteKeyWidthRatio: whiteW / width,
     blackKeyWidthRatio: blackW / width,
     keyboardYRatio,
-    lowestPitch,
-    highestPitch,
+    lowestPitch: 21,
+    highestPitch: 108,
     score: bestAligned,
   };
 }
@@ -433,6 +459,46 @@ export function detectKeyboardLayoutInFrame(
     if (layout && (!best || layout.score > best.score)) best = layout;
   }
   return best;
+}
+
+/**
+ * Checks that the detected keyboard is still on screen in a frame, using the pixel row where its
+ * black keys were measured: black keys must be dark, white keys bright, pressed keys colored.
+ * Intros, outros, title cards and scene cuts fail the check and are not read as notes.
+ */
+export function keyboardRowMatches(rowData: Uint8ClampedArray, width: number, layout: KeyboardLayout): boolean {
+  const samples: Array<{ isBlack: boolean; lum: number; lit: boolean }> = [];
+  for (const key of layout.keys) {
+    const x = Math.round(key.centerRatio * width);
+    if (x < 0 || x >= width) continue;
+    const i = x * 4;
+    const r = rowData[i];
+    const g = rowData[i + 1];
+    const b = rowData[i + 2];
+    const maxC = Math.max(r, g, b);
+    const sat = maxC > 0 ? (maxC - Math.min(r, g, b)) / maxC : 0;
+    samples.push({ isBlack: key.isBlack, lum: 0.299 * r + 0.587 * g + 0.114 * b, lit: sat > 0.3 && maxC > 80 });
+  }
+  if (samples.length < 12) return false;
+
+  const lit = samples.filter((s) => s.lit).length;
+  if (lit > samples.length * 0.4) return false; // colored screen, not a keyboard with a few keys pressed
+
+  const median = (vals: number[]) => {
+    const sorted = [...vals].sort((a, b) => a - b);
+    return sorted.length ? sorted[sorted.length >> 1] : 0;
+  };
+  const whiteLum = median(samples.filter((s) => !s.isBlack && !s.lit).map((s) => s.lum));
+  const blackLum = median(samples.filter((s) => s.isBlack && !s.lit).map((s) => s.lum));
+  // Key glow can lift black keys to mid grey, so the test is relative to this frame's contrast
+  if (whiteLum - blackLum < 40) return false;
+  const threshold = (whiteLum + blackLum) / 2;
+
+  let matching = 0;
+  for (const s of samples) {
+    if (s.lit || (s.isBlack ? s.lum < threshold : s.lum >= threshold)) matching++;
+  }
+  return matching >= samples.length * 0.8;
 }
 
 /** Transposes a detected layout by whole octaves. */
@@ -486,18 +552,32 @@ function classifyPixel(r: number, g: number, b: number, c: PixelClassifier): num
   const delta = maxC - minC;
   const sat = maxC > 0 ? delta / maxC : 0;
 
-  if (delta < 16 || sat < 0.15 || (r > 222 && g > 222 && b > 222)) {
-    return maxC >= 150 ? PIXEL_BRIGHT : PIXEL_DARK;
+  if (delta < 16 || sat < 0.16 || (r > 225 && g > 225 && b > 225)) {
+    return maxC >= 140 ? PIXEL_BRIGHT : PIXEL_DARK;
   }
   if (maxC < c.minBright) return PIXEL_DARK;
-  if (sat >= c.minSat && delta >= 20) return PIXEL_NOTE;
+
+  const h = rgbToHsl(r, g, b).h;
+
   if (c.h1 !== null || c.h2 !== null) {
-    const h = rgbToHsl(r, g, b).h;
-    if ((c.h1 !== null && hueDistance(h, c.h1) <= 45) || (c.h2 !== null && hueDistance(h, c.h2) <= 45)) {
+    const matchH1 = c.h1 !== null && hueDistance(h, c.h1) <= 38;
+    const matchH2 = c.h2 !== null && hueDistance(h, c.h2) <= 38;
+    if (matchH1 || matchH2) {
       return PIXEL_NOTE;
     }
+    const isTargetFlame =
+      (c.h1 !== null && c.h1 >= 15 && c.h1 <= 60) || (c.h2 !== null && c.h2 >= 15 && c.h2 <= 60);
+    if (!isTargetFlame && h >= 18 && h <= 55) {
+      return PIXEL_DARK;
+    }
+    return maxC >= 140 ? PIXEL_BRIGHT : PIXEL_DARK;
   }
-  return maxC >= 150 ? PIXEL_BRIGHT : PIXEL_DARK;
+
+  if (h >= 18 && h <= 55) {
+    return PIXEL_DARK;
+  }
+  if (sat >= c.minSat && delta >= 20) return PIXEL_NOTE;
+  return maxC >= 140 ? PIXEL_BRIGHT : PIXEL_DARK;
 }
 
 // ---------------------------------------------------------------------------
@@ -843,13 +923,35 @@ export interface FrameRecord {
   segments: KeyColumnSegment[];
 }
 
+interface Lane {
+  pitch: number;
+  isBlack: boolean;
+  x: number;
+}
+
+function nearestLane(lanes: Lane[], x: number): Lane | null {
+  if (lanes.length === 0) return null;
+  let lo = 0;
+  let hi = lanes.length - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (lanes[mid].x <= x) lo = mid;
+    else hi = mid;
+  }
+  return Math.abs(lanes[lo].x - x) <= Math.abs(lanes[hi].x - x) ? lanes[lo] : lanes[hi];
+}
+
 /**
- * Walks down the column of every detected key inside the note area and extracts colored runs.
- * - White keys sample 3 columns around the key center (black-key bars never reach them).
- * - Black keys require all 3 center columns colored and a narrow colored extent, so two adjacent
- *   white bars are never mistaken for a black key.
- * - White/grey rows (note-name letters, highlights) are bridged; dark rows (gaps between repeated
- *   notes) always split the run.
+ * Finds every falling bar in the note area and assigns it to a key lane by its horizontal
+ * position AND width (white-key bars are about one white key wide, black-key bars are narrower).
+ *
+ * Per row, colored pixels are grouped into runs. Note-name letters (white glyphs with dark
+ * outlines) cut a bar into fragments, so fragments are re-joined only while the joined extent still
+ * fits inside a single bar: two neighbouring bars can never be merged, and a letter can never turn a
+ * white bar into a phantom black-key note. Runs wider than one bar (touching neighbours) are split.
+ *
+ * Vertically, rows of the same lane are joined across letter rows (bar content under the lane center)
+ * while gaps of plain background always split the bar, preserving repeated notes.
  *
  * `data` holds `rows` image rows starting at `areaTopY`, full frame width.
  */
@@ -867,34 +969,136 @@ export function analyzeKeyColumns(
   } = {}
 ): KeyColumnSegment[] {
   const classifier = makePixelClassifier(opts.minSaturation ?? 0.2, opts.brightnessThreshold ?? 38, opts.colorOptions);
-  const bridgeRows = opts.bridgeRows ?? 6;
+  const bridgeRows = opts.bridgeRows ?? 14;
   const wPx = layout.whiteKeyWidthRatio * width;
-  const blackExtentLimit = wPx * 0.85;
-  const maxScan = Math.ceil(wPx * 0.7);
-  const segments: KeyColumnSegment[] = [];
+  const lanes: Lane[] = layout.keys
+    .map((k) => ({ pitch: k.pitch, isBlack: k.isBlack, x: k.centerRatio * width }))
+    .filter((l) => l.x >= 0 && l.x < width)
+    .sort((a, b) => a.x - b.x);
+  const whiteLanes = lanes.filter((l) => !l.isBlack);
+  if (lanes.length === 0 || !(wPx > 0)) return [];
 
-  const pixelClass = (x: number, y: number): number => {
-    const i = (y * width + x) * 4;
-    return classifyPixel(data[i], data[i + 1], data[i + 2], classifier);
+  const minRunW = Math.max(2, wPx * 0.25);
+  const maxBarW = wPx * 1.2; // widest extent a single bar (plus anti-aliasing) can have
+  const minWhiteW = wPx * 0.72; // narrower runs may be black-key bars or the rounded cap of a white bar
+  const maxFragmentGap = Math.max(2, Math.round(wPx * 0.55));
+  const bridgeRadius = Math.max(1, Math.round(wPx * 0.25));
+
+  // marks[pitch][y]: 0 = empty, 1 = right hand, 2 = left hand
+  const marks = new Map<number, Uint8Array>();
+  const mark = (pitch: number, y: number, hand: 'right' | 'left') => {
+    let m = marks.get(pitch);
+    if (!m) {
+      m = new Uint8Array(rows);
+      marks.set(pitch, m);
+    }
+    m[y] = hand === 'right' ? 1 : 2;
   };
 
-  for (const key of layout.keys) {
-    const cx = Math.round(key.centerRatio * width);
-    if (cx < 1 || cx >= width - 1) continue;
-    const off = key.isBlack ? 1 : Math.max(1, Math.round(wPx * 0.15));
-    const leftCol = Math.max(0, cx - off);
-    const rightCol = Math.min(width - 1, cx + off);
+  const rowClass = new Uint8Array(width);
+  const fragStart: number[] = [];
+  const fragEnd: number[] = [];
 
+  for (let y = 0; y < rows; y++) {
+    const rowOff = y * width * 4;
+    for (let x = 0; x < width; x++) {
+      const i = rowOff + x * 4;
+      rowClass[x] = classifyPixel(data[i], data[i + 1], data[i + 2], classifier);
+    }
+
+    // 1. Solid fragments of note pixels (1px anti-aliasing holes tolerated)
+    fragStart.length = 0;
+    fragEnd.length = 0;
+    let s = -1;
+    let last = -1;
+    for (let x = 0; x <= width; x++) {
+      const isNote = x < width && rowClass[x] === PIXEL_NOTE;
+      if (isNote) {
+        if (s < 0) s = x;
+        else if (x - last > 2) {
+          fragStart.push(s);
+          fragEnd.push(last);
+          s = x;
+        }
+        last = x;
+      }
+    }
+    if (s >= 0) {
+      fragStart.push(s);
+      fragEnd.push(last);
+    }
+
+    // 2. Re-join fragments of the same bar, then assign each bar to a lane
+    const assign = (gs: number, ge: number) => {
+      const w = ge - gs + 1;
+      if (w < minRunW) return;
+      const parts = w > maxBarW ? Math.max(2, Math.round(w / wPx)) : 1;
+      const partW = w / parts;
+      for (let p = 0; p < parts; p++) {
+        const ps = gs + p * partW;
+        const center = ps + partW / 2 - 0.5;
+        const lane = nearestLane(partW >= minWhiteW ? whiteLanes : lanes, center);
+        if (!lane || Math.abs(lane.x - center) > wPx * (lane.isBlack ? 0.35 : 0.45)) continue;
+
+        let rSum = 0;
+        let gSum = 0;
+        let bSum = 0;
+        let n = 0;
+        for (let x = Math.round(ps); x < Math.round(ps + partW); x++) {
+          if (rowClass[x] !== PIXEL_NOTE) continue;
+          const i = rowOff + x * 4;
+          rSum += data[i];
+          gSum += data[i + 1];
+          bSum += data[i + 2];
+          n++;
+        }
+        if (n === 0) continue;
+        mark(lane.pitch, y, classifyHand(rSum / n, gSum / n, bSum / n, lane.pitch, opts.colorOptions));
+      }
+    };
+
+    let gs = -1;
+    let ge = -1;
+    for (let f = 0; f < fragStart.length; f++) {
+      const fs = fragStart[f];
+      const fe = fragEnd[f];
+      if (gs < 0) {
+        gs = fs;
+        ge = fe;
+      } else if (fs - ge - 1 <= maxFragmentGap && fe - gs + 1 <= maxBarW && ge - gs + 1 <= maxBarW) {
+        ge = fe;
+      } else {
+        assign(gs, ge);
+        gs = fs;
+        ge = fe;
+      }
+    }
+    if (gs >= 0) assign(gs, ge);
+  }
+
+  // 3. Vertical runs per lane
+  const laneX = new Map(lanes.map((l) => [l.pitch, Math.round(l.x)]));
+  const hasBarContent = (cx: number, y: number) => {
+    const rowOff = y * width * 4;
+    for (let x = Math.max(0, cx - bridgeRadius); x <= Math.min(width - 1, cx + bridgeRadius); x++) {
+      const i = rowOff + x * 4;
+      if (Math.max(data[i], data[i + 1], data[i + 2]) >= 90) return true;
+    }
+    return false;
+  };
+
+  const segments: KeyColumnSegment[] = [];
+  for (const [pitch, m] of marks) {
+    const cx = laneX.get(pitch) ?? 0;
     let segStart = -1;
     let lastNote = -1;
-    let bright = 0;
     let rv = 0;
     let lv = 0;
 
     const flush = () => {
-      if (segStart >= 0 && lastNote - segStart + 1 >= 2) {
+      if (segStart >= 0 && lastNote - segStart + 1 >= 3) {
         segments.push({
-          pitch: key.pitch,
+          pitch,
           yTop: areaTopY + segStart,
           yBottom: areaTopY + lastNote,
           touchesTop: segStart <= 1,
@@ -905,42 +1109,30 @@ export function analyzeKeyColumns(
       }
       segStart = -1;
       lastNote = -1;
-      bright = 0;
       rv = 0;
       lv = 0;
     };
 
     for (let y = 0; y < rows; y++) {
-      const centerClass = pixelClass(cx, y);
-      let noteCount = centerClass === PIXEL_NOTE ? 1 : 0;
-      if (pixelClass(leftCol, y) === PIXEL_NOTE) noteCount++;
-      if (pixelClass(rightCol, y) === PIXEL_NOTE) noteCount++;
-
-      let isNote = key.isBlack ? noteCount === 3 : noteCount >= 2;
-
-      if (isNote && key.isBlack) {
-        let left = 0;
-        while (left < maxScan && cx - left - 1 >= 0 && pixelClass(cx - left - 1, y) === PIXEL_NOTE) left++;
-        let right = 0;
-        while (right < maxScan && cx + right + 1 < width && pixelClass(cx + right + 1, y) === PIXEL_NOTE) right++;
-        if (left + right + 1 > blackExtentLimit) isNote = false;
-      }
-
-      if (isNote) {
-        if (segStart < 0) segStart = y;
-        lastNote = y;
-        bright = 0;
-        if ((y & 1) === 0 || rv + lv === 0) {
-          const sx = centerClass === PIXEL_NOTE ? cx : leftCol;
-          const i = (y * width + sx) * 4;
-          if (classifyHand(data[i], data[i + 1], data[i + 2], key.pitch, opts.colorOptions) === 'right') rv++;
-          else lv++;
+      if (m[y] === 0) continue;
+      if (segStart >= 0) {
+        const gap = y - lastNote - 1;
+        let bridged = gap <= 1;
+        if (!bridged && gap <= bridgeRows) {
+          bridged = true;
+          for (let gy = lastNote + 1; gy < y; gy++) {
+            if (!hasBarContent(cx, gy)) {
+              bridged = false;
+              break;
+            }
+          }
         }
-      } else if (segStart >= 0 && centerClass === PIXEL_BRIGHT && bright < bridgeRows) {
-        bright++;
-      } else if (segStart >= 0) {
-        flush();
+        if (!bridged) flush();
       }
+      if (segStart < 0) segStart = y;
+      lastNote = y;
+      if (m[y] === 1) rv++;
+      else lv++;
     }
     flush();
   }
@@ -994,14 +1186,16 @@ export function detectKeyHitsFromVideoContext(
     splitPitch: o.splitPitch,
   };
 
-  if (o.layout) {
+  const layout = o.layout ?? detectKeyboardLayoutInFrame(ctx, video, width, height, Math.min(0.45, o.scanlineYRatio * 0.75));
+
+  if (layout) {
     ctx.drawImage(video, 0, 0, width, height);
     const scanY = Math.max(4, Math.min(height - 2, Math.round(height * o.scanlineYRatio)));
-    const stripH = Math.max(4, Math.round(height * 0.01));
+    const stripH = Math.max(6, Math.round(height * 0.025));
     const top = Math.max(0, scanY - stripH + 1);
     const rows = scanY - top + 1;
     const data = ctx.getImageData(0, top, width, rows).data;
-    const segments = analyzeKeyColumns(data, width, rows, top, o.layout, {
+    const segments = analyzeKeyColumns(data, width, rows, top, layout, {
       minSaturation: o.minSaturation,
       brightnessThreshold: o.brightnessThreshold,
       colorOptions,
@@ -1009,7 +1203,7 @@ export function detectKeyHitsFromVideoContext(
     });
     return segmentsToHits(
       segments.filter((s) => s.touchesBottom),
-      o.layout,
+      layout,
       o.splitPitch
     );
   }
@@ -1116,6 +1310,7 @@ export function buildNotesFromTape(
     fallSpeed: number;
     scanY: number;
     areaTop: number;
+    areaBottom?: number; // lowest analysed row (defaults to scanY)
     startTime: number;
     duration: number;
     splitPitch?: number;
@@ -1124,6 +1319,7 @@ export function buildNotesFromTape(
   }
 ): VisualNoteEvent[] {
   const { fallSpeed, scanY, areaTop, startTime, duration } = params;
+  const areaBottom = Math.min(scanY, params.areaBottom ?? scanY);
   const splitPitch = params.splitPitch ?? 60;
   const hand1Color = params.hand1Color ?? { r: 34, g: 197, b: 94 };
   const hand2Color = params.hand2Color ?? { r: 56, g: 189, b: 248 };
@@ -1131,6 +1327,7 @@ export function buildNotesFromTape(
 
   const BIN = 0.01;
   const lookahead = (scanY - areaTop) / fallSpeed;
+  const blindAhead = (scanY - areaBottom) / fallSpeed; // tape between the area bottom and the reading line
   const totalBins = Math.ceil((duration + lookahead) / BIN) + 2;
   const observed = new Uint16Array(totalBins);
   const tapes = new Map<number, { colored: Uint16Array; right: Uint16Array; left: Uint16Array }>();
@@ -1141,7 +1338,7 @@ export function buildNotesFromTape(
     const rel = frame.t - startTime;
     if (rel < -lookahead || rel > duration) continue;
 
-    const b0 = toBin(rel);
+    const b0 = toBin(rel + blindAhead);
     const b1 = toBin(rel + lookahead);
     for (let b = b0; b <= b1; b++) if (observed[b] < 65535) observed[b]++;
 
@@ -1178,12 +1375,12 @@ export function buildNotesFromTape(
     let lv = 0;
     let gapBins = 0;
     for (let b = 0; b <= totalBins; b++) {
-      const minObs = Math.min(2, Math.max(1, observed[b]));
+      // Majority of the frames that saw this instant must agree (particles and glitches never do)
       const isColored =
         b < totalBins &&
         observed[b] >= 1 &&
-        tape.colored[b] >= minObs &&
-        (tape.colored[b] * 2 >= observed[b] || tape.colored[b] >= 2);
+        tape.colored[b] >= Math.min(2, observed[b]) &&
+        tape.colored[b] * 2 >= observed[b];
 
       if (isColored) {
         if (start < 0) {
@@ -1356,15 +1553,19 @@ export async function scanVideoFrames(
   }
 
   const scanY = Math.max(12, Math.min(canvasHeight - 2, Math.round(canvasHeight * scanlineYRatio)));
-  const areaTop = Math.max(0, Math.min(Math.round(canvasHeight * 0.02), scanY - 10));
-  const areaRows = scanY - areaTop + 1;
-  const bridgeRows = Math.max(3, Math.round(canvasHeight * 0.035));
+  // Analysis window: from below the title area down to the reading line (which the user places above
+  // the key glow). Amber flames are rejected by hue, smoke/particles by the tape majority vote.
+  const areaTop = Math.max(0, Math.round(canvasHeight * 0.12));
+  const areaBottom = Math.max(areaTop + 20, scanY - 3);
+  const areaRows = areaBottom - areaTop + 1;
+  const bridgeRows = Math.max(8, Math.round(canvasHeight * 0.03));
   const colorOptions: ColorOptions = { colorMode, hand1Color, hand2Color, splitPitch };
 
   const frames: FrameRecord[] = [];
   const tracker = createScanlineTracker(splitPitch);
   let baseLayout: KeyboardLayout | null = keyboardLayout;
   let layout: KeyboardLayout | null = null;
+  let keyboardRowY = 0;
   let framesScanned = 0;
   let lastProcessedTime = startCrop;
   let lastUiUpdate = 0;
@@ -1384,6 +1585,13 @@ export async function scanVideoFrames(
     let hits: KeyHit[];
     if (layout) {
       scanCtx.drawImage(videoElement, 0, 0, canvasWidth, canvasHeight);
+      const keyRow = scanCtx.getImageData(0, keyboardRowY, canvasWidth, 1).data;
+      if (!keyboardRowMatches(keyRow, canvasWidth, layout)) {
+        // Keyboard not on screen (intro/outro/cut): this frame saw nothing of the tape
+        tracker.track(t - startCrop, dt, []);
+        emitUi(t, []);
+        return;
+      }
       const data = scanCtx.getImageData(0, areaTop, canvasWidth, areaRows).data;
       const segments = analyzeKeyColumns(data, canvasWidth, areaRows, areaTop, layout, {
         minSaturation,
@@ -1528,6 +1736,9 @@ export async function scanVideoFrames(
       }
     }
     layout = baseLayout ? shiftLayoutOctave(baseLayout, octaveShift) : null;
+    if (layout) {
+      keyboardRowY = Math.max(0, Math.min(canvasHeight - 1, Math.round(layout.keyboardYRatio * canvasHeight)));
+    }
 
     await seekAndWait(startCrop, 900);
     try {
@@ -1575,6 +1786,7 @@ export async function scanVideoFrames(
         fallSpeed,
         scanY,
         areaTop,
+        areaBottom,
         startTime: startCrop,
         duration,
         splitPitch,

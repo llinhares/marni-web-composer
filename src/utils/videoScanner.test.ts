@@ -10,6 +10,7 @@ import {
   shiftLayoutOctave,
   buildNotesFromTape,
   estimateFallSpeed,
+  analyzeKeyColumns,
 } from './videoScanner.ts';
 import type { VisualNoteEvent, FrameRecord } from './videoScanner.ts';
 import type { Note } from '../types/music.ts';
@@ -342,4 +343,171 @@ test('estimateFallSpeed recovers true bar fall speed from frame displacements', 
   const speed = estimateFallSpeed(frames, 800);
   assert.ok(speed !== null, 'Fall speed should be estimated');
   assert.ok(Math.abs(speed - trueSpeed) < 6, `Estimated speed (${speed}) should be within +-6 px/s of ${trueSpeed}`);
+});
+
+test('analyzeKeyColumns rejects flame/amber glow and bridges white letters inside bars', () => {
+  const width = 600;
+  const rows = 100;
+  const data = new Uint8ClampedArray(width * rows * 4);
+
+  const mockLayout = {
+    keys: [
+      { pitch: 48, isBlack: false, centerRatio: 0.2, widthRatio: 0.02 }, // C3 (Blue)
+      { pitch: 55, isBlack: false, centerRatio: 0.5, widthRatio: 0.02 }, // G3 (Flame noise)
+      { pitch: 60, isBlack: false, centerRatio: 0.7, widthRatio: 0.02 }, // C4 (Green with letter)
+    ],
+    whiteKeyWidthRatio: 0.02,
+    blackKeyWidthRatio: 0.01,
+    keyboardYRatio: 0.7,
+    lowestPitch: 48,
+    highestPitch: 60,
+    score: 30,
+  };
+
+  const setPx = (x: number, y: number, r: number, g: number, b: number) => {
+    const i = (y * width + x) * 4;
+    data[i] = r;
+    data[i + 1] = g;
+    data[i + 2] = b;
+    data[i + 3] = 255;
+  };
+
+  const x48 = Math.round(0.2 * width);
+  const x55 = Math.round(0.5 * width);
+  const x60 = Math.round(0.7 * width);
+
+  // C3 (Pitch 48): Solid blue bar from y = 20 to y = 60
+  for (let y = 20; y <= 60; y++) {
+    for (let dx = -3; dx <= 3; dx++) setPx(x48 + dx, y, 40, 140, 240);
+  }
+
+  // G3 (Pitch 55): Amber/orange flame noise from y = 40 to y = 90 (Hue ~32 deg)
+  for (let y = 40; y <= 90; y++) {
+    for (let dx = -3; dx <= 3; dx++) setPx(x55 + dx, y, 180, 110, 30);
+  }
+
+  // C4 (Pitch 60): Green bar with white letter inside:
+  // Green y = 30..45, White letter y = 46..49, Green y = 50..70
+  for (let y = 30; y <= 70; y++) {
+    const isLetter = y >= 46 && y <= 49;
+    for (let dx = -3; dx <= 3; dx++) {
+      if (isLetter) setPx(x60 + dx, y, 245, 245, 245);
+      else setPx(x60 + dx, y, 50, 200, 40);
+    }
+  }
+
+  const segments = analyzeKeyColumns(data, width, rows, 0, mockLayout, {
+    colorOptions: {
+      colorMode: 'two-colors',
+      hand1Color: { r: 50, g: 200, b: 40 }, // Green
+      hand2Color: { r: 40, g: 140, b: 240 }, // Blue
+    },
+  });
+
+  const seg48 = segments.filter((s) => s.pitch === 48);
+  const seg55 = segments.filter((s) => s.pitch === 55);
+  const seg60 = segments.filter((s) => s.pitch === 60);
+
+  // Pitch 48 (Blue) detected cleanly
+  assert.equal(seg48.length, 1);
+  assert.equal(seg48[0].yTop, 20);
+  assert.equal(seg48[0].yBottom, 60);
+
+  // Pitch 55 (Flame glow) REJECTED completely
+  assert.equal(seg55.length, 0, 'Flame/amber glow must be rejected as noise');
+
+  // Pitch 60 (Green with white letter) bridged into 1 contiguous segment, NOT split
+  assert.equal(seg60.length, 1, 'Note letters must be bridged without splitting the bar');
+  assert.equal(seg60[0].yTop, 30);
+  assert.equal(seg60[0].yBottom, 70);
+});
+
+const makeLaneLayout = () => ({
+  // 20px white keys on a 400px frame: C4 30, C#4 41, D4 50, D#4 61, E4 70
+  keys: [
+    { pitch: 60, isBlack: false, centerRatio: 30 / 400, widthRatio: 20 / 400 },
+    { pitch: 61, isBlack: true, centerRatio: 41 / 400, widthRatio: 11 / 400 },
+    { pitch: 62, isBlack: false, centerRatio: 50 / 400, widthRatio: 20 / 400 },
+    { pitch: 63, isBlack: true, centerRatio: 61 / 400, widthRatio: 11 / 400 },
+    { pitch: 64, isBlack: false, centerRatio: 70 / 400, widthRatio: 20 / 400 },
+  ],
+  whiteKeyWidthRatio: 20 / 400,
+  blackKeyWidthRatio: 11 / 400,
+  keyboardYRatio: 0.7,
+  lowestPitch: 60,
+  highestPitch: 64,
+  score: 30,
+});
+
+const paint = (data: Uint8ClampedArray, width: number, x0: number, x1: number, y0: number, y1: number, rgb: number[]) => {
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const i = (y * width + x) * 4;
+      data[i] = rgb[0];
+      data[i + 1] = rgb[1];
+      data[i + 2] = rgb[2];
+      data[i + 3] = 255;
+    }
+  }
+};
+
+test('analyzeKeyColumns does not turn note-name letters inside a white bar into black-key notes', () => {
+  const width = 400;
+  const rows = 40;
+  const data = new Uint8ClampedArray(width * rows * 4);
+  // D4 bar (white key, full key width) with an outlined white letter on rows 10..14
+  paint(data, width, 41, 59, 0, 29, [56, 131, 216]);
+  paint(data, width, 46, 54, 10, 14, [10, 20, 40]); // dark letter outline
+  paint(data, width, 47, 53, 10, 14, [245, 245, 245]); // letter glyph
+
+  const segments = analyzeKeyColumns(data, width, rows, 0, makeLaneLayout());
+  assert.deepEqual(
+    segments.map((s) => s.pitch),
+    [62],
+    'Only the white key D4 must be detected (no phantom C#4/D#4 from letter fragments)'
+  );
+  assert.equal(segments[0].yTop, 0);
+  assert.equal(segments[0].yBottom, 29);
+});
+
+test('analyzeKeyColumns keeps two neighbouring black-key bars apart', () => {
+  const width = 400;
+  const rows = 30;
+  const data = new Uint8ClampedArray(width * rows * 4);
+  paint(data, width, 36, 46, 0, 19, [56, 131, 216]); // C#4
+  paint(data, width, 56, 66, 0, 19, [56, 131, 216]); // D#4
+
+  const pitches = analyzeKeyColumns(data, width, rows, 0, makeLaneLayout())
+    .map((s) => s.pitch)
+    .sort((a, b) => a - b);
+  assert.deepEqual(pitches, [61, 63]);
+});
+
+test('analyzeKeyColumns splits repeated notes separated by background but bridges letter rows', () => {
+  const width = 400;
+  const rows = 60;
+  const data = new Uint8ClampedArray(width * rows * 4);
+  paint(data, width, 21, 39, 0, 20, [56, 131, 216]); // C4, first note
+  paint(data, width, 21, 39, 8, 11, [245, 245, 245]); // letter spanning the full bar width
+  paint(data, width, 21, 39, 26, 50, [56, 131, 216]); // C4, repeated note after a 5-row gap
+
+  const segments = analyzeKeyColumns(data, width, rows, 0, makeLaneLayout()).filter((s) => s.pitch === 60);
+  assert.equal(segments.length, 2, 'Background gap must split the repeated notes');
+  assert.equal(segments[0].yTop, 0);
+  assert.equal(segments[0].yBottom, 20);
+  assert.equal(segments[1].yTop, 26);
+});
+
+test('buildNotesFromTape ignores static smoke seen by only a few frames', () => {
+  const frames: FrameRecord[] = [];
+  for (let i = 0; i < 40; i++) {
+    const t = i * 0.033;
+    const segments =
+      i < 4
+        ? [{ pitch: 70, yTop: 100, yBottom: 110, touchesTop: false, touchesBottom: false, rightVotes: 3, leftVotes: 0 }]
+        : [];
+    frames.push({ t, segments });
+  }
+  const notes = buildNotesFromTape(frames, { fallSpeed: 200, scanY: 150, areaTop: 0, startTime: 0, duration: 1.3 });
+  assert.equal(notes.length, 0);
 });
