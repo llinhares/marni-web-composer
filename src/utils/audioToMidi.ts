@@ -1,6 +1,7 @@
 import type { Note } from '../types/music.ts';
 import { TICKS_PER_BEAT } from '../types/music.ts';
 import { pitchToFrequency } from './musicMath.ts';
+import { newId } from './ids.ts';
 
 export interface AudioToMidiOptions {
   bpm?: number;
@@ -142,14 +143,13 @@ export function noteEventsToNotes(
 ): Note[] {
   const { minPitch = 21, maxPitch = 108, minDurationSec = 0.05 } = opts;
   const ticksPerSecond = (bpm * TICKS_PER_BEAT) / 60;
-  const stamp = Date.now();
 
   return events
     .filter(
       (e) => e.pitchMidi >= minPitch && e.pitchMidi <= maxPitch && e.durationSeconds >= minDurationSec
     )
-    .map((e, idx) => ({
-      id: `audio-note-${stamp}-${idx}-${Math.random()}`,
+    .map((e) => ({
+      id: newId('note'),
       trackId: '',
       pitch: e.pitchMidi,
       startTick: Math.max(0, Math.round(e.startTimeSeconds * ticksPerSecond)),
@@ -510,11 +510,11 @@ export async function transcribeWithSpectralHeuristic(
 
   const ticksPerSecond = (detectedBpm * TICKS_PER_BEAT) / 60;
 
-  const notes: Note[] = finalizedNotes.map((n, idx) => {
+  const notes: Note[] = finalizedNotes.map((n) => {
     const startTick = Math.round(n.startSec * ticksPerSecond);
     const durationTicks = Math.max(60, Math.min(480 * 6, Math.round(n.durationSec * ticksPerSecond)));
     return {
-      id: `audio-note-${Date.now()}-${idx}-${Math.random()}`,
+      id: newId('note'),
       trackId: '',
       pitch: n.pitch,
       startTick,

@@ -16,15 +16,33 @@ An advanced, open-source, and responsive web-based digital audio workstation (DA
 ## ✨ Features
 
 - **High-Performance HTML5 Canvas Piano Roll**: Ultra-smooth rendering with automatic device pixel ratio (Retina/High-DPI) scaling, marquee selection, note dragging, proportional stretching (0.5x, 2x), transposition, and ghost notes.
-- **Undo / Redo Action Stack**: Comprehensive history tracking with keyboard shortcuts (<kbd>Ctrl</kbd>+<kbd>Z</kbd>, <kbd>Ctrl</kbd>+<kbd>Y</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd>) and dedicated toolbar buttons.
+- **Projects, Autosave & Crash Recovery**: `.marni` project files (<kbd>Ctrl</kbd>+<kbd>S</kbd> / <kbd>Ctrl</kbd>+<kbd>O</kbd>, saved in place where the browser supports it), continuous IndexedDB autosave and a recovery prompt after a crash or closed tab.
+- **Undo / Redo**: 200-step history covering notes, tracks, mixer, tempo, meter and effects; slider drags and typing collapse into single steps.
+- **Editing Tools**: copy/cut/paste across tracks, duplicate, arrow-key nudging and transposition, quantize (strength/swing), humanize, loop region (<kbd>L</kbd> or Shift+drag on the ruler) and song markers (<kbd>Shift</kbd>+<kbd>M</kbd>, <kbd>[</kbd> / <kbd>]</kbd>). Press <kbd>?</kbd> for every shortcut.
+- **MIDI Recording**: record from a USB MIDI keyboard (<kbd>R</kbd>) with metronome (<kbd>K</kbd>), one-bar count-in, real note-off and sustain pedal (stored as the BDO per-note sustain flag).
+- **Mixer**: per-track channel strips with 3-band EQ, compressor, FX send and peak meters (<kbd>X</kbd>); used by playback and WAV export alike.
 - **Sampled Instruments**: Piano, Flute, Violin, Guitar, Bass, Harp, Trumpet and Cello play recorded General MIDI samples (one per semitone), downloaded on demand and cached for offline use; Percussion and Marnisynth use the built-in Web Audio synthesizer, which is also the fallback while samples load. WAV export renders through the same engine, so files sound exactly like the editor.
 - **Jitter-Free Worker Timer**: Dedicated background Web Worker timer via inline Blob URL combined with lookahead scheduling (150ms) to eliminate browser tab throttling and audio drift.
 - **Native BDO Percussion Mapping**: Dedicated drum row watermarks, color coding, and quick audition pads mapped to authentic Black Desert drum pieces (Kick, Snare, Rimshot, Flam, Closed/Open Hi-Hats, Pedal, Toms 1–5, Crash, and Ride).
-- **Direct BDO Binary Export (`.bms`)**: Pure TypeScript implementation of the game's proprietary ICE encryption cipher. Supports automatic extraction of Owner ID and Character Name from existing game files, note rank limits (Rank F to S), velocity compression modes, and chunk note partitioning.
+- **Direct BDO Binary Export (`.bms`)**: Pure TypeScript implementation of the game's proprietary ICE encryption cipher. Supports automatic extraction of Owner ID and Character Name from existing game files, note rank limits (Rank F to S), velocity compression modes, and chunk note partitioning. A pre-export check reports everything the game would change (range, drums, duplicates, rank limits) with one-click fixes.
 - **Smart Standard MIDI Import & Export**: Pure TypeScript SMF (Format 0 and Format 1) decoder and encoder. Automatically detects tempo (BPM), time signatures, General MIDI instruments, and ensures the drum track is mapped to MIDI Channel 10 (channel 9).
-- **Web MIDI Hardware Support**: Plug-and-play support for external USB MIDI keyboards and controllers for live auditioning.
+- **Web MIDI Hardware Support**: Plug-and-play (including hot-plugged) USB MIDI keyboards for playing and recording.
+- **Installable & Offline**: PWA with a service worker; after the first visit the editor and cached instruments work without internet.
 - **Lossless Master Audio Exporter**: Fast multitrack rendering using `OfflineAudioContext` directly to 24-bit (48kHz) Studio Master and 16-bit (44.1kHz) CD-quality Lossless PCM WAV audio.
 - **Master Effector Rack**: Real-time Reverb (convolver impulse), Stereo Feedback Delay, and LFO Chorus DSP rack.
+
+---
+
+## 🧪 Quality
+
+```bash
+npm run lint          # TypeScript typecheck
+npm run lint:eslint   # ESLint
+npm test              # unit tests (node:test)
+npm run test:e2e      # Playwright end-to-end tests (first run: npx playwright install chromium)
+```
+
+CI (GitHub Actions) runs all of the above on every push and pull request.
 
 ---
 

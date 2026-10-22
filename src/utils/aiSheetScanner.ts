@@ -1,4 +1,5 @@
 import type { Note, TimeSignature } from '../types/music.ts';
+import { newId } from './ids.ts';
 
 export type SheetTranscriptionCompactNote = [number, number, number, number?, (string | number)?];
 
@@ -61,7 +62,10 @@ export async function fetchAvailableGeminiModels(apiKey: string): Promise<string
   if (!apiKey || !apiKey.trim()) return fallbackList;
 
   try {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey.trim()}`);
+    // Key in a header, not the URL: URLs end up in history, proxies and logs
+    const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models', {
+      headers: { 'x-goog-api-key': apiKey.trim() },
+    });
     if (!res.ok) return fallbackList;
     const data = await res.json();
     if (Array.isArray(data.models)) {
@@ -291,7 +295,7 @@ export async function transcribeSheetImageWithGemini(
   }
 
   const requestedModel = options?.model || 'gemini-3.8-flash';
-  const targetTrackId = options?.targetTrackId || `track-${Date.now()}`;
+  const targetTrackId = options?.targetTrackId || newId('track');
   const startTickOffset = options?.startTickOffset || 0;
 
   const { mimeType, data: base64Data } = await fileToBase64(file);
@@ -313,7 +317,7 @@ export async function transcribeSheetImageWithGemini(
   let rawText: string | undefined;
 
   for (const modelToTry of candidateModels) {
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelToTry}:generateContent?key=${apiKey.trim()}`;
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelToTry}:generateContent`;
 
     const requestBody = {
       contents: [
@@ -344,6 +348,7 @@ export async function transcribeSheetImageWithGemini(
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'x-goog-api-key': apiKey.trim(),
         },
         body: JSON.stringify(requestBody),
       });
@@ -556,7 +561,7 @@ export function parseAiTranscription(
   let lowestPitch = 127;
   let maxEndTick = offset;
 
-  rawParsedNotes.forEach((item, idx) => {
+  rawParsedNotes.forEach((item) => {
     if (item.pitch < lowestPitch) lowestPitch = item.pitch;
     if (item.pitch > highestPitch) highestPitch = item.pitch;
 
@@ -564,7 +569,7 @@ export function parseAiTranscription(
     if (endTick > maxEndTick) maxEndTick = endTick;
 
     const noteObj: Note = {
-      id: `ai-note-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 7)}`,
+      id: newId('note'),
       trackId: targetTrackId,
       pitch: item.pitch,
       startTick: item.rawStartTick,

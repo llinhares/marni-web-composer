@@ -45,6 +45,7 @@ function stepToPitch(step: string, octave: number, alter: number = 0): number {
 }
 
 import { detectBdoInstrument } from '../utils/instrumentDetection.ts';
+import { newId } from '../utils/ids.ts';
 
 function detectInstrument(name: string): InstrumentId {
   return detectBdoInstrument({ name });
@@ -376,7 +377,7 @@ export function parseMusicXml(xmlContent: string): DecodedMusicXml {
           const startTick = isChord ? lastNoteStartTick : currentVoiceTick;
 
           const noteObj: Note = {
-            id: `xml-note-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+            id: newId('note'),
             trackId: '',
             pitch,
             startTick,
@@ -410,8 +411,8 @@ export function parseMusicXml(xmlContent: string): DecodedMusicXml {
 
     if (isGrandStaff && staff2Notes.length > 0) {
       // 2 tracks for grand staff (Right and Left hand)
-      const track1Id = `track-xml-${partIdx}-rh-${Date.now()}`;
-      const track2Id = `track-xml-${partIdx}-lh-${Date.now() + 1}`;
+      const track1Id = newId('track');
+      const track2Id = newId('track');
 
       resultTracks.push({
         id: track1Id,
@@ -440,7 +441,7 @@ export function parseMusicXml(xmlContent: string): DecodedMusicXml {
       });
     } else {
       const allNotes = [...staff1Notes, ...staff2Notes];
-      const trackId = `track-xml-${partIdx}-${Date.now()}`;
+      const trackId = newId('track');
       resultTracks.push({
         id: trackId,
         name: partMeta.name,

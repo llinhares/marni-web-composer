@@ -20,6 +20,7 @@ import {
 } from './scheduling.ts';
 import { sampleLibrary, pickSample, DECAYING_INSTRUMENTS, type SampleSet } from './sampleLibrary.ts';
 import { EQ_BANDS, mixerOf } from './mixer.ts';
+import { newId } from '../utils/ids.ts';
 
 /** Per-track channel strip: input -> EQ low/mid/high -> compressor -> output (+ meter tap, FX send). */
 interface ChannelStrip {
@@ -290,7 +291,7 @@ export class AudioEngine {
       if (!this.ctx) return '';
     }
 
-    const noteVoiceId = `${instrumentId}-${pitch}-${Date.now()}-${Math.random()}`;
+    const noteVoiceId = newId('voice');
     const startTime = this.ctx.currentTime;
     const stopFn = this.synthesizeInstrument(
       instrumentId,

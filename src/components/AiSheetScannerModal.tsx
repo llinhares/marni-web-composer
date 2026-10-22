@@ -27,6 +27,7 @@ import {
   fetchAvailableGeminiModels,
   ParsedScoreResult,
 } from '../utils/aiSheetScanner.ts';
+import { newId } from '../utils/ids.ts';
 
 interface AiSheetScannerModalProps {
   isOpen: boolean;
@@ -206,7 +207,7 @@ export const AiSheetScannerModal: React.FC<AiSheetScannerModalProps> = ({
       setStatusMessage('Decodificando pauta dupla (Claves de Sol e Fá), notas e compassos...');
       const result = await transcribeSheetImageWithGemini(selectedFile, apiKey, {
         model: selectedModel,
-        targetTrackId: destinationMode === 'existing' ? targetTrackId : `track-ai-${Date.now()}`,
+        targetTrackId: destinationMode === 'existing' ? targetTrackId : newId('track'),
         pageRange: pageRangeMode === 'custom' && customPageRange.trim() ? customPageRange.trim() : 'all',
         startTickOffset: computedOffset,
       });
@@ -227,20 +228,20 @@ export const AiSheetScannerModal: React.FC<AiSheetScannerModalProps> = ({
     const baseTitle = newTrackName || scanResult.title || 'Partitura IA';
 
     if (destinationMode === 'new-2tracks') {
-      const rightTrackId = `track-ai-rh-${Date.now()}`;
-      const leftTrackId = `track-ai-lh-${Date.now() + 1}`;
+      const rightTrackId = newId('track');
+      const leftTrackId = newId('track');
 
       const rightNotes = (
         scanResult.rightHandNotes.length > 0 ? scanResult.rightHandNotes : scanResult.notes
       ).map((n) => ({
         ...n,
-        id: `note-${Date.now()}-${Math.random()}`,
+        id: newId('note'),
         trackId: rightTrackId,
       }));
 
       const leftNotes = scanResult.leftHandNotes.map((n) => ({
         ...n,
-        id: `note-${Date.now() + 1}-${Math.random()}`,
+        id: newId('note'),
         trackId: leftTrackId,
       }));
 
@@ -265,15 +266,15 @@ export const AiSheetScannerModal: React.FC<AiSheetScannerModalProps> = ({
         timeSignature: scanResult.timeSignature,
       });
     } else if (destinationMode === 'new-1track') {
-      const newId = `track-ai-${Date.now()}`;
+      const createdTrackId = newId('track');
       const remappedNotes = scanResult.notes.map((n) => ({
         ...n,
-        id: `note-${Date.now()}-${Math.random()}`,
-        trackId: newId,
+        id: newId('note'),
+        trackId: createdTrackId,
       }));
       onImportScore({
         notes: remappedNotes,
-        targetTrackId: newId,
+        targetTrackId: createdTrackId,
         createNewTrack: {
           name: baseTitle,
           instrumentId: newTrackInstrument,
@@ -285,7 +286,7 @@ export const AiSheetScannerModal: React.FC<AiSheetScannerModalProps> = ({
     } else {
       const remappedNotes = scanResult.notes.map((n) => ({
         ...n,
-        id: `note-${Date.now()}-${Math.random()}`,
+        id: newId('note'),
         trackId: targetTrackId,
       }));
       onImportScore({

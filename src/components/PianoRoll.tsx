@@ -458,7 +458,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
     const selected = activeNotes.filter((n) => selectedNoteIds.has(n.id));
     const duplicated = selected.map((n) => ({
       ...n,
-      id: `note-dup-${Date.now()}-${Math.random()}`,
+      id: newId('note'),
       startTick: n.startTick + snapTicks,
       selected: true,
     }));
@@ -1391,7 +1391,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
           activeTrack.instrumentId === 'grand-piano' || Boolean(activeTrack.sustainPedal);
 
         const newNote: Note = {
-          id: `note-${Date.now()}-${Math.random()}`,
+          id: newId('note'),
           trackId: activeTrack.id,
           pitch: finalPitch,
           startTick: snappedTick,

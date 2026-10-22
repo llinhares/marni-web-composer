@@ -7,6 +7,7 @@
 
 import type { Track, Note, InstrumentId, TimeSignature, EffectorSettings } from '../types/music.ts';
 import { BDO_INSTRUMENTS } from '../types/music.ts';
+import { newId } from '../utils/ids.ts';
 
 const _KA = new Uint8Array([0xa3, 0x71, 0x8f, 0x92, 0x46, 0xb2, 0xc8, 0x55]);
 const _KB = new Uint8Array([0xf2, 0x82, 0x80, 0x83, 0x42, 0x96, 0xa2, 0x55]);
@@ -262,7 +263,7 @@ export function parseBdoBinaryFile(
     let groupVolume = 75;
     let groupAuxActive = true;
     const groupNotes: Note[] = [];
-    const trackId = `track-bdo-${g}-${Date.now()}`;
+    const trackId = newId('track');
 
     for (let t = 0; t < trackCount; t++) {
       if (offset + 12 > decrypted.length) break;

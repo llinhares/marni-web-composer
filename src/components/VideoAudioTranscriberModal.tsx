@@ -36,6 +36,7 @@ import {
   KeyHit,
 } from '../utils/videoScanner.ts';
 import { pitchToNoteName, formatTimecode } from '../utils/musicMath.ts';
+import { newId } from '../utils/ids.ts';
 
 interface VideoAudioTranscriberModalProps {
   isOpen: boolean;
@@ -633,7 +634,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
           const startTick = Math.max(0, Math.round(v.startSec * ticksPerSecond));
           const durationTicks = Math.max(60, Math.round((v.endSec - v.startSec) * ticksPerSecond));
           const note: Note = {
-            id: `vnote-${Date.now()}-${i}`,
+            id: newId('note'),
             trackId: '',
             pitch: v.pitch,
             startTick,
@@ -815,18 +816,18 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
       : 'Transcrição IA';
 
     if (splitHands && transcriptionResult.rightHandNotes.length > 0 && transcriptionResult.leftHandNotes.length > 0) {
-      const rightTrackId = `track-trans-rh-${Date.now()}`;
-      const leftTrackId = `track-trans-lh-${Date.now() + 1}`;
+      const rightTrackId = newId('track');
+      const leftTrackId = newId('track');
 
       const rightNotes = transcriptionResult.rightHandNotes.map((n) => ({
         ...n,
-        id: `note-${Date.now()}-${Math.random()}`,
+        id: newId('note'),
         trackId: rightTrackId,
       }));
 
       const leftNotes = transcriptionResult.leftHandNotes.map((n) => ({
         ...n,
-        id: `note-${Date.now() + 1}-${Math.random()}`,
+        id: newId('note'),
         trackId: leftTrackId,
       }));
 
@@ -847,10 +848,10 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
         title: baseTitle,
       });
     } else {
-      const trackId = destinationMode === 'existing' ? targetTrackId : `track-trans-${Date.now()}`;
+      const trackId = destinationMode === 'existing' ? targetTrackId : newId('track');
       const notes = transcriptionResult.allNotes.map((n) => ({
         ...n,
-        id: `note-${Date.now()}-${Math.random()}`,
+        id: newId('note'),
         trackId,
       }));
 

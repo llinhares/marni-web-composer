@@ -45,3 +45,19 @@ test('BDO export dialog validates the song', async ({ page }) => {
   await expect(page.getByRole('dialog', { name: /Exportar para o BDO/ })).toBeVisible();
   await expect(page.getByText(/Pronta para o jogo|Faixas|Notas/).first()).toBeVisible();
 });
+
+test('works offline after the first visit (service worker)', async ({ page, context }) => {
+  await openApp(page);
+  await page.evaluate(async () => {
+    await navigator.serviceWorker.ready;
+  });
+  // A second load lets the worker cache the page and the build assets
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Tocar' })).toBeVisible();
+
+  await context.setOffline(true);
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Tocar' })).toBeVisible();
+  await expect(page.getByText('10 notas')).toBeVisible();
+  await context.setOffline(false);
+});
