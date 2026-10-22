@@ -7,7 +7,6 @@
 
 import type { Track, Note, InstrumentId, TimeSignature, EffectorSettings } from '../types/music.ts';
 import { BDO_INSTRUMENTS } from '../types/music.ts';
-import { FULL_BDO_INSTRUMENTS } from './bdoExportV2.ts';
 
 const _KA = new Uint8Array([0xa3, 0x71, 0x8f, 0x92, 0x46, 0xb2, 0xc8, 0x55]);
 const _KB = new Uint8Array([0xf2, 0x82, 0x80, 0x83, 0x42, 0x96, 0xa2, 0x55]);

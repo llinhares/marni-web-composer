@@ -5,8 +5,8 @@
  * Built with zero-residual-hum protection and automatic oscillator termination.
  */
 
-import type { InstrumentId, EffectorSettings, Track, Note } from '../types/music.ts';
-import { pitchToFrequency, ticksToSeconds } from '../utils/musicMath.ts';
+import type { InstrumentId, EffectorSettings, Track } from '../types/music.ts';
+import { pitchToFrequency } from '../utils/musicMath.ts';
 import { WorkerTimer } from './workerTimer.ts';
 import {
   audibleTracks,

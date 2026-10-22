@@ -3,7 +3,7 @@
  * Parses binary MIDI files into Marni Web Composer tracks and notes.
  */
 
-import type { Track, Note, InstrumentId, TimeSignature } from '../types/music.ts';
+import type { Track, TimeSignature } from '../types/music.ts';
 import { BDO_INSTRUMENTS } from '../types/music.ts';
 import { detectBdoInstrument } from '../utils/instrumentDetection.ts';
 

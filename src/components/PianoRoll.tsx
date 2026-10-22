@@ -9,7 +9,6 @@ import {
   ArrowUp,
   ArrowDown,
   X as CloseIcon,
-  Music,
   Sliders,
   Volume2,
 } from 'lucide-react';
@@ -36,7 +35,6 @@ import {
   isPitchInScale,
   getBeatsPerMeasure,
   getBdoDrumInfo,
-  BdoDrumPiece,
 } from '../utils/musicMath.ts';
 
 const BDO_DRUM_PADS = [
@@ -94,7 +92,6 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
   timeSignature,
   accidentals,
   sustenidoActive = true,
-  onToggleSustenido,
   playhead,
   isPlaying = false,
   loop,

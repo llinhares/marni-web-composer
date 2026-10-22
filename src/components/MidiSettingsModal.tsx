@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Radio, CheckCircle2, AlertCircle, RefreshCw } from 'lucide-react';
+import { X, Radio, CheckCircle2, AlertCircle } from 'lucide-react';
 import { WebMidiManager, MidiDevice } from '../midi/webMidi.ts';
 import { pitchToNoteName } from '../utils/musicMath.ts';
 

@@ -8,7 +8,6 @@ import {
   AlertTriangle,
   FileCode,
   Music,
-  Sliders,
   AudioWaveform,
   Lock,
   CircleAlert,

@@ -3,7 +3,7 @@
  * Matches Marni Web Composer format & BDO Music Album specifications.
  */
 
-import type { Note, Track, SongMetadata } from '../types/music.ts';
+import type { Track, SongMetadata } from '../types/music.ts';
 import { BDO_INSTRUMENTS, BDO_GRADE_LIMITS } from '../types/music.ts';
 import { pitchToNoteName } from '../utils/musicMath.ts';
 

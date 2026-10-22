@@ -13,7 +13,6 @@ import {
   HelpCircle,
   FileText,
   RotateCw,
-  Clock,
   Layers,
   Split,
   BookOpen,
@@ -302,7 +301,6 @@ export const AiSheetScannerModal: React.FC<AiSheetScannerModalProps> = ({
     onClose();
   };
 
-  const activeTrackObj = tracks.find((t) => t.id === targetTrackId);
 
   return (
     <div

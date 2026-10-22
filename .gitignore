@@ -18,3 +18,5 @@ prototype_ref/
 .vscode/
 .idea/
 metadata.json
+playwright-report/
+test-results/

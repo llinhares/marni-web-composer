@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Sparkles, Sliders } from 'lucide-react';
+import { X, Sliders } from 'lucide-react';
 import type { EffectorSettings } from '../types/music.ts';
 import { Knob } from './Knob.tsx';
 

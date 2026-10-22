@@ -4,7 +4,6 @@ import {
   Upload,
   RotateCcw,
   Volume2,
-  VolumeX,
   MoreVertical,
   Trash2,
   Copy,

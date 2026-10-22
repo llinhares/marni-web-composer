@@ -392,7 +392,7 @@ export async function transcribeSheetImageWithGemini(
   try {
     const cleanedText = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
     parsedJson = JSON.parse(cleanedText);
-  } catch (parseErr) {
+  } catch {
     throw new Error('Erro ao interpretar a resposta estruturada da IA. Tente novamente com outra foto ou formato.');
   }
 

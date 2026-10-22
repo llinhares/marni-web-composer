@@ -61,7 +61,7 @@ export function audioBufferToWav(buffer: AudioBuffer, bitDepth: 16 | 24 = 24): U
   let offset = 44;
   for (let i = 0; i < numSamples; i++) {
     for (let c = 0; c < numChannels; c++) {
-      let sample = Math.max(-1, Math.min(1, channels[c][i]));
+      const sample = Math.max(-1, Math.min(1, channels[c][i]));
       if (bitDepth === 16) {
         // 16-bit signed integer (-32768 to 32767)
         const intSample = sample < 0 ? sample * 32768 : sample * 32767;

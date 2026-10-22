@@ -2,15 +2,12 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   X,
   Video,
-  Music,
   Upload,
   Play,
   Pause,
-  Sliders,
   CheckCircle2,
   AlertCircle,
   Sparkles,
-  Layers,
   Split,
   Eye,
   RefreshCw,
@@ -30,10 +27,8 @@ import {
 import {
   scanVideoFrames,
   fuseAudioAndVisionNotes,
-  detectBarsFromVideoContext,
   detectKeyHitsFromVideoContext,
   detectKeyboardLayoutInFrame,
-  shiftLayoutOctave,
   KeyboardLayout,
   hexToRgb,
   rgbToHex,
@@ -82,7 +77,6 @@ const COLOR_PRESETS = [
 export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProps> = ({
   isOpen,
   onClose,
-  tracks,
   activeTrackId,
   currentBpm,
   onImportTranscribedNotes,
@@ -98,7 +92,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
   const [selectedInstrument, setSelectedInstrument] = useState<InstrumentId>('grand-piano');
   const [targetTrackId, setTargetTrackId] = useState<string>(activeTrackId);
   const [autoApplyBpm, setAutoApplyBpm] = useState<boolean>(true);
-  const [sensitivity, setSensitivity] = useState<number>(0.55);
+  const [sensitivity] = useState<number>(0.55);
 
   // Timeline Cropping (Intro & Outro Trimmer)
   const [cropStartTime, setCropStartTime] = useState<number>(0);
