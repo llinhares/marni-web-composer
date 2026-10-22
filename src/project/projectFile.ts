@@ -10,6 +10,7 @@ import type {
   EffectorSettings,
   GridSnap,
   InstrumentId,
+  Marker,
   Note,
   TimeSignature,
   Track,
@@ -37,6 +38,7 @@ export interface ProjectState {
   effectorSettings: EffectorSettings;
   tracks: Track[];
   activeTrackId: string;
+  markers: Marker[];
   bdoProtection: {
     isProtected: boolean;
     author: string;
@@ -126,6 +128,7 @@ export function projectSignature(state: ProjectState): string {
     state.activeTrackId,
     state.effectorSettings,
     state.bdoProtection,
+    state.markers ?? [],
     cleanTracks(state.tracks),
   ]);
 }
@@ -254,6 +257,13 @@ export function parseProjectFile(text: string): ProjectFile {
   const tracks = raw.tracks.map((t, i) => parseTrack(t, i, usedIds));
   const activeTrackId = tracks.some((t) => t.id === raw.activeTrackId) ? String(raw.activeTrackId) : tracks[0].id;
   const prot = (raw.bdoProtection ?? {}) as Record<string, unknown>;
+  const markers: Marker[] = (Array.isArray(raw.markers) ? raw.markers : [])
+    .map((m, i) => {
+      const r = (m ?? {}) as Record<string, unknown>;
+      return { id: str(r.id, '') || `marker-${i + 1}`, tick: Math.round(num(r.tick, -1)), name: str(r.name, `Marcador ${i + 1}`) };
+    })
+    .filter((m) => m.tick >= 0)
+    .sort((a, b) => a.tick - b.tick);
 
   return {
     format: PROJECT_FORMAT,
@@ -272,6 +282,7 @@ export function parseProjectFile(text: string): ProjectFile {
     effectorSettings: parseEffector(raw.effectorSettings),
     tracks,
     activeTrackId,
+    markers,
     bdoProtection: {
       isProtected: bool(prot.isProtected, false),
       author: str(prot.author, ''),

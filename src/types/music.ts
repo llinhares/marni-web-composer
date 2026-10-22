@@ -53,6 +53,13 @@ export interface Track {
   notes: Note[];
 }
 
+/** Named position on the timeline (verse, chorus...), saved with the project. */
+export interface Marker {
+  id: string;
+  tick: number;
+  name: string;
+}
+
 export type GridSnap = '1/1' | '1/2' | '1/4' | '1/8' | '1/16' | '1/32' | '1/64' | '1/4T' | '1/8T' | '1/16T' | 'off';
 
 export type TimeSignature = '4/4' | '3/4' | '6/8' | '2/4' | '12/8';

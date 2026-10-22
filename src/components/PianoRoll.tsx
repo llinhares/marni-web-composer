@@ -13,7 +13,7 @@ import {
   Sliders,
   Volume2,
 } from 'lucide-react';
-import type { Note, Track, ToolMode, GridSnap, TimeSignature } from '../types/music.ts';
+import type { Marker, Note, Track, ToolMode, GridSnap, TimeSignature } from '../types/music.ts';
 import type { PlayheadStore } from '../audio/playheadStore.ts';
 import { instrumentRange } from '../bdo/bdoValidation.ts';
 import {
@@ -71,6 +71,7 @@ interface PianoRollProps {
   isPlaying?: boolean;
   loop: { start: number; end: number; enabled: boolean } | null;
   onLoopChange: (loop: { start: number; end: number }) => void;
+  markers: Marker[];
   onSeek: (tick: number) => void;
   zoomLevel: number;
   onZoomChange?: (delta: number) => void;
@@ -98,6 +99,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
   isPlaying = false,
   loop,
   onLoopChange,
+  markers,
   onSeek,
   zoomLevel,
   onZoomChange,
@@ -1711,6 +1713,22 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
         }
       }
 
+      // Markers: flag + name on the ruler, thin line across the grid
+      ctx.font = 'bold 9px "JetBrains Mono", monospace';
+      ctx.textBaseline = 'middle';
+      for (const m of markers) {
+        const mx = keyboardWidth + m.tick * pixelsPerTick - scrollX;
+        if (mx < keyboardWidth || mx > width) continue;
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.18)';
+        ctx.fillRect(mx, RULER_HEIGHT, 1, height - RULER_HEIGHT);
+        const label = m.name.slice(0, 18);
+        const labelW = ctx.measureText(label).width + 8;
+        ctx.fillStyle = '#0e7490';
+        ctx.fillRect(mx, 8, labelW, 12);
+        ctx.fillStyle = '#e0f2fe';
+        ctx.fillText(label, mx + 4, 14);
+      }
+
       const x = keyboardWidth + playhead.get() * pixelsPerTick - scrollX;
       if (x < keyboardWidth || x > width) return;
 
@@ -1739,7 +1757,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
       unsubscribe();
       if (frame) cancelAnimationFrame(frame);
     };
-  }, [playhead, keyboardWidth, pixelsPerTick, scrollX, containerWidth, containerHeight, loop]);
+  }, [playhead, keyboardWidth, pixelsPerTick, scrollX, containerWidth, containerHeight, loop, markers]);
 
   return (
     <div

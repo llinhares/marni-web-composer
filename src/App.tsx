@@ -14,6 +14,7 @@ import type {
   EffectorSettings,
   SongMetadata,
   InstrumentId,
+  Marker,
 } from './types/music.ts';
 import { BDO_INSTRUMENTS, BDO_GRADE_LIMITS } from './types/music.ts';
 import { AudioEngine } from './audio/AudioEngine.ts';
@@ -495,6 +496,36 @@ export default function App() {
     [isPlaying, playhead, startEngineAt]
   );
 
+  // Markers (saved with the project)
+  const [markers, setMarkers] = useState<Marker[]>([]);
+  const markersRef = useRef(markers);
+  markersRef.current = markers;
+  const handleAddMarker = useCallback(() => {
+    const tick = Math.round(playhead.get());
+    setMarkers((prev) =>
+      prev.some((m) => m.tick === tick)
+        ? prev
+        : [...prev, { id: newId('marker'), tick, name: `Marcador ${prev.length + 1}` }].sort((a, b) => a.tick - b.tick)
+    );
+  }, [playhead]);
+  const handleRenameMarker = useCallback((id: string, name: string) => {
+    setMarkers((prev) => prev.map((m) => (m.id === id ? { ...m, name } : m)));
+  }, []);
+  const handleDeleteMarker = useCallback((id: string) => {
+    setMarkers((prev) => prev.filter((m) => m.id !== id));
+  }, []);
+  const jumpToMarker = useCallback(
+    (direction: 1 | -1) => {
+      const here = playhead.get();
+      const list = markersRef.current;
+      const target =
+        direction > 0 ? list.find((m) => m.tick > here + 1) : [...list].reverse().find((m) => m.tick < here - 1);
+      if (target) handleSeek(target.tick);
+      else if (direction < 0) handleSeek(0);
+    },
+    [playhead, handleSeek]
+  );
+
   // Loop region (Shift+drag on the ruler, or L to loop the selection / the next 4 bars)
   const [loop, setLoop] = useState<{ start: number; end: number; enabled: boolean } | null>(null);
   useEffect(() => {
@@ -637,6 +668,7 @@ export default function App() {
       },
     ];
     setTracks(resetTracks);
+    setMarkers([]);
     setActiveTrackId('track-piano');
     playhead.set(0);
     setTitle('Marni Web Composer - Example');
@@ -689,6 +721,7 @@ export default function App() {
       effectorSettings,
       tracks,
       activeTrackId,
+      markers,
       bdoProtection: {
         isProtected: isBdoProtected,
         author: originalBdoAuthor,
@@ -710,6 +743,7 @@ export default function App() {
       effectorSettings,
       tracks,
       activeTrackId,
+      markers,
       isBdoProtected,
       originalBdoAuthor,
       originalBdoComposer,
@@ -754,6 +788,7 @@ export default function App() {
       setBdoGrade(p.bdoGrade);
       if (p.bdoOwnerId > 0) setBdoOwnerId(p.bdoOwnerId);
       setEffectorSettings(p.effectorSettings);
+      setMarkers(p.markers);
       setIsBdoProtected(p.bdoProtection.isProtected);
       setOriginalBdoAuthor(p.bdoProtection.author);
       setOriginalBdoComposer(p.bdoProtection.composer);
@@ -962,6 +997,8 @@ export default function App() {
         }
       } else if (e.key === 'v' || e.key === 'V') {
         setToolMode('pointer');
+      } else if (e.key === 'M' && e.shiftKey) {
+        handleAddMarker();
       } else if (e.key === 'm' || e.key === 'M') {
         setToolMode('select');
       } else if (e.key === 'b' || e.key === 'B') {
@@ -976,12 +1013,16 @@ export default function App() {
         setMetronomeOn((v) => !v);
       } else if ((e.key === 'l' || e.key === 'L') && !e.ctrlKey && !e.metaKey) {
         handleToggleLoop();
+      } else if (e.key === '[') {
+        jumpToMarker(-1);
+      } else if (e.key === ']') {
+        jumpToMarker(1);
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isPlaying, handlePlay, handlePause, handleStop, handleUndo, handleRedo, handleSaveProject, handleOpenProject, handleRecord, handleToggleLoop]);
+  }, [isPlaying, handlePlay, handlePause, handleStop, handleUndo, handleRedo, handleSaveProject, handleOpenProject, handleRecord, handleToggleLoop, handleAddMarker, jumpToMarker]);
 
   // Import Mode ('replace' | 'append')
   const importModeRef = useRef<ImportMode>('replace');
@@ -1319,6 +1360,12 @@ export default function App() {
         onToggleCountIn={() => setCountInOn((v) => !v)}
         loopOn={!!loop?.enabled}
         onToggleLoop={handleToggleLoop}
+        beatsPerBar={getBeatsPerMeasure(timeSignature)}
+        markers={markers}
+        onAddMarker={handleAddMarker}
+        onJumpToTick={handleSeek}
+        onRenameMarker={handleRenameMarker}
+        onDeleteMarker={handleDeleteMarker}
         maxTick={maxTick}
         instrumentIds={instrumentIds}
         bpm={bpm}
@@ -1403,6 +1450,7 @@ export default function App() {
           isPlaying={isPlaying}
           loop={loop}
           onLoopChange={handleLoopChange}
+          markers={markers}
           onSeek={handleSeek}
           zoomLevel={zoomLevel}
           onZoomChange={(delta) => setZoomLevel((prev) => Math.max(0.5, Math.min(2.5, prev + delta)))}

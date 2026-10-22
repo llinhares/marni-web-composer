@@ -25,11 +25,28 @@ import type { ToolMode, GridSnap, TimeSignature, EffectorSettings, InstrumentId 
 import { formatTimecode, ticksToSeconds } from '../utils/musicMath.ts';
 import { usePlayheadTick, type PlayheadStore } from '../audio/playheadStore.ts';
 import { SampleStatusBadge } from './SampleStatusBadge.tsx';
+import { MarkersMenu } from './MarkersMenu.tsx';
+import type { Marker } from '../types/music.ts';
 
-const Timecode: React.FC<{ playhead: PlayheadStore; maxTick: number; bpm: number }> = ({ playhead, maxTick, bpm }) => {
+/** "bar.beat" (1-based), e.g. 3.2 */
+export const formatBarBeat = (tick: number, beatsPerBar: number) => {
+  const beat = Math.floor(Math.max(0, tick) / 480);
+  return `${Math.floor(beat / beatsPerBar) + 1}.${(beat % beatsPerBar) + 1}`;
+};
+
+const Timecode: React.FC<{ playhead: PlayheadStore; maxTick: number; bpm: number; beatsPerBar: number }> = ({
+  playhead,
+  maxTick,
+  bpm,
+  beatsPerBar,
+}) => {
   const currentTick = usePlayheadTick(playhead);
   return (
     <div className="px-2.5 py-1 rounded-md bg-stone-950 border border-stone-800 font-mono text-xs flex items-center gap-1.5 shadow-inner">
+      <span className="text-stone-300 font-bold min-w-[2.5rem] text-right" title="Compasso.tempo">
+        {formatBarBeat(currentTick, beatsPerBar)}
+      </span>
+      <span className="text-stone-700">|</span>
       <span className="text-amber-400 font-bold">{formatTimecode(ticksToSeconds(currentTick, bpm))}</span>
       <span className="text-stone-600">/</span>
       <span className="text-stone-400">{formatTimecode(ticksToSeconds(Math.max(currentTick, maxTick), bpm))}</span>
@@ -53,6 +70,12 @@ interface HeaderProps {
   onToggleCountIn: () => void;
   loopOn: boolean;
   onToggleLoop: () => void;
+  beatsPerBar: number;
+  markers: Marker[];
+  onAddMarker: () => void;
+  onJumpToTick: (tick: number) => void;
+  onRenameMarker: (id: string, name: string) => void;
+  onDeleteMarker: (id: string) => void;
   maxTick: number;
   instrumentIds: InstrumentId[];
   bpm: number;
@@ -103,6 +126,12 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleCountIn,
   loopOn,
   onToggleLoop,
+  beatsPerBar,
+  markers,
+  onAddMarker,
+  onJumpToTick,
+  onRenameMarker,
+  onDeleteMarker,
   maxTick,
   instrumentIds,
   bpm,
@@ -390,7 +419,15 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
 
         {/* Timecode Readout (only this element re-renders while playing) */}
-        <Timecode playhead={playhead} maxTick={maxTick} bpm={bpm} />
+        <Timecode playhead={playhead} maxTick={maxTick} bpm={bpm} beatsPerBar={beatsPerBar} />
+        <MarkersMenu
+          markers={markers}
+          formatPosition={(tick) => formatBarBeat(tick, beatsPerBar)}
+          onAdd={onAddMarker}
+          onJump={onJumpToTick}
+          onRename={onRenameMarker}
+          onDelete={onDeleteMarker}
+        />
         <SampleStatusBadge instrumentIds={instrumentIds} />
       </div>
 

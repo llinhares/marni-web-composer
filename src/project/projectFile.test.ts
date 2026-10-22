@@ -53,6 +53,10 @@ const makeState = (): ProjectState => ({
       notes: [],
     },
   ],
+  markers: [
+    { id: 'm1', tick: 0, name: 'Intro' },
+    { id: 'm2', tick: 7680, name: 'Refrão' },
+  ],
   bdoProtection: { isProtected: true, author: 'Orig', composer: 'Comp', arranger: 'Arr', ownerId: 42 },
 });
 
