@@ -20,6 +20,8 @@ import { AudioEngine } from './audio/AudioEngine.ts';
 import { createPlayheadStore } from './audio/playheadStore.ts';
 import { newId } from './utils/ids.ts';
 import { barRangeOf } from './editing/noteOps.ts';
+import { UndoHistory } from './editing/undoHistory.ts';
+import { sessionSnapshotsEqual, type SessionSnapshot } from './editing/sessionSnapshot.ts';
 import { createMidiRecorder, recordedToNotes, type MidiRecorder, type RecordedNoteEvent } from './midi/midiRecorder.ts';
 import { sampleLibrary } from './audio/sampleLibrary.ts';
 import { WebMidiManager } from './midi/webMidi.ts';
@@ -202,110 +204,71 @@ export default function App() {
   const activeTrackIdRef = useRef(activeTrackId);
   activeTrackIdRef.current = activeTrackId;
 
-  // Undo / Redo History Stack
-  interface HistorySnapshot {
-    tracks: Track[];
-    activeTrackId: string;
-  }
+  // Undo / Redo History (notes, tracks, tempo, meter and effects)
+  const effectorRef = useRef(effectorSettings);
+  effectorRef.current = effectorSettings;
+  const bpmHistRef = useRef(bpm);
+  bpmHistRef.current = bpm;
+  const timeSigHistRef = useRef(timeSignature);
+  timeSigHistRef.current = timeSignature;
 
-  const [history, setHistory] = useState<HistorySnapshot[]>([
-    { tracks: INITIAL_TRACKS, activeTrackId: 'track-piano' },
-  ]);
-  const [historyIndex, setHistoryIndex] = useState<number>(0);
+  const snapshotOf = (trackList: Track[], activeId: string): SessionSnapshot => ({
+    tracks: trackList,
+    activeTrackId: activeId,
+    bpm: bpmHistRef.current,
+    timeSignature: timeSigHistRef.current,
+    effectorSettings: effectorRef.current,
+  });
 
-  const historyRef = useRef(history);
-  historyRef.current = history;
-  const historyIndexRef = useRef(historyIndex);
-  historyIndexRef.current = historyIndex;
+  const historyRef = useRef<UndoHistory<SessionSnapshot> | null>(null);
+  historyRef.current ??= new UndoHistory(
+    { tracks: INITIAL_TRACKS, activeTrackId: 'track-piano', bpm: 120, timeSignature: '4/4', effectorSettings: DEFAULT_EFFECTOR_SETTINGS },
+    { equals: sessionSnapshotsEqual }
+  );
+  const [, setHistoryVersion] = useState(0);
 
-  const pushHistory = useCallback((newTracks: Track[], newActiveId?: string) => {
-    const activeId = newActiveId || activeTrackIdRef.current;
-    const currentSnap = historyRef.current[historyIndexRef.current];
-    if (
-      currentSnap &&
-      currentSnap.tracks === newTracks &&
-      currentSnap.activeTrackId === activeId
-    ) {
-      return;
-    }
-
-    // Ignore snapshots where only selection flags changed without musical differences
-    if (currentSnap && currentSnap.activeTrackId === activeId) {
-      const prevT = currentSnap.tracks;
-      if (prevT.length === newTracks.length) {
-        let isIdentical = true;
-        for (let i = 0; i < prevT.length; i++) {
-          const tA = prevT[i];
-          const tB = newTracks[i];
-          if (
-            tA.id !== tB.id ||
-            tA.instrumentId !== tB.instrumentId ||
-            tA.volume !== tB.volume ||
-            tA.pan !== tB.pan ||
-            tA.isMuted !== tB.isMuted ||
-            tA.isSolo !== tB.isSolo ||
-            tA.notes.length !== tB.notes.length
-          ) {
-            isIdentical = false;
-            break;
-          }
-          for (let j = 0; j < tA.notes.length; j++) {
-            const nA = tA.notes[j];
-            const nB = tB.notes[j];
-            if (
-              nA.id !== nB.id ||
-              nA.pitch !== nB.pitch ||
-              nA.startTick !== nB.startTick ||
-              nA.durationTicks !== nB.durationTicks ||
-              nA.velocity !== nB.velocity
-            ) {
-              isIdentical = false;
-              break;
-            }
-          }
-          if (!isIdentical) break;
-        }
-        if (isIdentical) return;
-      }
-    }
-
-    setHistory((prev) => {
-      const sliced = prev.slice(0, historyIndexRef.current + 1);
-      const updated = [...sliced, { tracks: newTracks, activeTrackId: activeId }];
-      if (updated.length > 50) {
-        updated.shift();
-      }
-      return updated;
-    });
-    setHistoryIndex((prev) => Math.min(49, prev + 1));
-  }, []);
-
-  const handleUndo = useCallback(() => {
-    if (historyIndexRef.current > 0) {
-      const newIdx = historyIndexRef.current - 1;
-      const snap = historyRef.current[newIdx];
-      if (snap) {
-        setHistoryIndex(newIdx);
-        setTracks(snap.tracks);
-        setActiveTrackId(snap.activeTrackId);
-      }
+  const pushHistory = useCallback((newTracks: Track[], newActiveId?: string, group?: string) => {
+    if (historyRef.current!.push(snapshotOf(newTracks, newActiveId || activeTrackIdRef.current), group)) {
+      setHistoryVersion((v) => v + 1);
     }
   }, []);
 
-  const handleRedo = useCallback(() => {
-    if (historyIndexRef.current < historyRef.current.length - 1) {
-      const newIdx = historyIndexRef.current + 1;
-      const snap = historyRef.current[newIdx];
-      if (snap) {
-        setHistoryIndex(newIdx);
-        setTracks(snap.tracks);
-        setActiveTrackId(snap.activeTrackId);
-      }
-    }
+  /** Applies a track change immediately (also to the ref, so edits in the same frame stack up) and records it. */
+  const commitTracks = useCallback(
+    (updater: (prev: Track[]) => Track[], opts: { history?: boolean; activeId?: string; group?: string } = {}) => {
+      const next = updater(tracksRef.current);
+      if (next === tracksRef.current) return;
+      tracksRef.current = next;
+      setTracks(next);
+      if (opts.history !== false) pushHistory(next, opts.activeId, opts.group);
+    },
+    [pushHistory]
+  );
+
+  const restoreSnapshot = useCallback((snap: SessionSnapshot | null) => {
+    if (!snap) return;
+    tracksRef.current = snap.tracks;
+    setTracks(snap.tracks);
+    setActiveTrackId(snap.activeTrackId);
+    setBpm(snap.bpm);
+    setTimeSignature(snap.timeSignature);
+    setEffectorSettings(snap.effectorSettings);
+    setHistoryVersion((v) => v + 1);
   }, []);
 
-  const canUndo = historyIndex > 0;
-  const canRedo = historyIndex < history.length - 1;
+  const handleUndo = useCallback(() => restoreSnapshot(historyRef.current!.undo()), [restoreSnapshot]);
+  const handleRedo = useCallback(() => restoreSnapshot(historyRef.current!.redo()), [restoreSnapshot]);
+
+  // Tempo, meter and effect changes are undoable too (typing/dragging collapses into one step)
+  useEffect(() => {
+    const cur = historyRef.current!.current;
+    if (cur.bpm === bpm && cur.timeSignature === timeSignature && cur.effectorSettings === effectorSettings) return;
+    const group = cur.bpm !== bpm ? 'bpm' : cur.timeSignature !== timeSignature ? 'meter' : 'fx';
+    pushHistory(tracksRef.current, activeTrackIdRef.current, group);
+  }, [bpm, timeSignature, effectorSettings, pushHistory]);
+
+  const canUndo = historyRef.current.canUndo;
+  const canRedo = historyRef.current.canRedo;
 
   // Effector update sync
   useEffect(() => {
@@ -386,13 +349,12 @@ export default function App() {
       const rec = recorderRef.current;
       if (!rec) return;
       const recorded = recordedToNotes(events, rec.trackId, () => newId('note'));
-      setTracks((prev) => {
-        const updated = prev.map((t) => (t.id === rec.trackId ? { ...t, notes: [...rec.baseNotes, ...recorded] } : t));
-        if (commit) pushHistory(updated, rec.trackId);
-        return updated;
-      });
+      commitTracks(
+        (prev) => prev.map((t) => (t.id === rec.trackId ? { ...t, notes: [...rec.baseNotes, ...recorded] } : t)),
+        { history: commit, activeId: rec.trackId }
+      );
     },
-    [pushHistory]
+    [commitTracks]
   );
 
   const finishRecording = useCallback(() => {
@@ -592,15 +554,12 @@ export default function App() {
   // Track manipulation
   const handleUpdateNotes = useCallback(
     (trackId: string, updatedNotes: Note[], commitHistory: boolean = true) => {
-      setTracks((prev) => {
-        const updated = prev.map((t) => (t.id === trackId ? { ...t, notes: updatedNotes } : t));
-        if (commitHistory) {
-          pushHistory(updated, trackId);
-        }
-        return updated;
+      commitTracks((prev) => prev.map((t) => (t.id === trackId ? { ...t, notes: updatedNotes } : t)), {
+        history: commitHistory,
+        activeId: trackId,
       });
     },
-    [pushHistory]
+    [commitTracks]
   );
 
   const handleAddTrack = (instrumentId: InstrumentId) => {
@@ -609,7 +568,7 @@ export default function App() {
     const name = count === 0 ? (inst?.name || 'Instrumento') : `${inst?.name} ${count + 1}`;
 
     const newTrack: Track = {
-      id: `track-${Date.now()}`,
+      id: newId('track'),
       name,
       instrumentId,
       color: inst?.color || '#d4a373',
@@ -622,25 +581,16 @@ export default function App() {
       notes: [],
     };
 
-    setTracks((prev) => {
-      const updated = [...prev, newTrack];
-      pushHistory(updated, newTrack.id);
-      return updated;
-    });
+    commitTracks((prev) => [...prev, newTrack], { activeId: newTrack.id });
     setActiveTrackId(newTrack.id);
   };
 
   const handleDeleteTrack = (trackId: string) => {
-    if (tracks.length <= 1) return;
-    setTracks((prev) => {
-      const filtered = prev.filter((t) => t.id !== trackId);
-      const nextActiveId = activeTrackId === trackId ? filtered[0]?.id || '' : activeTrackId;
-      if (activeTrackId === trackId) {
-        setActiveTrackId(nextActiveId);
-      }
-      pushHistory(filtered, nextActiveId);
-      return filtered;
-    });
+    if (tracksRef.current.length <= 1) return;
+    const remaining = tracksRef.current.filter((t) => t.id !== trackId);
+    const nextActiveId = activeTrackId === trackId ? remaining[0]?.id || '' : activeTrackId;
+    if (activeTrackId === trackId) setActiveTrackId(nextActiveId);
+    commitTracks(() => remaining, { activeId: nextActiveId });
   };
 
   const handleDuplicateTrack = (trackId: string) => {
@@ -649,23 +599,21 @@ export default function App() {
 
     const duplicated: Track = {
       ...source,
-      id: `track-${Date.now()}`,
+      id: newId('track'),
       name: `${source.name} (Cópia)`,
-      notes: source.notes.map((n) => ({ ...n, id: `note-${Date.now()}-${Math.random()}` })),
+      notes: [],
     };
+    duplicated.notes = source.notes.map((n) => ({ ...n, id: newId('note'), trackId: duplicated.id }));
 
-    setTracks((prev) => {
-      const updated = [...prev, duplicated];
-      pushHistory(updated, duplicated.id);
-      return updated;
-    });
+    commitTracks((prev) => [...prev, duplicated], { activeId: duplicated.id });
     setActiveTrackId(duplicated.id);
   };
 
   const handleUpdateTrack = (trackId: string, updates: Partial<Track>) => {
-    setTracks((prev) =>
-      prev.map((t) => (t.id === trackId ? { ...t, ...updates } : t))
-    );
+    // Grouped per track and field: dragging a volume/pan slider is a single undo step
+    commitTracks((prev) => prev.map((t) => (t.id === trackId ? { ...t, ...updates } : t)), {
+      group: `track:${trackId}:${Object.keys(updates).sort().join(',')}`,
+    });
   };
 
   const handleResetAll = () => {
@@ -813,8 +761,14 @@ export default function App() {
       setOriginalBdoOwnerId(p.bdoProtection.ownerId);
       playhead.set(0);
       // A loaded project starts a fresh undo history
-      setHistory([{ tracks: p.tracks, activeTrackId: p.activeTrackId }]);
-      setHistoryIndex(0);
+      historyRef.current!.reset({
+        tracks: p.tracks,
+        activeTrackId: p.activeTrackId,
+        bpm: p.bpm,
+        timeSignature: p.timeSignature,
+        effectorSettings: p.effectorSettings,
+      });
+      setHistoryVersion((v) => v + 1);
       return projectSignature({ ...p, bdoOwnerId: p.bdoOwnerId > 0 ? p.bdoOwnerId : bdoOwnerId });
     },
     [handleStop, bdoOwnerId]
