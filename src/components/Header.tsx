@@ -19,6 +19,7 @@ import {
   Circle,
   Timer,
   Hourglass,
+  Repeat,
 } from 'lucide-react';
 import type { ToolMode, GridSnap, TimeSignature, EffectorSettings, InstrumentId } from '../types/music.ts';
 import { formatTimecode, ticksToSeconds } from '../utils/musicMath.ts';
@@ -50,6 +51,8 @@ interface HeaderProps {
   onToggleMetronome: () => void;
   countInOn: boolean;
   onToggleCountIn: () => void;
+  loopOn: boolean;
+  onToggleLoop: () => void;
   maxTick: number;
   instrumentIds: InstrumentId[];
   bpm: number;
@@ -98,6 +101,8 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleMetronome,
   countInOn,
   onToggleCountIn,
+  loopOn,
+  onToggleLoop,
   maxTick,
   instrumentIds,
   bpm,
@@ -368,6 +373,19 @@ export const Header: React.FC<HeaderProps> = ({
             aria-pressed={countInOn}
           >
             <Hourglass className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={onToggleLoop}
+            className={`p-1.5 rounded-md border transition-colors ${
+              loopOn
+                ? 'bg-amber-500/15 border-amber-500/60 text-amber-400'
+                : 'bg-stone-900 border-[#2d2722] text-stone-500 hover:text-stone-300'
+            }`}
+            title="Loop (L) • Shift+arrastar na régua define a região"
+            aria-label="Loop"
+            aria-pressed={loopOn}
+          >
+            <Repeat className="w-3.5 h-3.5" />
           </button>
         </div>
 

@@ -19,6 +19,7 @@ import { BDO_INSTRUMENTS, BDO_GRADE_LIMITS } from './types/music.ts';
 import { AudioEngine } from './audio/AudioEngine.ts';
 import { createPlayheadStore } from './audio/playheadStore.ts';
 import { newId } from './utils/ids.ts';
+import { barRangeOf } from './editing/noteOps.ts';
 import { createMidiRecorder, recordedToNotes, type MidiRecorder, type RecordedNoteEvent } from './midi/midiRecorder.ts';
 import { sampleLibrary } from './audio/sampleLibrary.ts';
 import { WebMidiManager } from './midi/webMidi.ts';
@@ -532,6 +533,26 @@ export default function App() {
     [isPlaying, playhead, startEngineAt]
   );
 
+  // Loop region (Shift+drag on the ruler, or L to loop the selection / the next 4 bars)
+  const [loop, setLoop] = useState<{ start: number; end: number; enabled: boolean } | null>(null);
+  useEffect(() => {
+    audioEngineRef.current?.setLoop(loop?.enabled ? loop : null);
+  }, [loop]);
+  const handleLoopChange = useCallback((range: { start: number; end: number }) => {
+    setLoop({ ...range, enabled: true });
+  }, []);
+  const handleToggleLoop = useCallback(() => {
+    setLoop((prev) => {
+      if (prev) return { ...prev, enabled: !prev.enabled };
+      const ticksPerBar = getBeatsPerMeasure(timeSignatureRef.current) * 480;
+      const active = tracksRef.current.find((t) => t.id === activeTrackIdRef.current);
+      const fromSelection = barRangeOf(active?.notes.filter((n) => n.selected) ?? [], ticksPerBar);
+      if (fromSelection) return { ...fromSelection, enabled: true };
+      const barStart = Math.floor(playhead.get() / ticksPerBar) * ticksPerBar;
+      return { start: barStart, end: barStart + 4 * ticksPerBar, enabled: true };
+    });
+  }, [playhead]);
+
   // Download the sampled instruments the song uses (cached after the first time)
   const instrumentKey = [...new Set(tracks.map((t) => t.instrumentId))].sort().join(',');
   const instrumentIds = useMemo(() => (instrumentKey ? (instrumentKey.split(',') as InstrumentId[]) : []), [instrumentKey]);
@@ -999,12 +1020,14 @@ export default function App() {
         handleRecord();
       } else if (e.key === 'k' || e.key === 'K') {
         setMetronomeOn((v) => !v);
+      } else if ((e.key === 'l' || e.key === 'L') && !e.ctrlKey && !e.metaKey) {
+        handleToggleLoop();
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isPlaying, handlePlay, handlePause, handleStop, handleUndo, handleRedo, handleSaveProject, handleOpenProject, handleRecord]);
+  }, [isPlaying, handlePlay, handlePause, handleStop, handleUndo, handleRedo, handleSaveProject, handleOpenProject, handleRecord, handleToggleLoop]);
 
   // Import Mode ('replace' | 'append')
   const importModeRef = useRef<ImportMode>('replace');
@@ -1340,6 +1363,8 @@ export default function App() {
         onToggleMetronome={() => setMetronomeOn((v) => !v)}
         countInOn={countInOn}
         onToggleCountIn={() => setCountInOn((v) => !v)}
+        loopOn={!!loop?.enabled}
+        onToggleLoop={handleToggleLoop}
         maxTick={maxTick}
         instrumentIds={instrumentIds}
         bpm={bpm}
@@ -1422,6 +1447,8 @@ export default function App() {
           accidentals={accidentals}
           playhead={playhead}
           isPlaying={isPlaying}
+          loop={loop}
+          onLoopChange={handleLoopChange}
           onSeek={handleSeek}
           zoomLevel={zoomLevel}
           onZoomChange={(delta) => setZoomLevel((prev) => Math.max(0.5, Math.min(2.5, prev + delta)))}

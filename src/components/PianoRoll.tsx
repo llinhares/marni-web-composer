@@ -2,6 +2,8 @@ import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import {
   Maximize2,
   Minimize2,
+  Magnet,
+  Shuffle,
   Copy,
   Trash2,
   ArrowUp,
@@ -14,6 +16,18 @@ import {
 import type { Note, Track, ToolMode, GridSnap, TimeSignature } from '../types/music.ts';
 import type { PlayheadStore } from '../audio/playheadStore.ts';
 import { instrumentRange } from '../bdo/bdoValidation.ts';
+import {
+  copyNotes,
+  pasteNotes,
+  moveNotes,
+  quantizeNotes,
+  humanizeNotes,
+  type NoteClipboard,
+} from '../editing/noteOps.ts';
+import { newId } from '../utils/ids.ts';
+
+/** Shared between tracks: copy in one track, paste in another. */
+let noteClipboard: NoteClipboard | null = null;
 import {
   pitchToNoteName,
   isBlackKey,
@@ -55,6 +69,8 @@ interface PianoRollProps {
   onToggleSustenido?: () => void;
   playhead: PlayheadStore;
   isPlaying?: boolean;
+  loop: { start: number; end: number; enabled: boolean } | null;
+  onLoopChange: (loop: { start: number; end: number }) => void;
   onSeek: (tick: number) => void;
   zoomLevel: number;
   onZoomChange?: (delta: number) => void;
@@ -80,6 +96,8 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
   onToggleSustenido,
   playhead,
   isPlaying = false,
+  loop,
+  onLoopChange,
   onSeek,
   zoomLevel,
   onZoomChange,
@@ -88,6 +106,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
+  const loopDragRef = useRef<number | null>(null);
 
   // Viewport scroll offsets (default centered on Middle C / Octaves 3-5)
   const [scrollX, setScrollX] = useState(0);
@@ -310,14 +329,19 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
     [keyboardWidth, pixelsPerTick, scrollX]
   );
 
-  // Keyboard Shortcuts (Ctrl+A, Delete, Escape)
+  // Keyboard Shortcuts: select all, delete, escape, duplicate, copy/cut/paste, arrows, quantize
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') {
+      const el = document.activeElement as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) {
         return;
       }
+      const mod = e.ctrlKey || e.metaKey;
+      const key = e.key.toLowerCase();
+      const commit = (notes: Note[]) => onUpdateNotes(activeTrack.id, notes, true);
+      const gridTicks = getGridSnapTicks(gridSnap) || 120;
 
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
+      if (mod && key === 'a') {
         e.preventDefault();
         onUpdateNotes(
           activeTrack.id,
@@ -327,11 +351,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedNoteIds.size > 0) {
           e.preventDefault();
-          onUpdateNotes(
-            activeTrack.id,
-            activeNotes.filter((n) => !selectedNoteIds.has(n.id)),
-            true
-          );
+          commit(activeNotes.filter((n) => !selectedNoteIds.has(n.id)));
         }
       } else if (e.key === 'Escape') {
         onUpdateNotes(
@@ -339,31 +359,58 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
           activeNotes.map((n) => ({ ...n, selected: false })),
           false
         );
-      } else if ((e.ctrlKey || e.metaKey) && (e.key === 'd' || e.key === 'D')) {
-        // Duplicate selected notes shifted by 1 beat
+      } else if (mod && key === 'd') {
+        // Duplicate selected notes right after the selection
         if (selectedNoteIds.size > 0) {
           e.preventDefault();
-          const snapTicks = getGridSnapTicks(gridSnap) || 480;
-          const duplicated = activeNotes
-            .filter((n) => selectedNoteIds.has(n.id))
-            .map((n) => ({
-              ...n,
-              id: `note-dup-${Date.now()}-${Math.random()}`,
-              startTick: n.startTick + snapTicks,
-              selected: true,
-            }));
-          onUpdateNotes(
-            activeTrack.id,
-            activeNotes.map((n) => ({ ...n, selected: false })).concat(duplicated),
-            true
+          const clip = copyNotes(activeNotes.filter((n) => selectedNoteIds.has(n.id)));
+          if (!clip) return;
+          const origin = Math.min(...activeNotes.filter((n) => selectedNoteIds.has(n.id)).map((n) => n.startTick));
+          const at = origin + Math.ceil(clip.spanTicks / gridTicks) * gridTicks;
+          commit(
+            activeNotes.map((n): Note => ({ ...n, selected: false })).concat(pasteNotes(clip, at, activeTrack.id, () => newId('note')))
           );
         }
+      } else if (mod && (key === 'c' || key === 'x')) {
+        const selected = activeNotes.filter((n) => selectedNoteIds.has(n.id));
+        if (selected.length === 0) return;
+        e.preventDefault();
+        noteClipboard = copyNotes(selected);
+        if (key === 'x') commit(activeNotes.filter((n) => !selectedNoteIds.has(n.id)));
+      } else if (mod && key === 'v') {
+        if (!noteClipboard) return;
+        e.preventDefault();
+        // Paste at the playhead (snapped to the grid) into the active track
+        const at = snapTickToGrid(playhead.get(), gridSnap);
+        commit(
+          activeNotes
+            .map((n) => (n.selected ? { ...n, selected: false } : n))
+            .concat(pasteNotes(noteClipboard, at, activeTrack.id, () => newId('note')))
+        );
+      } else if (selectedNoteIds.size > 0 && e.key.startsWith('Arrow')) {
+        // ←/→ one grid step (Alt: one tick), ↑/↓ one semitone (Shift: one octave)
+        e.preventDefault();
+        const step = e.altKey ? 1 : gridTicks;
+        const dTicks = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
+        const semis = e.shiftKey ? 12 : 1;
+        const dPitch = e.key === 'ArrowUp' ? semis : e.key === 'ArrowDown' ? -semis : 0;
+        const moved = moveNotes(activeNotes, selectedNoteIds, dTicks, dPitch);
+        if (moved !== activeNotes) {
+          commit(moved);
+          if (dPitch !== 0) {
+            const first = moved.find((n) => selectedNoteIds.has(n.id));
+            if (first) onAuditionPitch(first.pitch, first.velocity);
+          }
+        }
+      } else if (!mod && key === 'q' && selectedNoteIds.size > 0) {
+        e.preventDefault();
+        commit(quantizeNotes(activeNotes, selectedNoteIds, { gridTicks, strength: e.shiftKey ? 0.5 : 1 }));
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeTrack.id, activeNotes, selectedNoteIds, gridSnap, onUpdateNotes]);
+  }, [activeTrack.id, activeNotes, selectedNoteIds, gridSnap, onUpdateNotes, onAuditionPitch, playhead]);
 
   // Proportional Expansion and Compression of Selected Notes
   const handleScaleSelection = useCallback(
@@ -1159,9 +1206,18 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
       return;
     }
 
-    // 2. Clicked Ruler
+    // 2. Clicked Ruler (Shift+drag defines the loop region)
     if (y < RULER_HEIGHT) {
       const clickTick = snapTickToGrid(xToTick(x), gridSnap);
+      if (e.shiftKey) {
+        try {
+          e.currentTarget.setPointerCapture(e.pointerId);
+        } catch {
+          // ignore
+        }
+        loopDragRef.current = clickTick;
+        return;
+      }
       onSeek(clickTick);
       return;
     }
@@ -1381,6 +1437,13 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
+    if (loopDragRef.current !== null) {
+      const a = loopDragRef.current;
+      const b = snapTickToGrid(xToTick(x), gridSnap);
+      if (b !== a) onLoopChange({ start: Math.min(a, b), end: Math.max(a, b) });
+      return;
+    }
+
     // 0. Pan Dragging
     if (dragAction?.type === 'pan') {
       e.currentTarget.style.cursor = 'grabbing';
@@ -1575,6 +1638,10 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
     } catch {
       // ignore
     }
+    if (loopDragRef.current !== null) {
+      loopDragRef.current = null;
+      return;
+    }
     if (
       dragAction?.type === 'resize' ||
       dragAction?.type === 'move' ||
@@ -1632,6 +1699,18 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
       frame = 0;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, width, height);
+
+      if (loop) {
+        const lx = Math.max(keyboardWidth, keyboardWidth + loop.start * pixelsPerTick - scrollX);
+        const rx = Math.min(width, keyboardWidth + loop.end * pixelsPerTick - scrollX);
+        if (rx > lx) {
+          ctx.fillStyle = loop.enabled ? 'rgba(245, 158, 11, 0.55)' : 'rgba(168, 162, 158, 0.3)';
+          ctx.fillRect(lx, 0, rx - lx, 6);
+          ctx.fillStyle = loop.enabled ? 'rgba(245, 158, 11, 0.06)' : 'rgba(168, 162, 158, 0.03)';
+          ctx.fillRect(lx, 6, rx - lx, height - 6);
+        }
+      }
+
       const x = keyboardWidth + playhead.get() * pixelsPerTick - scrollX;
       if (x < keyboardWidth || x > width) return;
 
@@ -1660,7 +1739,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
       unsubscribe();
       if (frame) cancelAnimationFrame(frame);
     };
-  }, [playhead, keyboardWidth, pixelsPerTick, scrollX, containerWidth, containerHeight]);
+  }, [playhead, keyboardWidth, pixelsPerTick, scrollX, containerWidth, containerHeight, loop]);
 
   return (
     <div
@@ -1742,6 +1821,38 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
             >
               <Minimize2 className="w-3.5 h-3.5 text-amber-400 shrink-0" />
               <span className="whitespace-nowrap">0.5x Encolher</span>
+            </button>
+
+            {/* Quantize to grid */}
+            <button
+              onClick={() =>
+                onUpdateNotes(
+                  activeTrack.id,
+                  quantizeNotes(activeNotes, selectedNoteIds, { gridTicks: getGridSnapTicks(gridSnap) || 120 }),
+                  true
+                )
+              }
+              className="px-2.5 py-1 rounded-lg bg-stone-900 hover:bg-stone-800 border border-[#3e342b] hover:border-amber-500 text-stone-200 text-xs font-semibold flex items-center gap-1 transition-colors shadow-sm whitespace-nowrap shrink-0"
+              title="Quantizar na grade (Q • Shift+Q = 50%)"
+            >
+              <Magnet className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span className="whitespace-nowrap">Quantizar</span>
+            </button>
+
+            {/* Humanize */}
+            <button
+              onClick={() =>
+                onUpdateNotes(
+                  activeTrack.id,
+                  humanizeNotes(activeNotes, selectedNoteIds, { timingTicks: 12, velocity: 8 }),
+                  true
+                )
+              }
+              className="px-2.5 py-1 rounded-lg bg-stone-900 hover:bg-stone-800 border border-[#3e342b] hover:border-amber-500 text-stone-200 text-xs font-semibold flex items-center gap-1 transition-colors shadow-sm whitespace-nowrap shrink-0"
+              title="Humanizar: pequenas variações de tempo (±12 ticks) e intensidade (±8)"
+            >
+              <Shuffle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span className="whitespace-nowrap">Humanizar</span>
             </button>
 
             {/* Transpose Up +1 */}

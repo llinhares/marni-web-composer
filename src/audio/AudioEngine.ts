@@ -62,6 +62,9 @@ export class AudioEngine {
   private playStartTick = 0; // notes before this tick are never played (count-in region)
   private songEnd = 0;
   private metronome = { enabled: false, beatsPerBar: 4 };
+  private loop: { start: number; end: number } | null = null;
+  private preWrapAnchor: TimelineAnchor | null = null;
+  private wrapAudioTime = 0;
   private onPlayheadTickUpdate: ((tick: number) => void) | null = null;
   private onPlaybackEnded: (() => void) | null = null;
   private currentEffectorSettings: EffectorSettings | null = null;
@@ -1029,6 +1032,7 @@ export class AudioEngine {
     this.anchor = { audioTime: this.ctx.currentTime + 0.05, tick: startTick - countIn, bpm };
     this.scheduledUntilTick = startTick - countIn;
     this.playStartTick = startTick;
+    this.preWrapAnchor = null;
 
     this.workerTimer?.start(() => this.schedulerTick());
   }
@@ -1041,32 +1045,57 @@ export class AudioEngine {
     if (!this.isPlaying || !this.ctx) return;
 
     const now = this.ctx.currentTime;
-    const currentTick = Math.max(this.playStartTick, Math.round(tickAtTime(this.anchor, now)));
+    // Right after a loop wrap is scheduled, the old timeline still applies until the wrap moment
+    if (this.preWrapAnchor && now >= this.wrapAudioTime) this.preWrapAnchor = null;
+    const shown = this.preWrapAnchor ?? this.anchor;
+    const currentTick = Math.max(this.playStartTick, Math.round(tickAtTime(shown, now)));
     this.playheadTick = currentTick;
     this.onPlayheadTickUpdate?.(currentTick);
 
-    if (currentTick >= Math.max(this.songEnd, 480 * 4) + 480) {
+    const looping = this.loop !== null && currentTick < this.loop.end;
+    if (!looping && currentTick >= Math.max(this.songEnd, 480 * 4) + 480) {
       this.stopPlayback();
       this.onPlaybackEnded?.();
       return;
     }
 
-    const horizonTick = Math.round(tickAtTime(this.anchor, now + LOOKAHEAD_SEC));
-    if (horizonTick <= this.scheduledUntilTick) return;
+    let from = this.scheduledUntilTick;
+    let horizon = Math.round(tickAtTime(this.anchor, now + LOOKAHEAD_SEC));
+    for (let guard = 0; guard < 8; guard++) {
+      const loop = this.loop && from < this.loop.end ? this.loop : null;
+      const to = loop ? Math.min(horizon, loop.end) : horizon;
+      if (to > from) this.scheduleRange(from, to, now, loop?.end ?? Infinity);
+      if (!loop || horizon < loop.end) {
+        this.scheduledUntilTick = Math.max(this.scheduledUntilTick, to);
+        return;
+      }
+      // Wrap: continue the timeline at the loop start, exactly at the loop end's audio time
+      this.preWrapAnchor = this.anchor;
+      this.wrapAudioTime = timeAtTick(this.anchor, loop.end);
+      this.anchor = { audioTime: this.wrapAudioTime, tick: loop.start, bpm: this.anchor.bpm };
+      this.playStartTick = Math.min(this.playStartTick, loop.start);
+      from = loop.start;
+      this.scheduledUntilTick = loop.start;
+      horizon = Math.round(tickAtTime(this.anchor, now + LOOKAHEAD_SEC));
+    }
+  }
+
+  /** Schedules metronome clicks and notes starting in [from, to); notes are cut at `cutTick` (loop end). */
+  private scheduleRange(from: number, to: number, now: number, cutTick: number) {
     const secondsPerTick = 60 / (this.anchor.bpm * 480);
 
     // Metronome: always during the count-in, then only when enabled
-    for (let beat = Math.ceil(this.scheduledUntilTick / 480) * 480; beat < horizonTick; beat += 480) {
+    for (let beat = Math.ceil(from / 480) * 480; beat < to; beat += 480) {
       if (beat >= this.playStartTick && !this.metronome.enabled) continue;
       const beatIndex = Math.round(beat / 480);
       const n = Math.max(1, this.metronome.beatsPerBar);
       this.click(timeAtTick(this.anchor, beat), ((beatIndex % n) + n) % n === 0);
     }
 
-    const fromTick = Math.max(this.scheduledUntilTick, this.playStartTick);
+    const fromTick = Math.max(from, this.playStartTick);
     for (const track of audibleTracks(this.activeTracks)) {
-      for (const note of notesInWindow(sortedByStart(track.notes), fromTick, horizonTick)) {
-        const durationSec = note.durationTicks * secondsPerTick;
+      for (const note of notesInWindow(sortedByStart(track.notes), fromTick, to)) {
+        const durationSec = (Math.min(note.startTick + note.durationTicks, cutTick) - note.startTick) * secondsPerTick;
         const isSustain = !!(note.sustain ?? track.sustainPedal ?? (track.instrumentId === 'grand-piano'));
         const stopVoice = this.synthesizeInstrument(
           track.instrumentId,
@@ -1087,12 +1116,15 @@ export class AudioEngine {
           this.activePlaybackVoices.set(track.id, voices);
         }
         voices.add(stopVoice);
-        const voiceCleanupSec = durationSec + (isSustain ? 2.5 : 0.5) + LOOKAHEAD_SEC;
+        const voiceCleanupSec = durationSec + (isSustain ? 2.5 : 0.5) + LOOKAHEAD_SEC * 2;
         setTimeout(() => voices!.delete(stopVoice), voiceCleanupSec * 1000);
       }
     }
+  }
 
-    this.scheduledUntilTick = horizonTick;
+  /** Loop region (ticks) or null. Takes effect immediately, also while playing. */
+  public setLoop(loop: { start: number; end: number } | null) {
+    this.loop = loop && loop.end > loop.start ? { ...loop } : null;
   }
 
   /**
@@ -1165,7 +1197,13 @@ export class AudioEngine {
     if (!(bpm > 0) || bpm === this.tempoBpm) return;
     this.tempoBpm = bpm;
     if (this.isPlaying && this.ctx) {
-      this.anchor = reanchor(this.anchor, this.ctx.currentTime, bpm);
+      if (this.preWrapAnchor) {
+        // A loop wrap is pending: the new tempo applies now on the old timeline and from the wrap point on
+        this.preWrapAnchor = reanchor(this.preWrapAnchor, this.ctx.currentTime, bpm);
+        this.anchor = { ...this.anchor, bpm };
+      } else {
+        this.anchor = reanchor(this.anchor, this.ctx.currentTime, bpm);
+      }
     }
   }
 
