@@ -684,7 +684,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
       // In drum mode, show watermark of the piece name on the row
       if (isPercussion && drumInfo?.isNativeBdo) {
         ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
-        ctx.font = 'bold 9px "JetBrains Mono", sans-serif';
+        ctx.font = 'bold 9px "Plus Jakarta Sans", sans-serif';
         ctx.textBaseline = 'middle';
         ctx.fillText(`[${p}] ${drumInfo.name}`, keyboardWidth + 8, y + keyHeight / 2);
       } else if (isPercussion && !drumInfo?.isNativeBdo) {
@@ -809,7 +809,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
       // Note Label
       if (w > 26) {
         ctx.fillStyle = isSelected ? '#1c1917' : '#1a140f';
-        ctx.font = 'bold 9px "JetBrains Mono", monospace';
+        ctx.font = 'bold 9px "Plus Jakarta Sans", sans-serif';
         ctx.textBaseline = 'middle';
         let label = pitchToNoteName(note.pitch, accidentals);
         if (isPercussion) {
@@ -847,12 +847,12 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
       ctx.strokeRect(0, laneTop, keyboardWidth, laneHeight);
 
       ctx.fillStyle = '#f59e0b';
-      ctx.font = 'bold 9px sans-serif';
+      ctx.font = 'bold 9px "Plus Jakarta Sans", sans-serif';
       ctx.textBaseline = 'top';
       ctx.fillText('VELOCITY', 6, laneTop + 6);
 
       ctx.fillStyle = '#78716c';
-      ctx.font = '8px "JetBrains Mono", monospace';
+      ctx.font = '8px "Plus Jakarta Sans", sans-serif';
       ctx.fillText('127 (ff)', 6, laneTop + 20);
       ctx.fillText('95 (mf)', 6, laneTop + 36);
       ctx.fillText('60 (p)', 6, laneTop + 50);
@@ -949,7 +949,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
       ctx.stroke();
 
       ctx.fillStyle = '#a89f91';
-      ctx.font = '10px "JetBrains Mono", monospace';
+      ctx.font = '10px "Plus Jakarta Sans", sans-serif';
       ctx.textBaseline = 'top';
       ctx.fillText(String(m + 1), x + 4, 6);
 
@@ -1018,23 +1018,23 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
 
           // Pitch number badge
           ctx.fillStyle = '#f59e0b';
-          ctx.font = 'bold 9px "JetBrains Mono", monospace';
+          ctx.font = 'bold 9px "Plus Jakarta Sans", sans-serif';
           ctx.textBaseline = 'middle';
           ctx.fillText(String(p), 16, y + keyHeight / 2);
 
           // Drum short name
           ctx.fillStyle = '#f5f5f4';
-          ctx.font = 'bold 9.5px sans-serif';
+          ctx.font = 'bold 9.5px "Plus Jakarta Sans", sans-serif';
           ctx.fillText(drumInfo.shortName, 36, y + keyHeight / 2);
         } else {
           ctx.fillStyle = '#57534e';
-          ctx.font = '8px "JetBrains Mono", monospace';
+          ctx.font = '8px "Plus Jakarta Sans", sans-serif';
           ctx.textBaseline = 'middle';
           ctx.fillText(`${pitchToNoteName(p, accidentals)} (Inativo)`, 8, y + keyHeight / 2);
         }
       } else {
         ctx.fillStyle = isBlack ? '#786e65' : isC ? '#e5a855' : '#a89f91';
-        ctx.font = isC ? 'bold 10px "JetBrains Mono", monospace' : '9px "JetBrains Mono", monospace';
+        ctx.font = isC ? 'bold 10px "Plus Jakarta Sans", sans-serif' : '9px "Plus Jakarta Sans", sans-serif';
         ctx.textBaseline = 'middle';
         ctx.fillText(pitchToNoteName(p, accidentals), 8, y + keyHeight / 2);
       }
@@ -1048,7 +1048,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
 
     if (isPercussion) {
       ctx.fillStyle = '#d4ab6a';
-      ctx.font = 'bold 9px sans-serif';
+      ctx.font = 'bold 9px "Plus Jakarta Sans", sans-serif';
       ctx.textBaseline = 'middle';
       ctx.fillText('Bateria BDO', 8, RULER_HEIGHT / 2);
     }
@@ -1711,7 +1711,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
       }
 
       // Markers: flag + name on the ruler, thin line across the grid
-      ctx.font = 'bold 9px "JetBrains Mono", monospace';
+      ctx.font = 'bold 9px "Plus Jakarta Sans", sans-serif';
       ctx.textBaseline = 'middle';
       for (const m of markers) {
         const mx = keyboardWidth + m.tick * pixelsPerTick - scrollX;
@@ -1759,6 +1759,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
   return (
     <div
       ref={containerRef}
+      data-tour="piano-roll"
       className="flex-1 h-full w-full relative overflow-hidden bg-[#141210] touch-none select-none"
       onWheel={handleWheel}
     >
@@ -1920,7 +1921,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
                   : 'Ativar Pedal de Sustain nas notas selecionadas (ressonância do BDO, gravado como byte 11)'
               }
             >
-              <span className="text-xs font-serif font-bold italic tracking-tighter shrink-0">Ped</span>
+              <span className="text-xs font-bold italic tracking-tighter shrink-0">Ped</span>
               <span className="whitespace-nowrap">{isSelectionSustained ? 'Pedal Ativo' : 'Pedal'}</span>
             </button>
 
@@ -1973,7 +1974,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
                     <button
                       key={preset.label}
                       onClick={() => handleSetVelocity(preset.vel)}
-                      className={`px-1.5 h-6 rounded text-[10px] font-serif font-bold italic transition-colors shrink-0 whitespace-nowrap ${
+                      className={`px-1.5 h-6 rounded text-[10px] font-bold italic transition-colors shrink-0 whitespace-nowrap ${
                         isCurrent
                           ? 'bg-amber-500 text-stone-950 shadow-sm font-black'
                           : 'bg-stone-900 hover:bg-stone-800 border border-[#3e342b] text-stone-300 hover:text-amber-300'

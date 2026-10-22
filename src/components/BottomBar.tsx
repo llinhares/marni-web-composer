@@ -49,7 +49,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
     <footer className="relative h-14 bg-[#141210] border-t border-[#2d2722] px-3 sm:px-4 flex items-center justify-between gap-3 shrink-0 z-40 text-xs text-stone-300">
       {/* Left / Project file actions, Song Title & Author Input */}
       <div className="flex-1 max-w-2xl flex items-center gap-2 min-w-0">
-        <div className="flex items-center gap-1 shrink-0">
+        <div data-tour="project" className="flex items-center gap-1 shrink-0">
           <button
             onClick={onOpenProject}
             className="p-1.5 rounded-lg bg-stone-900 hover:bg-stone-850 border border-[#2d2722] hover:border-amber-700/60 text-stone-300 transition-colors"
@@ -125,7 +125,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
       </div>
 
       {/* Center Helpful Shortcuts Hint */}
-      <div className="hidden xl:flex items-center gap-2 text-[11px] font-mono select-none">
+      <div className="hidden 2xl:flex items-center gap-2 text-[11px] font-mono select-none">
         <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-stone-900/80 border border-[#2d2722] text-stone-400">
           <span className="text-amber-500/90 font-semibold font-sans">Dica:</span>
           <span>
@@ -142,8 +142,8 @@ export const BottomBar: React.FC<BottomBarProps> = ({
         </div>
       </div>
 
-      {/* Right / Export Action Buttons matching Screenshot 1 */}
-      <div className="flex items-center gap-2">
+      {/* Right / Export Action Buttons */}
+      <div data-tour="export" className="flex items-center gap-2">
         {/* High-Resolution Lossless Audio Dropdown (WAV 24-bit / 16-bit) */}
         <div className="relative">
           <button

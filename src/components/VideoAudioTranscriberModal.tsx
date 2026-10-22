@@ -883,8 +883,8 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
   const playheadPct = Math.max(0, Math.min(100, (videoCurrentTime / totalDur) * 100));
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="bg-[#191614] border border-[#382f27] rounded-xl shadow-2xl w-full max-w-4xl max-h-[92vh] flex flex-col overflow-hidden text-stone-200">
+    <div className="modal-overlay animate-in fade-in duration-150">
+      <div className="modal-panel w-full max-w-4xl max-h-[92vh] flex flex-col overflow-hidden text-stone-200">
         {/* Header */}
         <div className="px-5 py-4 border-b border-[#2d2722] flex items-center justify-between bg-[#141210]">
           <div className="flex items-center gap-2.5">
@@ -893,14 +893,11 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-base font-bold text-stone-100">
+                <h2 className="modal-title">
                   Transcritor de Vídeo & Áudio (Cascata / Synthesia)
                 </h2>
                 <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-500/20 text-amber-400 border border-amber-500/40">
                   HÍBRIDO IA
-                </span>
-                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
-                  V2.1
                 </span>
               </div>
               <p className="text-xs text-stone-400">

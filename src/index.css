@@ -1,1 +1,81 @@
 @import "tailwindcss";
+
+/* One type family for the whole app (headings, numbers and the piano-roll canvas included).
+   --font-code is only for code previews (XML/MML). */
+@theme {
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-code: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+}
+
+html,
+body {
+  font-family: var(--font-sans);
+}
+
+/* Numeric readouts (timecode, counters, values) keep a fixed width while they change */
+.font-mono {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------------------
+   Scrollbars: same look as the piano-roll grid everywhere (12px track, 8px pill,
+   amber on hover/drag)
+   --------------------------------------------------------------------------- */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+::-webkit-scrollbar-track {
+  background: #181513;
+}
+::-webkit-scrollbar-track:vertical {
+  border-left: 1px solid #2d2722;
+}
+::-webkit-scrollbar-track:horizontal {
+  border-top: 1px solid #2d2722;
+}
+::-webkit-scrollbar-thumb {
+  background-color: #443a32;
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(217 119 6 / 0.7);
+}
+::-webkit-scrollbar-thumb:active {
+  background-color: #f59e0b;
+}
+::-webkit-scrollbar-corner {
+  background: #181513;
+}
+/* Firefox (no ::-webkit-scrollbar support) */
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #443a32 #181513;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Shared dialog shell: every modal uses the same overlay, panel and title
+   --------------------------------------------------------------------------- */
+@layer components {
+  .modal-overlay {
+    @apply fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-3 sm:p-4;
+  }
+  .modal-panel {
+    @apply bg-[#161412] border border-[#3e342b] rounded-2xl shadow-2xl text-stone-200;
+  }
+  .modal-title {
+    @apply text-base font-bold tracking-wide text-amber-400;
+  }
+  .modal-subtitle {
+    @apply text-xs text-stone-400;
+  }
+  .modal-close {
+    @apply p-1.5 rounded-lg text-stone-400 hover:text-stone-100 hover:bg-stone-800 transition-colors;
+  }
+}

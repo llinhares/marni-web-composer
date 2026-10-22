@@ -45,7 +45,9 @@ import { VideoAudioTranscriberModal } from './components/VideoAudioTranscriberMo
 import { RecoveryBanner } from './components/RecoveryBanner.tsx';
 import { MixerPanel } from './components/MixerPanel.tsx';
 import { Notifications } from './components/Notifications.tsx';
-import { ShortcutsDialog } from './components/ShortcutsDialog.tsx';
+import { HelpCenter, type HelpTab } from './components/HelpCenter.tsx';
+import { GuidedTour } from './components/GuidedTour.tsx';
+import { TOUR_STORAGE_KEY, TOUR_VERSION } from './ui/tourLayout.ts';
 import { notify, errorMessage } from './ui/notify.ts';
 import {
   DEFAULT_EFFECTOR_SETTINGS,
@@ -174,7 +176,16 @@ export default function App() {
   const [isAiSheetScannerOpen, setIsAiSheetScannerOpen] = useState(false);
   const [isVideoTranscriberOpen, setIsVideoTranscriberOpen] = useState(false);
   const [isMixerOpen, setIsMixerOpen] = useState(false);
-  const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
+  const [help, setHelp] = useState<{ open: boolean; tab: HelpTab }>({ open: false, tab: 'guide' });
+  const [isTourOpen, setIsTourOpen] = useState(false);
+  const finishTour = useCallback(() => {
+    setIsTourOpen(false);
+    try {
+      localStorage.setItem(TOUR_STORAGE_KEY, TOUR_VERSION);
+    } catch {
+      // private mode: the tour may show again next time
+    }
+  }, []);
   const readMeterPeaks = useCallback(() => audioEngineRef.current?.getMeterPeaks() ?? null, []);
 
   // Hidden file input for importing MIDI / XML / JSON
@@ -897,6 +908,18 @@ export default function App() {
     };
   }, []);
 
+  // First visit: guided tour, once the recovery prompt (if any) is out of the way
+  useEffect(() => {
+    if (!recoveryChecked || recoveryOffer) return;
+    let seen: string | null = null;
+    try {
+      seen = localStorage.getItem(TOUR_STORAGE_KEY);
+    } catch {
+      seen = null;
+    }
+    if (seen !== TOUR_VERSION) setIsTourOpen(true);
+  }, [recoveryChecked, recoveryOffer]);
+
   const handleRestoreRecovery = () => {
     if (!recoveryOffer) return;
     const signature = applyProject(recoveryOffer.project);
@@ -980,7 +1003,7 @@ export default function App() {
     toolPencil: () => setToolMode('pencil'),
     toolEraser: () => setToolMode('eraser'),
     toolPan: () => setToolMode('pan'),
-    help: () => setIsShortcutsOpen((v) => !v),
+    help: () => setHelp((h) => ({ open: !h.open, tab: 'commands' })),
   };
   const shortcutHandlersRef = useRef(shortcutHandlers);
   shortcutHandlersRef.current = shortcutHandlers;
@@ -1196,7 +1219,7 @@ export default function App() {
         beatsPerBar={getBeatsPerMeasure(timeSignature)}
         isMixerOpen={isMixerOpen}
         onToggleMixer={() => setIsMixerOpen((v) => !v)}
-        onOpenShortcuts={() => setIsShortcutsOpen(true)}
+        onOpenHelp={() => setHelp({ open: true, tab: 'guide' })}
         markers={markers}
         onAddMarker={handleAddMarker}
         onJumpToTick={handleSeek}
@@ -1313,7 +1336,16 @@ export default function App() {
       />
 
       <Notifications />
-      <ShortcutsDialog isOpen={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />
+      <HelpCenter
+        isOpen={help.open}
+        initialTab={help.tab}
+        onClose={() => setHelp((h) => ({ ...h, open: false }))}
+        onStartTour={() => {
+          setHelp((h) => ({ ...h, open: false }));
+          setIsTourOpen(true);
+        }}
+      />
+      <GuidedTour isOpen={isTourOpen} onFinish={finishTour} />
 
       <MixerPanel
         isOpen={isMixerOpen}
@@ -1406,11 +1438,11 @@ export default function App() {
       {/* Reset All Confirmation Modal */}
       {isResetConfirmOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in"
+          className="modal-overlay animate-in fade-in duration-150"
           onClick={() => setIsResetConfirmOpen(false)}
         >
           <div
-            className="w-full max-w-md bg-[#1c1a1a] border border-[#3e3832] rounded-xl shadow-2xl p-6 text-[#e0d4c8] select-none"
+            className="w-full max-w-md modal-panel p-6 text-[#e0d4c8] select-none"
             onClick={(e) => e.stopPropagation()}
             role="alertdialog"
             aria-modal="true"

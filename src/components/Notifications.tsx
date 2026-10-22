@@ -48,7 +48,7 @@ export const Notifications: React.FC = () => {
           onClick={() => confirm.resolve(false)}
         >
           <div
-            className="w-full max-w-md rounded-xl border border-[#3e3832] bg-[#1c1a1a] p-5 shadow-2xl text-stone-200"
+            className="w-full max-w-md modal-panel p-5 shadow-2xl text-stone-200"
             role="alertdialog"
             aria-modal="true"
             aria-labelledby="confirm-title"

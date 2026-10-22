@@ -54,11 +54,11 @@ export const MidiSettingsModal: React.FC<MidiSettingsModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
+      className="modal-overlay animate-in fade-in duration-150"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-lg bg-[#161412] border border-[#3e342b] rounded-2xl shadow-2xl p-6 text-stone-200"
+        className="w-full max-w-lg modal-panel p-6 text-stone-200"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -68,7 +68,7 @@ export const MidiSettingsModal: React.FC<MidiSettingsModalProps> = ({
         <div className="flex items-center justify-between border-b border-[#2d2722] pb-4 mb-4">
           <div className="flex items-center gap-2">
             <Radio className="w-5 h-5 text-amber-500 animate-pulse" />
-            <h2 id="midi-title" className="text-lg font-bold text-amber-400 font-serif">
+            <h2 id="midi-title" className="modal-title">
               Interface Web MIDI
             </h2>
           </div>

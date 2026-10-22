@@ -342,11 +342,11 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-3 sm:p-4 animate-in fade-in duration-150"
+      className="modal-overlay animate-in fade-in duration-150"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-2xl bg-[#161412] border border-[#3e342b] rounded-2xl shadow-2xl text-stone-200 max-h-[92vh] flex flex-col font-sans select-none overflow-hidden"
+        className="w-full max-w-2xl modal-panel text-stone-200 max-h-[92vh] flex flex-col font-sans select-none overflow-hidden"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -359,7 +359,7 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
               <Music className="w-5 h-5" />
             </div>
             <div>
-              <h2 id="bdo-title" className="text-base font-bold text-amber-400 font-serif tracking-wide">
+              <h2 id="bdo-title" className="modal-title">
                 Exportar para o BDO (Black Desert Online)
               </h2>
               <p className="text-xs text-stone-400">
@@ -881,7 +881,7 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
               </div>
 
               {/* Code Box */}
-              <div className="rounded-lg border border-[#3e342b] bg-stone-950 p-4 font-mono text-xs text-amber-100/90 max-h-80 overflow-y-auto overflow-x-auto whitespace-pre leading-relaxed select-text shadow-inner">
+              <div className="rounded-lg border border-[#3e342b] bg-stone-950 p-4 font-code text-xs text-amber-100/90 max-h-80 overflow-y-auto overflow-x-auto whitespace-pre leading-relaxed select-text shadow-inner">
                 {xmlSubTab === 'xml' ? bdoScoreResult?.xmlContent : bdoScoreResult?.mmlContent}
               </div>
             </div>

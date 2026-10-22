@@ -1,7 +1,11 @@
 import { test, expect, type Page } from '@playwright/test';
 
-/** Starts from a clean session (no autosave recovery prompt). */
-async function openApp(page: Page) {
+/** Starts from a clean session (no autosave recovery prompt, guided tour already seen). */
+async function openApp(page: Page, { tourSeen = true } = {}) {
+  await page.addInitScript((seen) => {
+    if (seen) localStorage.setItem('marni_tour_done', '1');
+    else localStorage.removeItem('marni_tour_done');
+  }, tourSeen);
   await page.goto('/');
   await page.evaluate(() => indexedDB.deleteDatabase('marni-web-composer'));
   await page.reload();
@@ -60,4 +64,41 @@ test('works offline after the first visit (service worker)', async ({ page, cont
   await expect(page.getByRole('button', { name: 'Tocar' })).toBeVisible();
   await expect(page.getByText('10 notas')).toBeVisible();
   await context.setOffline(false);
+});
+
+test('first visit shows the guided tour; it can be followed to the end and reopened from Help', async ({ page }) => {
+  // Clear the "tour seen" flag on the first load only (init scripts also run on reload)
+  await page.addInitScript(() => {
+    if (!sessionStorage.getItem('e2e-first-load')) {
+      sessionStorage.setItem('e2e-first-load', '1');
+      localStorage.removeItem('marni_tour_done');
+    }
+  });
+  await page.goto('/');
+  await page.evaluate(() => indexedDB.deleteDatabase('marni-web-composer'));
+  await page.reload();
+
+  const tour = page.getByRole('dialog', { name: /Bem-vindo/ });
+  await expect(tour).toBeVisible();
+  await page.getByRole('button', { name: 'Começar' }).click();
+  await expect(page.getByRole('heading', { name: 'Faixas' })).toBeVisible();
+  for (let i = 0; i < 8; i++) await page.getByRole('button', { name: 'Próximo' }).click();
+  await expect(page.getByRole('heading', { name: 'Ajuda sempre à mão' })).toBeVisible();
+  await page.getByRole('button', { name: 'Concluir' }).click();
+  await expect(page.getByRole('heading', { name: 'Ajuda sempre à mão' })).toBeHidden();
+
+  // Not shown again on reload
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Tocar' })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: /Bem-vindo/ })).toHaveCount(0);
+
+  // Help center: commands tab and the tour again
+  await page.getByRole('button', { name: 'Ajuda' }).click();
+  await page.getByRole('tab', { name: 'Comandos' }).click();
+  await expect(page.getByText('Tocar / pausar')).toBeVisible();
+  await page.getByRole('tab', { name: 'Sobre' }).click();
+  await expect(page.getByText(/Versão v2\.1/)).toBeVisible();
+  await page.getByRole('tab', { name: 'Como usar' }).click();
+  await page.getByRole('button', { name: 'Fazer o tour guiado' }).click();
+  await expect(page.getByRole('dialog', { name: /Bem-vindo/ })).toBeVisible();
 });

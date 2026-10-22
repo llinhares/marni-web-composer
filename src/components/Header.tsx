@@ -19,7 +19,7 @@ import {
   Hourglass,
   Repeat,
   SlidersVertical,
-  Keyboard,
+  CircleHelp,
 } from 'lucide-react';
 import type { ToolMode, GridSnap, TimeSignature, EffectorSettings, InstrumentId } from '../types/music.ts';
 import { formatTimecode, ticksToSeconds } from '../utils/musicMath.ts';
@@ -48,8 +48,9 @@ const Timecode: React.FC<{ playhead: PlayheadStore; maxTick: number; bpm: number
       </span>
       <span className="text-stone-700">|</span>
       <span className="text-amber-400 font-bold">{formatTimecode(ticksToSeconds(currentTick, bpm))}</span>
-      <span className="text-stone-600">/</span>
-      <span className="text-stone-400">{formatTimecode(ticksToSeconds(Math.max(currentTick, maxTick), bpm))}</span>
+      {/* Total length only on wide screens: the header must fit on one line */}
+      <span className="hidden 2xl:inline text-stone-600">/</span>
+      <span className="hidden 2xl:inline text-stone-400">{formatTimecode(ticksToSeconds(Math.max(currentTick, maxTick), bpm))}</span>
     </div>
   );
 };
@@ -73,7 +74,7 @@ interface HeaderProps {
   beatsPerBar: number;
   isMixerOpen: boolean;
   onToggleMixer: () => void;
-  onOpenShortcuts: () => void;
+  onOpenHelp: () => void;
   markers: Marker[];
   onAddMarker: () => void;
   onJumpToTick: (tick: number) => void;
@@ -132,7 +133,7 @@ export const Header: React.FC<HeaderProps> = ({
   beatsPerBar,
   isMixerOpen,
   onToggleMixer,
-  onOpenShortcuts,
+  onOpenHelp,
   markers,
   onAddMarker,
   onJumpToTick,
@@ -180,7 +181,7 @@ export const Header: React.FC<HeaderProps> = ({
         )}
 
         {/* Edit Tools */}
-        <div className="flex items-center rounded-lg bg-stone-900/90 p-0.5 border border-[#2d2722]">
+        <div data-tour="tools" className="flex items-center rounded-lg bg-stone-900/90 p-0.5 border border-[#2d2722]">
           <button
             onClick={() => onSetToolMode('pointer')}
             className={`p-1.5 rounded-md transition-colors ${toolMode === 'pointer'
@@ -324,7 +325,7 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
 
         {/* BPM Selector */}
-        <div className="flex items-center gap-1 bg-stone-900/90 px-2 py-1 rounded-md border border-[#2d2722]">
+        <div data-tour="tempo" className="flex items-center gap-1 bg-stone-900/90 px-2 py-1 rounded-md border border-[#2d2722]">
           <span className="text-[11px] text-amber-400/80 font-bold">BPM</span>
           <input
             type="number"
@@ -339,7 +340,7 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
 
       {/* Center Segment: Play, Pause, Stop, Timecode Display */}
-      <div className="flex items-center gap-2.5">
+      <div data-tour="transport" className="flex items-center gap-2.5">
         <button
           onClick={isPlaying ? onPause : onPlay}
           className="p-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-stone-950 transition-all shadow-[0_0_12px_rgba(245,158,11,0.25)] flex items-center justify-center"
@@ -429,14 +430,6 @@ export const Header: React.FC<HeaderProps> = ({
         >
           <SlidersVertical className="w-3.5 h-3.5" />
         </button>
-        <button
-          onClick={onOpenShortcuts}
-          className="hidden lg:block p-1.5 rounded-md border bg-stone-900 border-[#2d2722] text-stone-400 hover:text-stone-200 transition-colors"
-          title="Atalhos de teclado (?)"
-          aria-label="Atalhos de teclado"
-        >
-          <Keyboard className="w-3.5 h-3.5" />
-        </button>
         <MarkersMenu
           markers={markers}
           formatPosition={(tick) => formatBarBeat(tick, beatsPerBar)}
@@ -449,10 +442,10 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
 
       {/* Right Segment: Time Signature, Grid Snap, Sustenido (#/b), MIDI, Zoom */}
-      <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+      <div className="flex items-center gap-2 flex-nowrap shrink-0">
         {/* Ritmo (Time Signature) */}
         <div className="hidden sm:flex items-center gap-1">
-          <span className="text-stone-400 text-[11px]">Ritmo</span>
+          <span className="hidden 2xl:inline text-stone-400 text-[11px]">Ritmo</span>
           <select
             value={timeSignature}
             onChange={(e) => onTimeSignatureChange(e.target.value as TimeSignature)}
@@ -469,7 +462,7 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Grade (Grid Snap) */}
         <div className="flex items-center gap-1">
-          <span className="hidden md:inline text-stone-400 text-[11px]">Grade</span>
+          <span className="hidden 2xl:inline text-stone-400 text-[11px]">Grade</span>
           <select
             value={gridSnap}
             onChange={(e) => onGridSnapChange(e.target.value as GridSnap)}
@@ -504,8 +497,19 @@ export const Header: React.FC<HeaderProps> = ({
           <span className="hidden xl:inline text-[11px]">MIDI</span>
         </button>
 
+        {/* Help & About */}
+        <button
+          data-tour="help"
+          onClick={onOpenHelp}
+          className="p-1.5 rounded-md border bg-stone-900 border-[#2d2722] text-stone-300 hover:text-amber-400 hover:border-amber-700/60 transition-colors"
+          title="Ajuda, comandos e sobre (?)"
+          aria-label="Ajuda"
+        >
+          <CircleHelp className="w-4 h-4" />
+        </button>
+
         {/* Zoom Controls */}
-        <div className="hidden xl:flex items-center rounded-lg bg-stone-900/80 p-0.5 border border-[#2d2722]">
+        <div className="hidden 2xl:flex items-center rounded-lg bg-stone-900/80 p-0.5 border border-[#2d2722]">
           <button
             onClick={() => onZoomChange(-0.15)}
             className="p-1 rounded text-stone-400 hover:text-stone-200"

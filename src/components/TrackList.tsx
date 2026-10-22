@@ -18,6 +18,7 @@ import type { Track, InstrumentId } from '../types/music.ts';
 import { BDO_INSTRUMENTS } from '../types/music.ts';
 import { AddInstrumentModal } from './AddInstrumentModal.tsx';
 import { SAMPLES_CREDIT } from '../audio/sampleLibrary.ts';
+import { APP_VERSION_LABEL } from '../version.ts';
 
 interface TrackListProps {
   tracks: Track[];
@@ -60,6 +61,7 @@ export const TrackList: React.FC<TrackListProps> = ({
 
   return (
     <aside
+      data-tour="tracks"
       className={`w-64 md:w-72 bg-[#161412] border-r border-[#2d2722] flex-col justify-between shrink-0 select-none ${isOpenOnMobile
           ? 'flex absolute inset-y-0 left-0 z-40 shadow-2xl bg-[#161412]/95 backdrop-blur-md'
           : 'hidden md:flex z-10'
@@ -284,7 +286,7 @@ export const TrackList: React.FC<TrackListProps> = ({
 
       {/* Bottom Controls: + Add, Import, Reset All */}
       <div className="p-3 border-t border-[#2d2722] space-y-2 bg-[#141210]">
-        <div className="flex items-center gap-2">
+        <div data-tour="add-track" className="flex items-center gap-2">
           {/* Add Track Button */}
           <button
             onClick={onAddTrack}
@@ -406,7 +408,7 @@ export const TrackList: React.FC<TrackListProps> = ({
         {/* Creator Footer & Version */}
         <div className="pt-2 text-center text-[10px] text-stone-400 flex items-center justify-center gap-1.5 flex-wrap">
           <span className="px-1.5 py-0.5 rounded bg-amber-950/70 border border-amber-800/60 text-amber-300 font-mono text-[9px] font-bold">
-            v2.0.0
+            {APP_VERSION_LABEL}
           </span>
           <span className="text-stone-600">•</span>
           <span>

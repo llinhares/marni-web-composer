@@ -309,11 +309,11 @@ export const AiSheetScannerModal: React.FC<AiSheetScannerModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150 select-none"
+      className="modal-overlay animate-in fade-in duration-150 select-none"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-3xl bg-[#161412] border border-[#3e342b] rounded-2xl shadow-2xl p-6 text-stone-200 max-h-[92vh] flex flex-col overflow-hidden"
+        className="w-full max-w-3xl modal-panel p-6 text-stone-200 max-h-[92vh] flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -327,7 +327,7 @@ export const AiSheetScannerModal: React.FC<AiSheetScannerModalProps> = ({
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h2 id="omr-title" className="text-lg font-bold tracking-wide text-amber-400 font-serif">
+                <h2 id="omr-title" className="modal-title">
                   Importar Partitura por Imagem (IA OMR)
                 </h2>
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-amber-500/25 text-amber-300 border border-amber-500/50 shadow-sm">
