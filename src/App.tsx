@@ -21,19 +21,17 @@ import { AudioEngine } from './audio/AudioEngine.ts';
 import { createPlayheadStore } from './audio/playheadStore.ts';
 import { newId } from './utils/ids.ts';
 import { barRangeOf } from './editing/noteOps.ts';
+import { readImportFile } from './import/fileImport.ts';
+import { findShortcut, isEditableElement, type ShortcutId } from './ui/shortcuts.ts';
 import { UndoHistory } from './editing/undoHistory.ts';
 import { sessionSnapshotsEqual, type SessionSnapshot } from './editing/sessionSnapshot.ts';
 import { createMidiRecorder, recordedToNotes, type MidiRecorder, type RecordedNoteEvent } from './midi/midiRecorder.ts';
 import { sampleLibrary } from './audio/sampleLibrary.ts';
 import { WebMidiManager } from './midi/webMidi.ts';
 import { createStandardMidiFile, triggerFileDownload } from './midi/midiEncoder.ts';
-import { parseStandardMidiFile } from './midi/midiDecoder.ts';
 import { exportWavFile } from './export/audioExporter.ts';
-import { getBeatsPerMeasure, isBlackKey } from './utils/musicMath.ts';
-import { isMusicXmlContent, parseMusicXml } from './musicxml/musicXmlDecoder.ts';
-import { isBdoBinaryContent, parseBdoBinaryFile } from './bdo/bdoDecoder.ts';
+import { getBeatsPerMeasure } from './utils/musicMath.ts';
 import { mergeImportedTracks, type ImportMode } from './utils/trackImport.ts';
-import { detectBdoInstrument } from './utils/instrumentDetection.ts';
 import { Header } from './components/Header.tsx';
 import { TrackList } from './components/TrackList.tsx';
 import { PianoRoll } from './components/PianoRoll.tsx';
@@ -48,7 +46,6 @@ import { RecoveryBanner } from './components/RecoveryBanner.tsx';
 import { MixerPanel } from './components/MixerPanel.tsx';
 import {
   DEFAULT_EFFECTOR_SETTINGS,
-  isProjectFileContent,
   parseProjectFile,
   projectFileName,
   projectSignature,
@@ -951,83 +948,45 @@ export default function App() {
     document.title = `${isDirty ? '• ' : ''}${title || 'Sem título'} — Marni Web Composer`;
   }, [title, isDirty]);
 
-  // Keyboard Shortcuts (Space, V, B, E, Ctrl+Z / Ctrl+Y for Undo/Redo, Ctrl+S / Ctrl+O for projects)
+  // Global keyboard shortcuts (table in ui/shortcuts.ts; piano-roll editing keys live in PianoRoll)
+  const shortcutHandlers: Partial<Record<ShortcutId, () => void>> = {
+    save: () => void handleSaveProject(false),
+    saveAs: () => void handleSaveProject(true),
+    open: () => void handleOpenProject(),
+    undo: handleUndo,
+    redo: handleRedo,
+    redoAlt: handleRedo,
+    playPause: () => (isPlaying ? handlePause() : handlePlay()),
+    record: handleRecord,
+    metronome: () => setMetronomeOn((v) => !v),
+    loop: handleToggleLoop,
+    mixer: () => setIsMixerOpen((v) => !v),
+    addMarker: handleAddMarker,
+    prevMarker: () => jumpToMarker(-1),
+    nextMarker: () => jumpToMarker(1),
+    toolPointer: () => setToolMode('pointer'),
+    toolSelect: () => setToolMode('select'),
+    toolPencil: () => setToolMode('pencil'),
+    toolEraser: () => setToolMode('eraser'),
+    toolPan: () => setToolMode('pan'),
+  };
+  const shortcutHandlersRef = useRef(shortcutHandlers);
+  shortcutHandlersRef.current = shortcutHandlers;
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Project shortcuts work everywhere, including while typing in inputs
-      if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
-        e.preventDefault();
-        void handleSaveProject(e.shiftKey);
-        return;
-      }
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'o' || e.key === 'O')) {
-        e.preventDefault();
-        void handleOpenProject();
-        return;
-      }
-
-      // Don't trigger shortcuts when typing in inputs
-      if (
-        document.activeElement?.tagName === 'INPUT' ||
-        document.activeElement?.tagName === 'TEXTAREA'
-      ) {
-        return;
-      }
-
-      // Undo: Ctrl+Z / Cmd+Z (without Shift)
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z') && !e.shiftKey) {
-        e.preventDefault();
-        handleUndo();
-        return;
-      }
-
-      // Redo: Ctrl+Y / Cmd+Y or Ctrl+Shift+Z / Cmd+Shift+Z
-      if (
-        (e.ctrlKey || e.metaKey) &&
-        (e.key === 'y' || e.key === 'Y' || ((e.key === 'z' || e.key === 'Z') && e.shiftKey))
-      ) {
-        e.preventDefault();
-        handleRedo();
-        return;
-      }
-
-      if (e.code === 'Space') {
-        e.preventDefault();
-        if (isPlaying) {
-          handlePause();
-        } else {
-          handlePlay();
-        }
-      } else if (e.key === 'v' || e.key === 'V') {
-        setToolMode('pointer');
-      } else if (e.key === 'M' && e.shiftKey) {
-        handleAddMarker();
-      } else if (e.key === 'm' || e.key === 'M') {
-        setToolMode('select');
-      } else if (e.key === 'b' || e.key === 'B') {
-        setToolMode('pencil');
-      } else if (e.key === 'e' || e.key === 'E') {
-        setToolMode('eraser');
-      } else if (e.key === 'h' || e.key === 'H') {
-        setToolMode('pan');
-      } else if (e.key === 'r' || e.key === 'R') {
-        handleRecord();
-      } else if (e.key === 'k' || e.key === 'K') {
-        setMetronomeOn((v) => !v);
-      } else if ((e.key === 'l' || e.key === 'L') && !e.ctrlKey && !e.metaKey) {
-        handleToggleLoop();
-      } else if ((e.key === 'x' || e.key === 'X') && !e.ctrlKey && !e.metaKey) {
-        setIsMixerOpen((v) => !v);
-      } else if (e.key === '[') {
-        jumpToMarker(-1);
-      } else if (e.key === ']') {
-        jumpToMarker(1);
-      }
+      const focused = document.activeElement;
+      const shortcut = findShortcut(e, isEditableElement(focused));
+      const handler = shortcut && shortcutHandlersRef.current[shortcut.id];
+      if (!handler) return;
+      e.preventDefault();
+      // Space must not also "click" a focused button when its key is released
+      if (shortcut.id === 'playPause' && focused instanceof HTMLButtonElement) focused.blur();
+      handler();
     };
-
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isPlaying, handlePlay, handlePause, handleStop, handleUndo, handleRedo, handleSaveProject, handleOpenProject, handleRecord, handleToggleLoop, handleAddMarker, jumpToMarker]);
+  }, []);
 
   // Import Mode ('replace' | 'append')
   const importModeRef = useRef<ImportMode>('replace');
@@ -1107,158 +1066,11 @@ export default function App() {
   const handleFileImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     try {
-      const buffer = await file.arrayBuffer();
-      const bytes = new Uint8Array(buffer);
-
-      // 1. Detect Standard MIDI File (SMF): starts with "MThd" (0x4D, 0x54, 0x68, 0x64) or .mid extension
-      const isMidi =
-        (bytes.length >= 4 &&
-          bytes[0] === 0x4d &&
-          bytes[1] === 0x54 &&
-          bytes[2] === 0x68 &&
-          bytes[3] === 0x64) ||
-        file.name.toLowerCase().endsWith('.mid') ||
-        file.name.toLowerCase().endsWith('.midi');
-
-      if (isMidi) {
-        const decoded = parseStandardMidiFile(buffer, file.name);
-        if (decoded.tracks.length > 0) {
-          applyImportedData({
-            importedTracks: decoded.tracks,
-            bpm: decoded.bpm,
-            title: decoded.title,
-            timeSignature: decoded.timeSignature,
-          });
-        } else {
-          alert('O arquivo MIDI foi lido, mas nenhuma nota ou faixa com notas foi encontrada.');
-        }
-        return;
-      }
-
-      // 2. Detect BDO In-game Binary Score (BMS / ICE Encrypted format: starts with 0x09 0x00 0x00 0x00)
-      if (isBdoBinaryContent(bytes) || file.name.toLowerCase().endsWith('.bms')) {
-        const fileTitle = file.name.replace(/\.[^/.]+$/, '').trim();
-        const decoded = parseBdoBinaryFile(bytes, fileTitle);
-        if (decoded.tracks.length > 0) {
-          const detectedComposer = decoded.composer.trim();
-          const detectedArranger = decoded.arranger.trim();
-          const detectedAuthor = (decoded.author || detectedComposer || detectedArranger || 'Desconhecido').trim();
-          applyImportedData({
-            importedTracks: decoded.tracks,
-            bpm: decoded.bpm,
-            title: fileTitle || decoded.title,
-            timeSignature: decoded.timeSignature,
-            bdoMeta: {
-              author: detectedAuthor,
-              composer: detectedComposer,
-              arranger: detectedArranger,
-              ownerId: decoded.ownerId,
-              effectorSettings: decoded.effectorSettings,
-            },
-          });
-        } else {
-          alert('O arquivo de partitura do Black Desert foi lido, mas nenhuma nota foi encontrada.');
-        }
-        return;
-      }
-
-      // 3. Decode text for MusicXML / XML / JSON
-      const text = new TextDecoder().decode(buffer);
-
-      if (isMusicXmlContent(text) || file.name.toLowerCase().endsWith('.musicxml')) {
-        const decoded = parseMusicXml(text);
-        if (decoded.tracks.length > 0) {
-          applyImportedData({
-            importedTracks: decoded.tracks,
-            bpm: decoded.bpm,
-            title: decoded.title,
-            timeSignature: decoded.timeSignature,
-          });
-        } else {
-          alert('O arquivo MusicXML foi lido, mas nenhuma nota foi encontrada.');
-        }
-        return;
-      }
-
-      if (text.includes('<MarniScore') || (text.includes('<?xml') && text.includes('<Tracks>'))) {
-        // Parse BDO XML
-        const parser = new DOMParser();
-        const xmlDoc = parser.parseFromString(text, 'text/xml');
-        const titleEl = xmlDoc.querySelector('Title');
-        const bpmEl = xmlDoc.querySelector('BPM');
-        const xmlTitle = titleEl?.textContent || undefined;
-        const xmlBpm = bpmEl?.textContent ? Number(bpmEl.textContent) : undefined;
-
-        const trackElements = xmlDoc.querySelectorAll('Track');
-        if (trackElements.length > 0) {
-          const importedTracks: Track[] = [];
-          trackElements.forEach((tEl, idx) => {
-            const name = tEl.getAttribute('name') || `Faixa ${idx + 1}`;
-
-            const noteElements = tEl.querySelectorAll('Note');
-            const notes: Note[] = [];
-            noteElements.forEach((nEl) => {
-              notes.push({
-                id: `note-imp-${Date.now()}-${Math.random()}`,
-                trackId: `track-imp-${idx}`,
-                pitch: Number(nEl.getAttribute('pitch')) || 60,
-                startTick: Number(nEl.getAttribute('startTick')) || 0,
-                durationTicks: Number(nEl.getAttribute('duration')) || 480,
-                velocity: Number(nEl.getAttribute('velocity')) || 90,
-              });
-            });
-
-            const rawInstAttr = tEl.getAttribute('instrumentId');
-            const instrumentId =
-              rawInstAttr && BDO_INSTRUMENTS.some((i) => i.id === rawInstAttr)
-                ? (rawInstAttr as InstrumentId)
-                : detectBdoInstrument({ name, fileName: file.name, notes });
-            const inst = BDO_INSTRUMENTS.find((i) => i.id === instrumentId);
-
-            importedTracks.push({
-              id: `track-imp-${idx}`,
-              name,
-              instrumentId,
-              color: inst?.color || '#d4a373',
-              volume: inst?.defaultVolume || 75,
-              pan: 0,
-              isMuted: false,
-              isSolo: false,
-              auxSend: true,
-              notes,
-            });
-          });
-
-          applyImportedData({
-            importedTracks,
-            bpm: xmlBpm,
-            title: xmlTitle,
-          });
-        }
-        return;
-      }
-
-      if (isProjectFileContent(text) || file.name.toLowerCase().endsWith('.marni')) {
-        // Full Marni project: always replaces the session (tracks, tempo, effects, metadata)
-        openProjectText(text, null, file.name);
-        return;
-      }
-
-      if (text.trim().startsWith('{')) {
-        // Parse legacy JSON (tracks only)
-        const parsed = JSON.parse(text);
-        if (Array.isArray(parsed.tracks) && parsed.tracks.length > 0) {
-          applyImportedData({
-            importedTracks: parsed.tracks,
-            bpm: parsed.bpm,
-            title: parsed.title,
-            timeSignature: parsed.timeSignature,
-          });
-        }
-        return;
-      }
+      const result = await readImportFile(file);
+      if (result.kind === 'project') openProjectText(result.text, null, result.fileName);
+      else if (result.kind === 'tracks') applyImportedData(result);
+      else alert(result.message);
     } catch (err) {
       console.error('Falha ao importar partitura:', err);
       alert(err instanceof Error && err.name === 'ProjectFormatError' ? err.message : 'Não foi possível processar o arquivo selecionado.');
