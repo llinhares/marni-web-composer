@@ -17,6 +17,7 @@ import type {
 } from './types/music.ts';
 import { BDO_INSTRUMENTS, BDO_GRADE_LIMITS } from './types/music.ts';
 import { AudioEngine } from './audio/AudioEngine.ts';
+import { createPlayheadStore } from './audio/playheadStore.ts';
 import { WebMidiManager } from './midi/webMidi.ts';
 import { createStandardMidiFile, triggerFileDownload } from './midi/midiEncoder.ts';
 import { parseStandardMidiFile } from './midi/midiDecoder.ts';
@@ -135,6 +136,8 @@ export default function App() {
   }, [isBdoProtected]);
 
   const [bpm, setBpm] = useState<number>(120);
+  const bpmRef = useRef(bpm);
+  bpmRef.current = bpm;
   const [timeSignature, setTimeSignature] = useState<TimeSignature>('4/4');
   const [gridSnap, setGridSnap] = useState<GridSnap>('1/4');
   const [toolMode, setToolMode] = useState<ToolMode>('pointer');
@@ -145,7 +148,8 @@ export default function App() {
 
   // Playback State
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
-  const [currentPlayheadTick, setCurrentPlayheadTick] = useState<number>(0);
+  // Playhead lives outside React state: only the timecode and the piano-roll overlay follow it
+  const [playhead] = useState(() => createPlayheadStore(0));
 
   // Effector / VST State
   const [effectorSettings, setEffectorSettings] = useState<EffectorSettings>(DEFAULT_EFFECTOR_SETTINGS);
@@ -169,7 +173,6 @@ export default function App() {
   useEffect(() => {
     const engine = new AudioEngine();
     audioEngineRef.current = engine;
-
     const midi = new WebMidiManager();
     midiManagerRef.current = midi;
 
@@ -366,24 +369,26 @@ export default function App() {
   );
 
   // Playback Controls
+  const startEngineAt = useCallback((tick: number) => {
+    audioEngineRef.current?.startPlayback(
+      tracksRef.current,
+      bpmRef.current,
+      tick,
+      (t) => playhead.set(t),
+      () => {
+        setIsPlaying(false);
+        playhead.set(0);
+      }
+    );
+  }, [playhead]);
+
   const handlePlay = useCallback(() => {
     if (!audioEngineRef.current) return;
     audioEngineRef.current.init().then(() => {
       setIsPlaying(true);
-      audioEngineRef.current?.startPlayback(
-        tracks,
-        bpm,
-        currentPlayheadTick,
-        (tick) => {
-          setCurrentPlayheadTick(tick);
-        },
-        () => {
-          setIsPlaying(false);
-          setCurrentPlayheadTick(0);
-        }
-      );
+      startEngineAt(playhead.get());
     });
-  }, [tracks, bpm, currentPlayheadTick]);
+  }, [playhead, startEngineAt]);
 
   const handlePause = useCallback(() => {
     audioEngineRef.current?.pausePlayback();
@@ -393,27 +398,24 @@ export default function App() {
   const handleStop = useCallback(() => {
     audioEngineRef.current?.stopPlayback();
     setIsPlaying(false);
-    setCurrentPlayheadTick(0);
-  }, []);
+    playhead.set(0);
+  }, [playhead]);
 
   const handleSeek = useCallback(
     (tick: number) => {
-      setCurrentPlayheadTick(tick);
-      if (isPlaying && audioEngineRef.current) {
-        audioEngineRef.current.startPlayback(
-          tracks,
-          bpm,
-          tick,
-          (t) => setCurrentPlayheadTick(t),
-          () => {
-            setIsPlaying(false);
-            setCurrentPlayheadTick(0);
-          }
-        );
-      }
+      playhead.set(tick);
+      if (isPlaying) startEngineAt(tick);
     },
-    [isPlaying, tracks, bpm]
+    [isPlaying, playhead, startEngineAt]
   );
+
+  // Edits, mute/solo and tempo changes reach the engine while it plays
+  useEffect(() => {
+    audioEngineRef.current?.updateSong(tracks);
+  }, [tracks]);
+  useEffect(() => {
+    audioEngineRef.current?.setTempo(bpm);
+  }, [bpm]);
 
   // Audition single pitch
   const handleAuditionPitch = useCallback(
@@ -537,7 +539,7 @@ export default function App() {
     ];
     setTracks(resetTracks);
     setActiveTrackId('track-piano');
-    setCurrentPlayheadTick(0);
+    playhead.set(0);
     setTitle('Marni Web Composer - Example');
     setIsBdoProtected(false);
     setOriginalBdoAuthor('');
@@ -658,7 +660,7 @@ export default function App() {
       setOriginalBdoComposer(p.bdoProtection.composer);
       setOriginalBdoArranger(p.bdoProtection.arranger);
       setOriginalBdoOwnerId(p.bdoProtection.ownerId);
-      setCurrentPlayheadTick(0);
+      playhead.set(0);
       // A loaded project starts a fresh undo history
       setHistory([{ tracks: p.tracks, activeTrackId: p.activeTrackId }]);
       setHistoryIndex(0);
@@ -1197,7 +1199,7 @@ export default function App() {
         onPlay={handlePlay}
         onPause={handlePause}
         onStop={handleStop}
-        currentTick={currentPlayheadTick}
+        playhead={playhead}
         maxTick={maxTick}
         bpm={bpm}
         onBpmChange={setBpm}
@@ -1277,7 +1279,7 @@ export default function App() {
           gridSnap={gridSnap}
           timeSignature={timeSignature}
           accidentals={accidentals}
-          currentPlayheadTick={currentPlayheadTick}
+          playhead={playhead}
           isPlaying={isPlaying}
           onSeek={handleSeek}
           zoomLevel={zoomLevel}

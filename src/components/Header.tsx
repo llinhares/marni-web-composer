@@ -19,6 +19,18 @@ import {
 } from 'lucide-react';
 import type { ToolMode, GridSnap, TimeSignature, EffectorSettings } from '../types/music.ts';
 import { formatTimecode, ticksToSeconds } from '../utils/musicMath.ts';
+import { usePlayheadTick, type PlayheadStore } from '../audio/playheadStore.ts';
+
+const Timecode: React.FC<{ playhead: PlayheadStore; maxTick: number; bpm: number }> = ({ playhead, maxTick, bpm }) => {
+  const currentTick = usePlayheadTick(playhead);
+  return (
+    <div className="px-2.5 py-1 rounded-md bg-stone-950 border border-stone-800 font-mono text-xs flex items-center gap-1.5 shadow-inner">
+      <span className="text-amber-400 font-bold">{formatTimecode(ticksToSeconds(currentTick, bpm))}</span>
+      <span className="text-stone-600">/</span>
+      <span className="text-stone-400">{formatTimecode(ticksToSeconds(Math.max(currentTick, maxTick), bpm))}</span>
+    </div>
+  );
+};
 
 interface HeaderProps {
   toolMode: ToolMode;
@@ -27,7 +39,7 @@ interface HeaderProps {
   onPlay: () => void;
   onPause: () => void;
   onStop: () => void;
-  currentTick: number;
+  playhead: PlayheadStore;
   maxTick: number;
   bpm: number;
   onBpmChange: (bpm: number) => void;
@@ -68,7 +80,7 @@ export const Header: React.FC<HeaderProps> = ({
   onPlay,
   onPause,
   onStop,
-  currentTick,
+  playhead,
   maxTick,
   bpm,
   onBpmChange,
@@ -101,9 +113,6 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleSidebar,
   isSidebarOpen,
 }) => {
-  const currentTimeSec = ticksToSeconds(currentTick, bpm);
-  const totalTimeSec = ticksToSeconds(Math.max(currentTick, maxTick), bpm);
-
   return (
     <header className="h-14 bg-[#141210] border-b border-[#2d2722] px-2 sm:px-4 flex items-center justify-between select-none text-stone-300 text-xs shrink-0 z-20 gap-1 sm:gap-3">
       {/* Left Segment: Mobile Sidebar Toggle, Logo, Tools, FX Toggles, BPM */}
@@ -301,12 +310,8 @@ export const Header: React.FC<HeaderProps> = ({
           <Square className="w-3.5 h-3.5 fill-current" />
         </button>
 
-        {/* Timecode Readout */}
-        <div className="px-2.5 py-1 rounded-md bg-stone-950 border border-stone-800 font-mono text-xs flex items-center gap-1.5 shadow-inner">
-          <span className="text-amber-400 font-bold">{formatTimecode(currentTimeSec)}</span>
-          <span className="text-stone-600">/</span>
-          <span className="text-stone-400">{formatTimecode(totalTimeSec)}</span>
-        </div>
+        {/* Timecode Readout (only this element re-renders while playing) */}
+        <Timecode playhead={playhead} maxTick={maxTick} bpm={bpm} />
       </div>
 
       {/* Right Segment: Time Signature, Grid Snap, Sustenido (#/b), MIDI, Zoom */}

@@ -12,6 +12,7 @@ import {
   Volume2,
 } from 'lucide-react';
 import type { Note, Track, ToolMode, GridSnap, TimeSignature } from '../types/music.ts';
+import type { PlayheadStore } from '../audio/playheadStore.ts';
 import {
   pitchToNoteName,
   isBlackKey,
@@ -51,7 +52,7 @@ interface PianoRollProps {
   accidentals: 'sharp' | 'flat';
   sustenidoActive?: boolean;
   onToggleSustenido?: () => void;
-  currentPlayheadTick: number;
+  playhead: PlayheadStore;
   isPlaying?: boolean;
   onSeek: (tick: number) => void;
   zoomLevel: number;
@@ -76,7 +77,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
   accidentals,
   sustenidoActive = true,
   onToggleSustenido,
-  currentPlayheadTick,
+  playhead,
   isPlaying = false,
   onSeek,
   zoomLevel,
@@ -85,6 +86,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const overlayRef = useRef<HTMLCanvasElement>(null);
 
   // Viewport scroll offsets (default centered on Middle C / Octaves 3-5)
   const [scrollX, setScrollX] = useState(0);
@@ -123,8 +125,8 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
         if (end > max) max = end;
       });
     });
-    return Math.max(max, currentPlayheadTick);
-  }, [tracks, currentPlayheadTick]);
+    return max;
+  }, [tracks]);
 
   // Guarantee at least 64 bars, and expand 48 bars beyond the furthest note
   const totalGridBars = useMemo(() => {
@@ -248,38 +250,25 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
       ? (Math.min(maxScrollY, Math.max(0, scrollY)) / maxScrollY) * scrollbarTrackDistanceY
       : 0;
 
-  // Auto-scroll to follow playhead smoothly during playback
+  // Auto-scroll to follow the playhead during playback (driven by the playhead store, not React state)
+  const followRef = useRef({ pixelsPerTick, scrollX, keyboardWidth, visibleWidth, maxScrollX });
+  followRef.current = { pixelsPerTick, scrollX, keyboardWidth, visibleWidth, maxScrollX };
+  const canFollow = isPlaying && dragAction?.type !== 'pan' && !isDraggingScrollbar;
+
   useEffect(() => {
-    if (!isPlaying || dragAction?.type === 'pan' || isDraggingScrollbar) return;
-
-    const playheadX = keyboardWidth + currentPlayheadTick * pixelsPerTick - scrollX;
-
-    // Advance view when playhead approaches the right 85% of screen
-    if (playheadX > keyboardWidth + visibleWidth * 0.85) {
-      const targetScrollX = Math.max(
-        0,
-        Math.min(maxScrollX, currentPlayheadTick * pixelsPerTick - visibleWidth * 0.2)
-      );
-      setScrollX(targetScrollX);
-    } else if (playheadX < keyboardWidth) {
-      // Reposition if playhead looped back before view
-      const targetScrollX = Math.max(
-        0,
-        Math.min(maxScrollX, currentPlayheadTick * pixelsPerTick - visibleWidth * 0.2)
-      );
-      setScrollX(targetScrollX);
-    }
-  }, [
-    currentPlayheadTick,
-    isPlaying,
-    dragAction?.type,
-    isDraggingScrollbar,
-    pixelsPerTick,
-    scrollX,
-    keyboardWidth,
-    visibleWidth,
-    maxScrollX,
-  ]);
+    if (!canFollow) return;
+    const follow = () => {
+      const v = followRef.current;
+      const tick = playhead.get();
+      const playheadX = v.keyboardWidth + tick * v.pixelsPerTick - v.scrollX;
+      // Page forward near the right edge, or jump back when the playhead left the view
+      if (playheadX > v.keyboardWidth + v.visibleWidth * 0.85 || playheadX < v.keyboardWidth) {
+        setScrollX(Math.max(0, Math.min(v.maxScrollX, tick * v.pixelsPerTick - v.visibleWidth * 0.2)));
+      }
+    };
+    follow();
+    return playhead.subscribe(follow);
+  }, [canFollow, playhead]);
 
   // Coordinate transformations
   const pitchToY = useCallback(
@@ -576,10 +565,13 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
     const width = container.clientWidth;
     const height = container.clientHeight;
 
-    canvas.width = width * dpr;
-    canvas.height = height * dpr;
-    canvas.style.width = `${width}px`;
-    canvas.style.height = `${height}px`;
+    // Reallocating the backing store is expensive: only do it when the size actually changed
+    if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
+      canvas.width = Math.round(width * dpr);
+      canvas.height = Math.round(height * dpr);
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
+    }
 
     ctx.save();
     ctx.scale(dpr, dpr);
@@ -995,25 +987,6 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
       ctx.fillText('Bateria BDO', 8, RULER_HEIGHT / 2);
     }
 
-    // 9. Playhead Cursor Line
-    const playheadX = tickToX(currentPlayheadTick);
-    if (playheadX >= keyboardWidth && playheadX <= width) {
-      ctx.strokeStyle = '#ef4444';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(playheadX, 0);
-      ctx.lineTo(playheadX, height);
-      ctx.stroke();
-
-      ctx.fillStyle = '#ef4444';
-      ctx.beginPath();
-      ctx.moveTo(playheadX - 5, 0);
-      ctx.lineTo(playheadX + 5, 0);
-      ctx.lineTo(playheadX, 10);
-      ctx.closePath();
-      ctx.fill();
-    }
-
     ctx.restore();
   }, [
     activeNotes,
@@ -1024,7 +997,6 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
     zoomLevel,
     keyHeight,
     pixelsPerTick,
-    currentPlayheadTick,
     accidentals,
     gridSnap,
     timeSignature,
@@ -1617,6 +1589,58 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
     }
   };
 
+  // Playhead overlay: a separate transparent canvas, so moving the playhead never repaints the grid/notes
+  useEffect(() => {
+    const canvas = overlayRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const width = containerWidth;
+    const height = containerHeight;
+    if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
+      canvas.width = Math.round(width * dpr);
+      canvas.height = Math.round(height * dpr);
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
+    }
+
+    let frame = 0;
+    const draw = () => {
+      frame = 0;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, width, height);
+      const x = keyboardWidth + playhead.get() * pixelsPerTick - scrollX;
+      if (x < keyboardWidth || x > width) return;
+
+      ctx.strokeStyle = '#ef4444';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, height);
+      ctx.stroke();
+
+      ctx.fillStyle = '#ef4444';
+      ctx.beginPath();
+      ctx.moveTo(x - 5, 0);
+      ctx.lineTo(x + 5, 0);
+      ctx.lineTo(x, 10);
+      ctx.closePath();
+      ctx.fill();
+    };
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(draw);
+    };
+
+    draw();
+    const unsubscribe = playhead.subscribe(schedule);
+    return () => {
+      unsubscribe();
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, [playhead, keyboardWidth, pixelsPerTick, scrollX, containerWidth, containerHeight]);
+
   return (
     <div
       ref={containerRef}
@@ -1637,6 +1661,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
         }}
         className="w-full h-full block"
       />
+      <canvas ref={overlayRef} className="absolute inset-0 pointer-events-none" aria-hidden="true" />
 
       {/* Top BDO Drum Kit Quick-Pads Bar (Visible when active track is percussion) */}
       {isPercussion && (

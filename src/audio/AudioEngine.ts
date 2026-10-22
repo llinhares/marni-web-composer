@@ -8,6 +8,18 @@
 import type { InstrumentId, EffectorSettings, Track, Note } from '../types/music.ts';
 import { pitchToFrequency, ticksToSeconds } from '../utils/musicMath.ts';
 import { WorkerTimer } from './workerTimer.ts';
+import {
+  audibleTracks,
+  notesInWindow,
+  reanchor,
+  songEndTick,
+  sortedByStart,
+  tickAtTime,
+  timeAtTick,
+  type TimelineAnchor,
+} from './scheduling.ts';
+
+const LOOKAHEAD_SEC = 0.15;
 
 export class AudioEngine {
   private ctx: AudioContext | null = null;
@@ -35,7 +47,7 @@ export class AudioEngine {
 
   // Active playing voices for note-off handling
   private activeAuditionVoices = new Map<string, { stop: (time: number) => void }>();
-  private activePlaybackVoices = new Set<(time: number) => void>();
+  private activePlaybackVoices = new Map<string, Set<(time: number) => void>>(); // by track id
 
   // Worker-driven lookahead playback scheduler
   private workerTimer: WorkerTimer | null = null;
@@ -43,6 +55,9 @@ export class AudioEngine {
   private playheadTick = 0;
   private tempoBpm = 120;
   private activeTracks: Track[] = [];
+  private anchor: TimelineAnchor = { audioTime: 0, tick: 0, bpm: 120 };
+  private scheduledUntilTick = 0;
+  private songEnd = 0;
   private onPlayheadTickUpdate: ((tick: number) => void) | null = null;
   private onPlaybackEnded: (() => void) | null = null;
   private currentEffectorSettings: EffectorSettings | null = null;
@@ -928,82 +943,97 @@ export class AudioEngine {
     this.playheadTick = startTick;
     this.tempoBpm = bpm;
     this.activeTracks = tracks;
+    this.songEnd = songEndTick(tracks);
     this.onPlayheadTickUpdate = onTickUpdate || null;
     this.onPlaybackEnded = onEnded || null;
+    this.anchor = { audioTime: this.ctx.currentTime + 0.05, tick: startTick, bpm };
+    this.scheduledUntilTick = startTick;
 
-    const LOOKAHEAD_SEC = 0.15;
-    let currentScheduledTick = startTick;
-    const baseAudioTime = this.ctx.currentTime + 0.05;
-    const baseTick = startTick;
+    this.workerTimer?.start(() => this.schedulerTick());
+  }
 
-    let maxSongTick = 0;
-    tracks.forEach((tr) => {
-      tr.notes.forEach((n) => {
-        const end = n.startTick + n.durationTicks;
-        if (end > maxSongTick) maxSongTick = end;
-      });
-    });
-    maxSongTick = Math.max(maxSongTick, 480 * 4);
+  /**
+   * One scheduler step: publishes the playhead and schedules every note that starts before the
+   * lookahead horizon. Reads the current song each time, so edits made while playing are heard.
+   */
+  private schedulerTick() {
+    if (!this.isPlaying || !this.ctx) return;
 
-    this.workerTimer?.start(() => {
-      if (!this.isPlaying || !this.ctx) return;
+    const now = this.ctx.currentTime;
+    const currentTick = Math.max(0, Math.round(tickAtTime(this.anchor, now)));
+    this.playheadTick = currentTick;
+    this.onPlayheadTickUpdate?.(currentTick);
 
-      const currentAudioTime = this.ctx.currentTime;
-      const elapsedAudio = currentAudioTime - baseAudioTime;
-      const currentTick = Math.max(0, Math.round(baseTick + (elapsedAudio * this.tempoBpm * 480) / 60));
+    if (currentTick >= Math.max(this.songEnd, 480 * 4) + 480) {
+      this.stopPlayback();
+      this.onPlaybackEnded?.();
+      return;
+    }
 
-      this.playheadTick = currentTick;
-      if (this.onPlayheadTickUpdate) {
-        this.onPlayheadTickUpdate(currentTick);
-      }
+    const horizonTick = Math.round(tickAtTime(this.anchor, now + LOOKAHEAD_SEC));
+    if (horizonTick <= this.scheduledUntilTick) return;
+    const secondsPerTick = 60 / (this.anchor.bpm * 480);
 
-      if (currentTick >= maxSongTick + 480) {
-        this.stopPlayback();
-        if (this.onPlaybackEnded) {
-          this.onPlaybackEnded();
+    for (const track of audibleTracks(this.activeTracks)) {
+      for (const note of notesInWindow(sortedByStart(track.notes), this.scheduledUntilTick, horizonTick)) {
+        const durationSec = note.durationTicks * secondsPerTick;
+        const isSustain = !!(note.sustain ?? track.sustainPedal ?? (track.instrumentId === 'grand-piano'));
+        const stopVoice = this.synthesizeInstrument(
+          track.instrumentId,
+          note.pitch,
+          note.velocity,
+          Math.max(now, timeAtTick(this.anchor, note.startTick)),
+          durationSec,
+          track.volume,
+          track.auxSend,
+          track.pan,
+          true,
+          isSustain
+        );
+
+        let voices = this.activePlaybackVoices.get(track.id);
+        if (!voices) {
+          voices = new Set();
+          this.activePlaybackVoices.set(track.id, voices);
         }
-        return;
+        voices.add(stopVoice);
+        const voiceCleanupSec = durationSec + (isSustain ? 2.5 : 0.5) + LOOKAHEAD_SEC;
+        setTimeout(() => voices!.delete(stopVoice), voiceCleanupSec * 1000);
       }
+    }
 
-      const scheduleHorizonAudio = currentAudioTime + LOOKAHEAD_SEC;
-      const horizonTick = Math.round(baseTick + ((scheduleHorizonAudio - baseAudioTime) * this.tempoBpm * 480) / 60);
-      const hasSolo = this.activeTracks.some((t) => t.isSolo);
+    this.scheduledUntilTick = horizonTick;
+  }
 
-      this.activeTracks.forEach((track) => {
-        if (track.isMuted) return;
-        if (hasSolo && !track.isSolo) return;
+  /**
+   * Live song update while playing (note edits, mute/solo, added/removed tracks).
+   * Voices of tracks that became silent are released immediately.
+   */
+  public updateSong(tracks: Track[]) {
+    this.activeTracks = tracks;
+    this.songEnd = songEndTick(tracks);
+    if (!this.isPlaying || !this.ctx) return;
 
-        track.notes.forEach((note) => {
-          if (note.startTick >= currentScheduledTick && note.startTick < horizonTick) {
-            const noteOffsetTicks = note.startTick - baseTick;
-            const noteStartAudio = baseAudioTime + ticksToSeconds(noteOffsetTicks, this.tempoBpm);
-            const durationSec = ticksToSeconds(note.durationTicks, this.tempoBpm);
-
-            const isSustain = !!(note.sustain ?? track.sustainPedal ?? (track.instrumentId === 'grand-piano'));
-            const stopVoice = this.synthesizeInstrument(
-              track.instrumentId,
-              note.pitch,
-              note.velocity,
-              Math.max(currentAudioTime, noteStartAudio),
-              durationSec,
-              track.volume,
-              track.auxSend,
-              track.pan,
-              true,
-              isSustain
-            );
-
-            this.activePlaybackVoices.add(stopVoice);
-            const voiceCleanupSec = durationSec + (isSustain ? 2.5 : 0.5);
-            setTimeout(() => {
-              this.activePlaybackVoices.delete(stopVoice);
-            }, voiceCleanupSec * 1000);
-          }
-        });
+    const audible = new Set(audibleTracks(tracks).map((t) => t.id));
+    const now = this.ctx.currentTime;
+    for (const [trackId, voices] of this.activePlaybackVoices) {
+      if (audible.has(trackId)) continue;
+      voices.forEach((stop) => {
+        try {
+          stop(now);
+        } catch {}
       });
+      this.activePlaybackVoices.delete(trackId);
+    }
+  }
 
-      currentScheduledTick = horizonTick;
-    });
+  /** Live tempo change: playback continues from the current position at the new tempo. */
+  public setTempo(bpm: number) {
+    if (!(bpm > 0) || bpm === this.tempoBpm) return;
+    this.tempoBpm = bpm;
+    if (this.isPlaying && this.ctx) {
+      this.anchor = reanchor(this.anchor, this.ctx.currentTime, bpm);
+    }
   }
 
   public stopPlayback() {
@@ -1029,9 +1059,11 @@ export class AudioEngine {
       }
 
       // Stop all active playback voices and disconnect them immediately
-      this.activePlaybackVoices.forEach((stopFn) => {
-        try { stopFn(now); } catch {}
-      });
+      this.activePlaybackVoices.forEach((voices) =>
+        voices.forEach((stopFn) => {
+          try { stopFn(now); } catch {}
+        })
+      );
       this.activePlaybackVoices.clear();
       this.stopAllNotes();
     }
