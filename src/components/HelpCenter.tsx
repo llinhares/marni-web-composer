@@ -45,10 +45,13 @@ const GUIDE: GuideSection[] = [
     icon: <Compass className="w-4 h-4" />,
     title: 'Como funciona',
     items: [
-      <>O Marni é um estúdio para compor músicas para os instrumentos do Black Desert Online.</>,
+      <>
+        O Marni é uma DAW (estação de trabalho de áudio) no navegador para compor, gravar, mixar e exportar música. O visual é
+        inspirado no Black Desert Online, e as músicas também podem ser exportadas para tocar no jogo.
+      </>,
       <>
         O caminho básico é: <b>criar faixas</b> (uma por instrumento) → <b>escrever notas</b> no piano roll → <b>ouvir e mixar</b> →{' '}
-        <b>salvar o projeto</b> → <b>exportar</b> para o jogo, MIDI ou áudio.
+        <b>salvar o projeto</b> → <b>exportar</b> para MIDI, áudio WAV ou para o BDO.
       </>,
       <>Tudo roda no seu navegador: seus projetos e chaves de API ficam só no seu computador.</>,
     ],
@@ -141,12 +144,16 @@ const GUIDE: GuideSection[] = [
     title: 'Exportar',
     items: [
       <>
+        <b>Salvar MIDI</b> leva a música para qualquer outro programa; <b>Exportar WAV</b> grava o áudio com os mesmos timbres e efeitos
+        que você ouve.
+      </>,
+      <>
         <b>Exportar para o BDO</b> gera o arquivo do jogo (salve em Documentos/Black Desert/Music, sem extensão). Antes de exportar, a
         verificação mostra o que o jogo mudaria e oferece correções; escolha ali o rank da partitura.
       </>,
-      <>Carregue um arquivo salvo pelo seu personagem para preencher o Owner ID e o nome automaticamente.</>,
       <>
-        <b>Salvar MIDI</b> exporta para outros programas; <b>Exportar WAV</b> grava o áudio com os mesmos timbres e efeitos que você ouve.
+        Para o BDO, use <b>Carregar ID BDO</b> com um arquivo salvo pelo seu personagem: o Owner ID e o nome ficam guardados só no seu
+        navegador.
       </>,
     ],
   },
@@ -295,8 +302,8 @@ export const HelpCenter: React.FC<HelpCenterProps> = ({ isOpen, initialTab = 'gu
                 </div>
               </div>
               <p>
-                DAW no navegador para compor, ouvir, mixar e exportar partituras para os instrumentos do Black Desert Online — com piano roll,
-                gravação MIDI, timbres gravados, mixer e ferramentas de transcrição por IA.
+                DAW no navegador para compor, gravar, mixar e exportar música — com piano roll, gravação MIDI, timbres gravados, mixer e
+                ferramentas de transcrição por IA. Tematizada no universo de Black Desert Online e compatível com a exportação para o jogo.
               </p>
               <p>
                 Criado por <b className="text-stone-100">Lucas Linhares</b> (Tchepper) •{' '}

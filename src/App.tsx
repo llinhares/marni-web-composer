@@ -1,6 +1,6 @@
 /**
  * Marni Web Composer - Optimized DAW & BDO Music Studio
- * Developed based on Marni Web Composer v2 by Lucas Linhares (Tchepper)
+ * Created by Lucas Linhares (Tchepper)
  */
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
@@ -20,6 +20,7 @@ import { BDO_INSTRUMENTS, BDO_GRADE_LIMITS } from './types/music.ts';
 import { AudioEngine } from './audio/AudioEngine.ts';
 import { createPlayheadStore } from './audio/playheadStore.ts';
 import { newId } from './utils/ids.ts';
+import { getSavedAuthor, getSavedOwnerId, migrateLegacyProfile, saveAuthor } from './user/userProfile.ts';
 import { barRangeOf } from './editing/noteOps.ts';
 import { readImportFile } from './import/fileImport.ts';
 import { findShortcut, isEditableElement, type ShortcutId } from './ui/shortcuts.ts';
@@ -126,13 +127,12 @@ export default function App() {
   const [tracks, setTracks] = useState<Track[]>(INITIAL_TRACKS);
   const [activeTrackId, setActiveTrackId] = useState<string>('track-piano');
   const [title, setTitle] = useState<string>('Marni Web Composer - Example');
+  // The current user's name and BDO owner ID: empty until they inform them (never a built-in default)
   const [author, setAuthor] = useState<string>(() => {
-    return localStorage.getItem('marni_bdo_author') || 'Tchepper';
+    migrateLegacyProfile();
+    return getSavedAuthor();
   });
-  const [bdoOwnerId, setBdoOwnerId] = useState<number>(() => {
-    const saved = localStorage.getItem('marni_bdo_owner_id');
-    return saved ? parseInt(saved, 10) : 1009649;
-  });
+  const [bdoOwnerId, setBdoOwnerId] = useState<number>(() => getSavedOwnerId() ?? 0);
   const [isBdoProtected, setIsBdoProtected] = useState<boolean>(false);
   const [originalBdoAuthor, setOriginalBdoAuthor] = useState<string>('');
   const [originalBdoComposer, setOriginalBdoComposer] = useState<string>('');
@@ -142,7 +142,7 @@ export default function App() {
   const handleAuthorChange = useCallback((newAuthor: string) => {
     if (isBdoProtected) return;
     setAuthor(newAuthor);
-    localStorage.setItem('marni_bdo_author', newAuthor);
+    saveAuthor(newAuthor);
   }, [isBdoProtected]);
 
   const [bpm, setBpm] = useState<number>(120);
@@ -692,7 +692,7 @@ export default function App() {
     setOriginalBdoComposer('');
     setOriginalBdoArranger('');
     setOriginalBdoOwnerId(null);
-    setAuthor(localStorage.getItem('marni_bdo_author') || 'Tchepper');
+    setAuthor(getSavedAuthor());
     setIsResetConfirmOpen(false);
     pushHistory(resetTracks, 'track-piano');
     // A reset starts a new, not-yet-saved project
@@ -1405,6 +1405,7 @@ export default function App() {
           pushHistory(fixed);
         }}
         onGradeChange={setBdoGrade}
+        onAuthorChange={handleAuthorChange}
       />
 
       {/* Web MIDI Settings Modal */}

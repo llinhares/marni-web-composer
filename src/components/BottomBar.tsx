@@ -90,7 +90,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
               }}
               readOnly={isBdoProtected}
               disabled={isBdoProtected}
-              placeholder="Personagem / Família..."
+              placeholder="Seu nome (autor)"
               className={`w-40 bg-stone-900/90 border rounded-lg px-2.5 py-1.5 font-medium text-xs transition-colors ${
                 isBdoProtected
                   ? 'border-amber-900/40 text-amber-400/90 cursor-not-allowed pr-7 bg-stone-900/95 selection:bg-none'
@@ -99,7 +99,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
               title={
                 isBdoProtected
                   ? 'Partitura original do Black Desert: Composição e Arranjo protegidos contra plágio.'
-                  : 'Nome de Personagem / Família (usado igualmente em Composição e Arranjo no BDO)'
+                  : 'Autor da música (salvo só neste navegador; no BDO aparece como compositor e arranjador)'
               }
               aria-label="Autor da Música"
             />
@@ -214,10 +214,10 @@ export const BottomBar: React.FC<BottomBarProps> = ({
         {/* Exportar para o BDO Button */}
         <button
           onClick={onExportBdo}
-          className="flex items-center gap-1.5 px-3 sm:px-4 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-stone-950 font-bold transition-all shadow-[0_0_12px_rgba(245,158,11,0.3)] text-xs"
-          title="Exportar para Black Desert Online"
+          className="flex items-center gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-lg bg-stone-900 hover:bg-stone-850 border border-[#2d2722] hover:border-amber-700/60 text-stone-200 font-semibold transition-colors text-xs shadow-sm"
+          title="Exportar partitura para Black Desert Online"
         >
-          <Download className="w-3.5 h-3.5 stroke-[2.5]" />
+          <Download className="w-3.5 h-3.5 text-amber-400" />
           <span className="hidden sm:inline">Exportar para o BDO</span>
           <span className="sm:hidden">BDO</span>
         </button>

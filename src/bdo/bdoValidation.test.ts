@@ -122,3 +122,15 @@ test('applyBdoFix keeps untouched tracks by identity', () => {
   assert.equal(fixed[0], song[0]);
   assert.notEqual(fixed[1], song[1]);
 });
+
+test('missing owner ID or author name is a warning, never filled with someone else\'s', () => {
+  const song = [t('p', 'grand-piano', [n(60, 0)])];
+  const missing = validateForBdo(song, { grade: 'S', timeSignature: '4/4', ownerId: 0, author: '  ' });
+  assert.deepEqual(
+    missing.issues.filter((i) => i.id === 'owner-id' || i.id === 'author').map((i) => i.severity),
+    ['warning', 'warning']
+  );
+  assert.ok(missing.canExport, 'Still exportable: the user decides');
+  const ok = validateForBdo(song, { grade: 'S', timeSignature: '4/4', ownerId: 1234, author: 'Aria' });
+  assert.deepEqual(ok.issues, []);
+});

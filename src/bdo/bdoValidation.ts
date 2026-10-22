@@ -40,6 +40,10 @@ export interface BdoValidationOptions {
   grade: BdoGradeId;
   timeSignature: TimeSignature;
   instrumentOverrides?: Record<string, string>; // track id -> in-game instrument name (export dialog)
+  /** Owner ID loaded from the user's character file (undefined = not checked). */
+  ownerId?: number;
+  /** Character/family name written as composer (undefined = not checked). */
+  author?: string;
 }
 
 /** In-game instrument name a track is exported as (same rule as exportToBdo). */
@@ -226,6 +230,26 @@ export function validateForBdo(tracks: Track[], opts: BdoValidationOptions): Bdo
       detail: `${pl(outsideInstrument, 'nota está', 'notas estão')} fora da extensão definida para o instrumento da faixa.`,
       count: outsideInstrument,
       fix: { kind: 'fold-instrument-range', label: 'Ajustar oitavas' },
+    });
+  }
+
+  if (opts.ownerId !== undefined && !(opts.ownerId > 0)) {
+    issues.push({
+      id: 'owner-id',
+      severity: 'warning',
+      title: 'Nenhum Owner ID carregado',
+      detail:
+        'Use "Carregar ID BDO" com um arquivo salvo pelo seu personagem (Documentos/Black Desert/Music) para o jogo reconhecer você como dono da partitura.',
+      count: 0,
+    });
+  }
+  if (opts.author !== undefined && !opts.author.trim()) {
+    issues.push({
+      id: 'author',
+      severity: 'warning',
+      title: 'Sem nome de autor',
+      detail: 'Informe o nome do seu personagem ou família: ele aparece como compositor e arranjador no jogo.',
+      count: 0,
     });
   }
 

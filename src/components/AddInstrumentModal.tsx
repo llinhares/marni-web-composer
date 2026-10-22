@@ -29,7 +29,7 @@ export const AddInstrumentModal: React.FC<AddInstrumentModalProps> = ({
   onClose,
   onSelectInstrument,
   title = 'Adicionar Instrumento',
-  subtitle = 'Instrumentos autênticos do Black Desert Online para composição Marni',
+  subtitle = 'Escolha o instrumento da nova faixa (todos também exportáveis para o Black Desert)',
   initialInstrumentId = 'grand-piano',
 }) => {
   const [selectedId, setSelectedId] = useState<InstrumentId>(initialInstrumentId);

@@ -27,6 +27,7 @@ import {
 } from '../bdo/bdoExportV2.ts';
 import { generateBdoScore } from '../bdo/bdoConverter.ts';
 import { notify, errorMessage } from '../ui/notify.ts';
+import { getSavedAuthor, getSavedOwnerId, saveOwnerId } from '../user/userProfile.ts';
 import { BDO_GRADE_LIMITS } from '../types/music.ts';
 import {
   applyBdoFix,
@@ -44,6 +45,8 @@ interface BdoExportModalProps {
   metadata: SongMetadata;
   effectorSettings: EffectorSettings;
   onApplyTracks: (tracks: Track[]) => void;
+  /** The author name is the same everywhere (bottom bar, project, BDO composer). */
+  onAuthorChange: (name: string) => void;
   onGradeChange: (grade: BdoGradeId) => void;
 }
 
@@ -70,6 +73,7 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
   effectorSettings,
   onApplyTracks,
   onGradeChange,
+  onAuthorChange,
 }) => {
   // Active Export Mode: 'binary' (Game-compatible .bms ICE file) or 'xml-mml' (Sheet Score preview from print)
   const [activeTab, setActiveTab] = useState<'binary' | 'xml'>('binary');
@@ -77,28 +81,23 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
   const [copied, setCopied] = useState(false);
 
   // Binary Exporter State (from Lucas Linhares v2)
-  const [charName, setCharName] = useState<string>(() => {
-    if (metadata.isBdoProtected && (metadata.originalBdoComposer || metadata.originalBdoAuthor)) {
-      return (metadata.originalBdoComposer || metadata.originalBdoAuthor)!;
-    }
-    return metadata.author || localStorage.getItem('marni_bdo_author') || 'Tchepper';
-  });
-  const [ownerId, setOwnerId] = useState<string>(() => {
-    if (metadata.isBdoProtected && metadata.originalBdoOwnerId !== undefined) {
-      return metadata.originalBdoOwnerId.toString();
-    }
-    return localStorage.getItem('marni_bdo_owner_id') || '1009649';
-  });
-  const [idStatus, setIdStatus] = useState<string>(() => {
-    const savedOwner = metadata.isBdoProtected && metadata.originalBdoOwnerId !== undefined
-      ? metadata.originalBdoOwnerId.toString()
-      : localStorage.getItem('marni_bdo_owner_id') || '1009649';
-    const savedName = metadata.isBdoProtected && (metadata.originalBdoComposer || metadata.originalBdoAuthor)
+  // Name and owner ID belong to whoever is using the app: no defaults, only what they informed
+  const initialComposer = () =>
+    metadata.isBdoProtected && (metadata.originalBdoComposer || metadata.originalBdoAuthor)
       ? (metadata.originalBdoComposer || metadata.originalBdoAuthor)!
-      : metadata.author || localStorage.getItem('marni_bdo_author') || 'Tchepper';
+      : metadata.author || getSavedAuthor();
+  const initialOwner = () =>
+    metadata.isBdoProtected && metadata.originalBdoOwnerId !== undefined
+      ? metadata.originalBdoOwnerId.toString()
+      : (getSavedOwnerId()?.toString() ?? '');
+  const describeId = (owner: string, name: string) => {
+    if (!owner || !(Number(owner) > 0)) return 'Nenhum ID carregado';
     const protSuffix = metadata.isBdoProtected ? ' [Protegido contra Plágio]' : '';
-    return `0x${parseInt(savedOwner, 10).toString(16)} (${savedName})${protSuffix}`;
-  });
+    return `0x${Number(owner).toString(16)}${name ? ` (${name})` : ''}${protSuffix}`;
+  };
+  const [charName, setCharName] = useState<string>(initialComposer);
+  const [ownerId, setOwnerId] = useState<string>(initialOwner);
+  const [idStatus, setIdStatus] = useState<string>(() => describeId(initialOwner(), initialComposer()));
   const [transpose, setTranspose] = useState<string>('0');
   const [maxChunkNotes, setMaxChunkNotes] = useState<string>('730');
 
@@ -122,16 +121,11 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
   // Initialize overrides from tracks and metadata
   useEffect(() => {
     if (!isOpen) return;
-    const initialComposer = metadata.isBdoProtected && (metadata.originalBdoComposer || metadata.originalBdoAuthor)
-      ? (metadata.originalBdoComposer || metadata.originalBdoAuthor)!
-      : metadata.author || localStorage.getItem('marni_bdo_author') || 'Tchepper';
-    const initialOwner = metadata.isBdoProtected && metadata.originalBdoOwnerId !== undefined
-      ? metadata.originalBdoOwnerId.toString()
-      : localStorage.getItem('marni_bdo_owner_id') || '1009649';
-    setCharName(initialComposer);
-    setOwnerId(initialOwner);
-    const protSuffix = metadata.isBdoProtected ? ' [Protegido contra Plágio]' : '';
-    setIdStatus(`0x${parseInt(initialOwner, 10).toString(16)} (${initialComposer})${protSuffix}`);
+    const composer = initialComposer();
+    const owner = initialOwner();
+    setCharName(composer);
+    setOwnerId(owner);
+    setIdStatus(describeId(owner, composer));
 
     const initialOverrides: Record<string, string> = {};
     const initialScales: Record<string, number> = {};
@@ -160,12 +154,14 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
     () =>
       isOpen
         ? validateForBdo(tracks, {
-            grade: metadata.bdoGrade,
-            timeSignature: metadata.timeSignature,
-            instrumentOverrides: instOverrides,
-          })
+          grade: metadata.bdoGrade,
+          timeSignature: metadata.timeSignature,
+          instrumentOverrides: instOverrides,
+          ownerId: metadata.isBdoProtected ? metadata.originalBdoOwnerId : Number(ownerId) || 0,
+          author: metadata.isBdoProtected ? metadata.originalBdoComposer || metadata.originalBdoAuthor : charName,
+        })
         : null,
-    [isOpen, tracks, metadata.bdoGrade, metadata.timeSignature, instOverrides]
+    [isOpen, tracks, metadata, instOverrides, ownerId, charName]
   );
   const gradeLimits = BDO_GRADE_LIMITS[metadata.bdoGrade] ?? BDO_GRADE_LIMITS.S;
 
@@ -230,11 +226,12 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
 
       const extractedName = extractedComposer || extractedArranger;
 
+      // The user loaded a file from their own character: remember it for next time
       setOwnerId(extractedId.toString());
-      localStorage.setItem('marni_bdo_owner_id', extractedId.toString());
+      saveOwnerId(extractedId);
       if (extractedName) {
         setCharName(extractedName);
-        localStorage.setItem('marni_bdo_author', extractedName);
+        onAuthorChange(extractedName);
       }
       setIdStatus(`0x${extractedId.toString(16)} (${extractedName || 'Personagem'})`);
     } catch {
@@ -247,10 +244,7 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
     const resolvedComposer = (
       metadata.isBdoProtected && (metadata.originalBdoComposer || metadata.originalBdoAuthor)
         ? (metadata.originalBdoComposer || metadata.originalBdoAuthor)
-        : charName ||
-          metadata.author ||
-          localStorage.getItem('marni_bdo_author') ||
-          'Tchepper'
+        : charName || metadata.author || ''
     )!.trim();
 
     const resolvedArranger = (
@@ -262,14 +256,7 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
     const resolvedOwnerId =
       metadata.isBdoProtected && metadata.originalBdoOwnerId !== undefined
         ? metadata.originalBdoOwnerId
-        : parseInt(ownerId, 10) || 1009649;
-
-    if (!metadata.isBdoProtected) {
-      localStorage.setItem('marni_bdo_author', resolvedComposer);
-      if (ownerId) {
-        localStorage.setItem('marni_bdo_owner_id', ownerId);
-      }
-    }
+        : parseInt(ownerId, 10) || 0;
 
     const songContext: SongContext = {
       bpm: metadata.bpm,
@@ -382,9 +369,8 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
             <div className="flex items-center gap-1.5" title="Notas que serão gravadas (sem faixas mutadas e duplicadas)">
               <span className="text-stone-400">Notas:</span>
               <span
-                className={`font-mono font-bold text-sm ${
-                  (validation?.exportedNotes ?? 0) > gradeLimits.maxNotes ? 'text-red-400' : 'text-amber-400'
-                }`}
+                className={`font-mono font-bold text-sm ${(validation?.exportedNotes ?? 0) > gradeLimits.maxNotes ? 'text-red-400' : 'text-amber-400'
+                  }`}
               >
                 {validation?.exportedNotes ?? 0}
               </span>
@@ -394,9 +380,8 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
             <div className="flex items-center gap-1.5" title={`Compassos em ${metadata.timeSignature}`}>
               <span className="text-stone-400">Compassos:</span>
               <span
-                className={`font-mono font-bold text-sm ${
-                  (validation?.bars ?? 0) > gradeLimits.maxBars ? 'text-red-400' : 'text-amber-400'
-                }`}
+                className={`font-mono font-bold text-sm ${(validation?.bars ?? 0) > gradeLimits.maxBars ? 'text-red-400' : 'text-amber-400'
+                  }`}
               >
                 {validation?.bars ?? 0}
               </span>
@@ -525,7 +510,7 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
                           onChange={(e) => {
                             if (!metadata.isBdoProtected) {
                               setCharName(e.target.value);
-                              localStorage.setItem('marni_bdo_author', e.target.value);
+                              onAuthorChange(e.target.value);
                             }
                           }}
                           readOnly={metadata.isBdoProtected}
@@ -536,11 +521,10 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
                               ? 'Compositor original da partitura do Black Desert: protegido contra plágio.'
                               : 'Nome preenchido igualmente em Composição e Arranjo no BDO'
                           }
-                          className={`w-48 bg-stone-900/90 border rounded-lg px-3 py-1.5 text-xs outline-none transition-colors ${
-                            metadata.isBdoProtected
+                          className={`w-48 bg-stone-900/90 border rounded-lg px-3 py-1.5 text-xs outline-none transition-colors ${metadata.isBdoProtected
                               ? 'border-amber-900/50 text-amber-400/95 cursor-not-allowed pr-7 bg-stone-900/95'
                               : 'border-[#3e342b] text-stone-200 focus:border-amber-500'
-                          }`}
+                            }`}
                         />
                         {metadata.isBdoProtected && (
                           <span className="absolute right-2 text-amber-400/80 pointer-events-none">
@@ -908,16 +892,15 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
           <button
             onClick={handleExportBinary}
             disabled={validation?.exportedNotes === 0}
-            className={`w-full py-3 rounded-lg font-bold text-sm tracking-wider uppercase transition-all active:scale-[0.99] flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed ${
-              validation && !validation.canExport
+            className={`w-full py-3 rounded-lg font-bold text-sm tracking-wider uppercase transition-all active:scale-[0.99] flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed ${validation && !validation.canExport
                 ? 'bg-red-900/70 hover:bg-red-800/80 text-red-100 border border-red-700/60'
                 : 'bg-amber-500 hover:bg-amber-400 text-stone-950 shadow-[0_0_15px_rgba(245,158,11,0.25)] hover:shadow-[0_0_20px_rgba(245,158,11,0.45)]'
-            }`}
+              }`}
           >
             <Download className="w-4 h-4" />
             {validation && !validation.canExport
               ? 'EXPORTAR MESMO ASSIM (FORA DO LIMITE DO RANK)'
-              : 'EXPORTAR ARQUIVO BDO (SEM EXTENSÃO)'}
+              : 'EXPORTAR ARQUIVO BDO'}
           </button>
         </div>
       </div>

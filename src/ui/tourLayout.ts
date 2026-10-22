@@ -16,7 +16,7 @@ export const TOUR_VERSION = '1';
 export const TOUR_STEPS: TourStep[] = [
   {
     title: 'Bem-vindo ao Marni Web Composer',
-    body: 'Um estúdio para compor músicas para os instrumentos do Black Desert. Este tour rápido mostra o básico em 9 passos. Use as setas ou os botões para navegar.',
+    body: 'Uma DAW no navegador para compor, gravar, mixar e exportar música — e, se quiser, levar suas músicas para o Black Desert. Este tour mostra o básico em 9 passos; use as setas ou os botões.',
   },
   {
     target: 'tracks',
@@ -26,7 +26,7 @@ export const TOUR_STEPS: TourStep[] = [
   {
     target: 'add-track',
     title: 'Adicionar instrumentos',
-    body: 'Crie novas faixas aqui. Ao lado ficam a importação de arquivos (MIDI, MusicXML, partituras do BDO) e as ferramentas de IA.',
+    body: 'Crie novas faixas aqui. Ao lado ficam a importação de arquivos (MIDI, MusicXML e partituras do BDO) e as ferramentas de IA.',
   },
   {
     target: 'tools',
@@ -55,8 +55,8 @@ export const TOUR_STEPS: TourStep[] = [
   },
   {
     target: 'export',
-    title: 'Levar para o jogo',
-    body: 'Exporte para o BDO, para MIDI ou para áudio WAV. Antes de exportar, o Marni verifica o que o jogo mudaria e sugere correções.',
+    title: 'Exportar',
+    body: 'Exporte áudio WAV, um arquivo MIDI para outros programas ou a partitura do Black Desert (com verificação do que o jogo mudaria).',
   },
   {
     target: 'help',

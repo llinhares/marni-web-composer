@@ -2,7 +2,7 @@
 
 ![React](https://img.shields.io/badge/react-%2320232a.svg?style=for-the-badge&logo=react&logoColor=%2361DAFB) ![TypeScript](https://img.shields.io/badge/typescript-%23007ACC.svg?style=for-the-badge&logo=typescript&logoColor=white) ![TailwindCSS](https://img.shields.io/badge/tailwindcss-%2338B2AC.svg?style=for-the-badge&logo=tailwind-css&logoColor=white) ![Web Audio API](https://img.shields.io/badge/Web%20Audio%20API-FFA500?style=for-the-badge&logo=soundcharts&logoColor=white) ![HTML5 Canvas](https://img.shields.io/badge/HTML5%20Canvas-E34F26?style=for-the-badge&logo=html5&logoColor=white) ![Vite](https://img.shields.io/badge/Vite-646CFF?style=for-the-badge&logo=vite&logoColor=white)
 
-An advanced, open-source, and responsive web-based digital audio workstation (DAW) and music composer specifically tailored for creating, editing, and exporting musical scores for **Black Desert Online (BDO)**.
+An open-source digital audio workstation (DAW) that runs in the browser: compose, record, mix and export music with a piano roll, MIDI recording, sampled instruments and a mixer. Its look is themed after **Black Desert Online (BDO)**, and songs can also be exported to play in the game.
 
 ---
 <p align="center">
