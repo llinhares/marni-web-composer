@@ -17,6 +17,7 @@ prototype_ref/
 .windsurf/
 .vscode/
 .idea/
+.claude/
 metadata.json
 playwright-report/
 test-results/
