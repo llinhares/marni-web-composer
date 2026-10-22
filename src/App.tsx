@@ -44,6 +44,9 @@ import { AiSheetScannerModal } from './components/AiSheetScannerModal.tsx';
 import { VideoAudioTranscriberModal } from './components/VideoAudioTranscriberModal.tsx';
 import { RecoveryBanner } from './components/RecoveryBanner.tsx';
 import { MixerPanel } from './components/MixerPanel.tsx';
+import { Notifications } from './components/Notifications.tsx';
+import { ShortcutsDialog } from './components/ShortcutsDialog.tsx';
+import { notify, errorMessage } from './ui/notify.ts';
 import {
   DEFAULT_EFFECTOR_SETTINGS,
   parseProjectFile,
@@ -171,6 +174,7 @@ export default function App() {
   const [isAiSheetScannerOpen, setIsAiSheetScannerOpen] = useState(false);
   const [isVideoTranscriberOpen, setIsVideoTranscriberOpen] = useState(false);
   const [isMixerOpen, setIsMixerOpen] = useState(false);
+  const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const readMeterPeaks = useCallback(() => audioEngineRef.current?.getMeterPeaks() ?? null, []);
 
   // Hidden file input for importing MIDI / XML / JSON
@@ -698,6 +702,10 @@ export default function App() {
       const suffix = bitDepth === 24 ? '_master_24bit.wav' : '_cd_16bit.wav';
       const filename = `${(title || 'marni_composition').toLowerCase().replace(/\s+/g, '_')}${suffix}`;
       await exportWavFile(tracks, bpm, effectorSettings, filename, bitDepth);
+      notify.success(`Áudio exportado: ${filename}`);
+    } catch (err) {
+      console.error('Falha ao exportar WAV:', err);
+      notify.error(errorMessage(err, 'Não foi possível exportar o áudio.'));
     } finally {
       setIsExportingAudio(false);
     }
@@ -760,7 +768,6 @@ export default function App() {
   const isDirty = currentSignature !== savedSignature;
   const fileHandleRef = useRef<FileHandleLike | null>(null);
   const [projectFileLabel, setProjectFileLabel] = useState<string | null>(null);
-  const [projectNotice, setProjectNotice] = useState<string | null>(null);
   const [lastAutosaveAt, setLastAutosaveAt] = useState<Date | null>(null);
   // Until the user answers the recovery prompt, autosave must not overwrite the stored session
   const [recoveryChecked, setRecoveryChecked] = useState(false);
@@ -768,10 +775,6 @@ export default function App() {
     null
   );
 
-  const showNotice = useCallback((message: string) => {
-    setProjectNotice(message);
-    window.setTimeout(() => setProjectNotice((cur) => (cur === message ? null : cur)), 3500);
-  }, []);
 
   const applyProject = useCallback(
     (p: ProjectFile) => {
@@ -823,28 +826,36 @@ export default function App() {
         fileHandleRef.current = result;
         setProjectFileLabel(result?.name ?? projectFileName(state.title));
         setSavedSignature(projectSignature(state));
-        showNotice(result ? `Projeto salvo em ${result.name}` : 'Projeto baixado (.marni)');
+        notify.success(result ? `Projeto salvo em ${result.name}` : 'Projeto baixado (.marni)');
       } catch (err) {
         console.error('Falha ao salvar projeto:', err);
-        showNotice('Não foi possível salvar o projeto.');
+        notify.error(errorMessage(err, 'Não foi possível salvar o projeto.'));
       }
     },
-    [showNotice]
+    []
   );
 
   const openProjectText = useCallback(
-    (text: string, handle: FileHandleLike | null, fileName: string) => {
+    async (text: string, handle: FileHandleLike | null, fileName: string) => {
       const project = parseProjectFile(text);
-      if (isDirty && !window.confirm('Há alterações não salvas no projeto atual. Abrir outro projeto mesmo assim?')) {
+      if (
+        isDirty &&
+        !(await notify.confirm({
+          title: 'Abrir outro projeto?',
+          message: 'O projeto atual tem alterações que não foram salvas em arquivo (elas continuam no salvamento automático).',
+          confirmLabel: 'Abrir mesmo assim',
+          danger: true,
+        }))
+      ) {
         return;
       }
       const signature = applyProject(project);
       fileHandleRef.current = handle;
       setProjectFileLabel(fileName);
       setSavedSignature(signature);
-      showNotice(`Projeto aberto: ${fileName}`);
+      notify.success(`Projeto aberto: ${fileName}`);
     },
-    [applyProject, isDirty, showNotice]
+    [applyProject, isDirty]
   );
 
   const handleOpenProject = useCallback(async () => {
@@ -855,12 +866,12 @@ export default function App() {
         return;
       }
       if (!picked) return;
-      openProjectText(picked.text, picked.handle, picked.handle.name);
+      await openProjectText(picked.text, picked.handle, picked.handle.name);
     } catch (err) {
       console.error('Falha ao abrir projeto:', err);
-      showNotice(err instanceof Error ? err.message : 'Não foi possível abrir o projeto.');
+      notify.error(errorMessage(err, 'Não foi possível abrir o projeto.'));
     }
-  }, [openProjectText, showNotice]);
+  }, [openProjectText]);
 
   // Startup: offer to restore the last autosaved session if it differs from what is on screen
   useEffect(() => {
@@ -895,7 +906,7 @@ export default function App() {
     fileHandleRef.current = null;
     setRecoveryOffer(null);
     setRecoveryChecked(true);
-    showNotice('Sessão anterior restaurada');
+    notify.success('Sessão anterior restaurada');
   };
 
   const handleDiscardRecovery = () => {
@@ -969,6 +980,7 @@ export default function App() {
     toolPencil: () => setToolMode('pencil'),
     toolEraser: () => setToolMode('eraser'),
     toolPan: () => setToolMode('pan'),
+    help: () => setIsShortcutsOpen((v) => !v),
   };
   const shortcutHandlersRef = useRef(shortcutHandlers);
   shortcutHandlersRef.current = shortcutHandlers;
@@ -1068,12 +1080,16 @@ export default function App() {
     if (!file) return;
     try {
       const result = await readImportFile(file);
-      if (result.kind === 'project') openProjectText(result.text, null, result.fileName);
-      else if (result.kind === 'tracks') applyImportedData(result);
-      else alert(result.message);
+      if (result.kind === 'project') await openProjectText(result.text, null, result.fileName);
+      else if (result.kind === 'tracks') {
+        applyImportedData(result);
+        notify.success(`${file.name} importado`);
+      } else notify.error(result.message);
     } catch (err) {
       console.error('Falha ao importar partitura:', err);
-      alert(err instanceof Error && err.name === 'ProjectFormatError' ? err.message : 'Não foi possível processar o arquivo selecionado.');
+      notify.error(
+        err instanceof Error && err.name === 'ProjectFormatError' ? err.message : 'Não foi possível processar o arquivo selecionado.'
+      );
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
@@ -1180,6 +1196,7 @@ export default function App() {
         beatsPerBar={getBeatsPerMeasure(timeSignature)}
         isMixerOpen={isMixerOpen}
         onToggleMixer={() => setIsMixerOpen((v) => !v)}
+        onOpenShortcuts={() => setIsShortcutsOpen(true)}
         markers={markers}
         onAddMarker={handleAddMarker}
         onJumpToTick={handleSeek}
@@ -1293,8 +1310,10 @@ export default function App() {
         isDirty={isDirty}
         projectFileLabel={projectFileLabel}
         lastAutosaveAt={lastAutosaveAt}
-        projectNotice={projectNotice}
       />
+
+      <Notifications />
+      <ShortcutsDialog isOpen={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />
 
       <MixerPanel
         isOpen={isMixerOpen}

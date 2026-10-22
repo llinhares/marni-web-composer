@@ -26,6 +26,7 @@ import {
   type SongContext,
 } from '../bdo/bdoExportV2.ts';
 import { generateBdoScore } from '../bdo/bdoConverter.ts';
+import { notify, errorMessage } from '../ui/notify.ts';
 import { BDO_GRADE_LIMITS } from '../types/music.ts';
 import {
   applyBdoFix,
@@ -310,6 +311,7 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
       onClose();
     } catch (err) {
       console.error('Erro na exportação BDO:', err);
+      notify.error(errorMessage(err, 'Não foi possível gerar o arquivo do BDO.'));
     }
   };
 

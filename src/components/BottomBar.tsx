@@ -7,7 +7,6 @@ interface BottomBarProps {
   isDirty: boolean;
   projectFileLabel: string | null;
   lastAutosaveAt: Date | null;
-  projectNotice: string | null;
   title: string;
   onTitleChange: (newTitle: string) => void;
   author?: string;
@@ -34,19 +33,17 @@ export const BottomBar: React.FC<BottomBarProps> = ({
   isDirty,
   projectFileLabel,
   lastAutosaveAt,
-  projectNotice,
 }) => {
   const [audioMenuOpen, setAudioMenuOpen] = useState(false);
   const autosaveTime = lastAutosaveAt?.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
   const statusText =
-    projectNotice ??
-    (isDirty
+    isDirty
       ? `Alterações não salvas${autosaveTime ? ` • autosalvo ${autosaveTime}` : ''}`
       : projectFileLabel
         ? `Salvo • ${projectFileLabel}`
         : autosaveTime
           ? `Autosalvo ${autosaveTime}`
-          : '');
+          : '';
 
   return (
     <footer className="relative h-14 bg-[#141210] border-t border-[#2d2722] px-3 sm:px-4 flex items-center justify-between gap-3 shrink-0 z-40 text-xs text-stone-300">
@@ -118,7 +115,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
         )}
         {statusText && (
           <span
-            className={`hidden md:inline truncate text-[11px] ${isDirty && !projectNotice ? 'text-amber-400/80' : 'text-stone-500'}`}
+            className={`hidden md:inline truncate text-[11px] ${isDirty ? 'text-amber-400/80' : 'text-stone-500'}`}
             role="status"
             aria-live="polite"
           >

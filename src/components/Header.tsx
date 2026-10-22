@@ -19,6 +19,7 @@ import {
   Hourglass,
   Repeat,
   SlidersVertical,
+  Keyboard,
 } from 'lucide-react';
 import type { ToolMode, GridSnap, TimeSignature, EffectorSettings, InstrumentId } from '../types/music.ts';
 import { formatTimecode, ticksToSeconds } from '../utils/musicMath.ts';
@@ -72,6 +73,7 @@ interface HeaderProps {
   beatsPerBar: number;
   isMixerOpen: boolean;
   onToggleMixer: () => void;
+  onOpenShortcuts: () => void;
   markers: Marker[];
   onAddMarker: () => void;
   onJumpToTick: (tick: number) => void;
@@ -130,6 +132,7 @@ export const Header: React.FC<HeaderProps> = ({
   beatsPerBar,
   isMixerOpen,
   onToggleMixer,
+  onOpenShortcuts,
   markers,
   onAddMarker,
   onJumpToTick,
@@ -425,6 +428,14 @@ export const Header: React.FC<HeaderProps> = ({
           aria-pressed={isMixerOpen}
         >
           <SlidersVertical className="w-3.5 h-3.5" />
+        </button>
+        <button
+          onClick={onOpenShortcuts}
+          className="hidden lg:block p-1.5 rounded-md border bg-stone-900 border-[#2d2722] text-stone-400 hover:text-stone-200 transition-colors"
+          title="Atalhos de teclado (?)"
+          aria-label="Atalhos de teclado"
+        >
+          <Keyboard className="w-3.5 h-3.5" />
         </button>
         <MarkersMenu
           markers={markers}
