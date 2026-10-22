@@ -36,6 +36,22 @@ import { BdoExportModal } from './components/BdoExportModal.tsx';
 import { MidiSettingsModal } from './components/MidiSettingsModal.tsx';
 import { AiSheetScannerModal } from './components/AiSheetScannerModal.tsx';
 import { VideoAudioTranscriberModal } from './components/VideoAudioTranscriberModal.tsx';
+import { RecoveryBanner } from './components/RecoveryBanner.tsx';
+import {
+  DEFAULT_EFFECTOR_SETTINGS,
+  isProjectFileContent,
+  parseProjectFile,
+  projectFileName,
+  projectSignature,
+  serializeProject,
+  type BdoGrade,
+  type ProjectFile,
+  type ProjectState,
+} from './project/projectFile.ts';
+import { readAutosave, writeAutosave } from './project/autosave.ts';
+import { pickProjectFile, saveProjectToDisk, type FileHandleLike } from './project/projectIO.ts';
+
+const AUTOSAVE_DELAY_MS = 1200;
 
 // Initial demo score inspired by Balenos Theme in Black Desert Online
 const INITIAL_TRACKS: Track[] = [
@@ -125,18 +141,14 @@ export default function App() {
   const [accidentals, setAccidentals] = useState<'sharp' | 'flat'>('sharp');
   const [zoomLevel, setZoomLevel] = useState<number>(1.0);
   const [scaleType, setScaleType] = useState<string>('chromatic');
-  const [bdoGrade, setBdoGrade] = useState<'F' | 'D' | 'C' | 'B' | 'A' | 'S'>('S');
+  const [bdoGrade, setBdoGrade] = useState<BdoGrade>('S');
 
   // Playback State
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [currentPlayheadTick, setCurrentPlayheadTick] = useState<number>(0);
 
   // Effector / VST State
-  const [effectorSettings, setEffectorSettings] = useState<EffectorSettings>({
-    reverb: { enabled: true, time: 65, damp: 40, mix: 45 },
-    delay: { enabled: false, feedback: 35, time: 40, mix: 30 },
-    chorus: { enabled: false, feedback: 20, lfoDepth: 40, lfoFrequency: 35, mix: 35 },
-  });
+  const [effectorSettings, setEffectorSettings] = useState<EffectorSettings>(DEFAULT_EFFECTOR_SETTINGS);
 
   // Modal Dialogs
   const [isEffectorOpen, setIsEffectorOpen] = useState(false);
@@ -535,6 +547,9 @@ export default function App() {
     setAuthor(localStorage.getItem('marni_bdo_author') || 'Tchepper');
     setIsResetConfirmOpen(false);
     pushHistory(resetTracks, 'track-piano');
+    // A reset starts a new, not-yet-saved project
+    fileHandleRef.current = null;
+    setProjectFileLabel(null);
   };
 
   // Export handlers
@@ -555,9 +570,257 @@ export default function App() {
     }
   };
 
-  // Keyboard Shortcuts (Space, V, B, E, and Ctrl+Z / Ctrl+Y for Undo/Redo)
+  // ---------------------------------------------------------------------------
+  // Project file (.marni), dirty state, autosave & crash recovery
+  // ---------------------------------------------------------------------------
+
+  const projectState: ProjectState = useMemo(
+    () => ({
+      title,
+      author,
+      bpm,
+      timeSignature,
+      gridSnap,
+      accidentals,
+      scaleType,
+      bdoGrade,
+      bdoOwnerId,
+      effectorSettings,
+      tracks,
+      activeTrackId,
+      bdoProtection: {
+        isProtected: isBdoProtected,
+        author: originalBdoAuthor,
+        composer: originalBdoComposer,
+        arranger: originalBdoArranger,
+        ownerId: originalBdoOwnerId,
+      },
+    }),
+    [
+      title,
+      author,
+      bpm,
+      timeSignature,
+      gridSnap,
+      accidentals,
+      scaleType,
+      bdoGrade,
+      bdoOwnerId,
+      effectorSettings,
+      tracks,
+      activeTrackId,
+      isBdoProtected,
+      originalBdoAuthor,
+      originalBdoComposer,
+      originalBdoArranger,
+      originalBdoOwnerId,
+    ]
+  );
+  const projectStateRef = useRef(projectState);
+  projectStateRef.current = projectState;
+
+  const currentSignature = useMemo(() => projectSignature(projectState), [projectState]);
+  // Signature of the content last written to / read from a .marni file (or the startup state)
+  const [savedSignature, setSavedSignature] = useState<string>(currentSignature);
+  const isDirty = currentSignature !== savedSignature;
+  const fileHandleRef = useRef<FileHandleLike | null>(null);
+  const [projectFileLabel, setProjectFileLabel] = useState<string | null>(null);
+  const [projectNotice, setProjectNotice] = useState<string | null>(null);
+  const [lastAutosaveAt, setLastAutosaveAt] = useState<Date | null>(null);
+  // Until the user answers the recovery prompt, autosave must not overwrite the stored session
+  const [recoveryChecked, setRecoveryChecked] = useState(false);
+  const [recoveryOffer, setRecoveryOffer] = useState<{ project: ProjectFile; savedAt: Date; isDirty: boolean } | null>(
+    null
+  );
+
+  const showNotice = useCallback((message: string) => {
+    setProjectNotice(message);
+    window.setTimeout(() => setProjectNotice((cur) => (cur === message ? null : cur)), 3500);
+  }, []);
+
+  const applyProject = useCallback(
+    (p: ProjectFile) => {
+      handleStop();
+      setTracks(p.tracks);
+      setActiveTrackId(p.activeTrackId);
+      setTitle(p.title);
+      setAuthor(p.author);
+      setBpm(p.bpm);
+      setTimeSignature(p.timeSignature);
+      setGridSnap(p.gridSnap);
+      setAccidentals(p.accidentals);
+      setScaleType(p.scaleType);
+      setBdoGrade(p.bdoGrade);
+      if (p.bdoOwnerId > 0) setBdoOwnerId(p.bdoOwnerId);
+      setEffectorSettings(p.effectorSettings);
+      setIsBdoProtected(p.bdoProtection.isProtected);
+      setOriginalBdoAuthor(p.bdoProtection.author);
+      setOriginalBdoComposer(p.bdoProtection.composer);
+      setOriginalBdoArranger(p.bdoProtection.arranger);
+      setOriginalBdoOwnerId(p.bdoProtection.ownerId);
+      setCurrentPlayheadTick(0);
+      // A loaded project starts a fresh undo history
+      setHistory([{ tracks: p.tracks, activeTrackId: p.activeTrackId }]);
+      setHistoryIndex(0);
+      return projectSignature({ ...p, bdoOwnerId: p.bdoOwnerId > 0 ? p.bdoOwnerId : bdoOwnerId });
+    },
+    [handleStop, bdoOwnerId]
+  );
+
+  const handleSaveProject = useCallback(
+    async (saveAs = false) => {
+      const state = projectStateRef.current;
+      try {
+        const result = await saveProjectToDisk(
+          serializeProject(state),
+          fileHandleRef.current?.name ?? projectFileName(state.title),
+          fileHandleRef.current,
+          saveAs
+        );
+        if (result === 'cancelled') return;
+        fileHandleRef.current = result;
+        setProjectFileLabel(result?.name ?? projectFileName(state.title));
+        setSavedSignature(projectSignature(state));
+        showNotice(result ? `Projeto salvo em ${result.name}` : 'Projeto baixado (.marni)');
+      } catch (err) {
+        console.error('Falha ao salvar projeto:', err);
+        showNotice('Não foi possível salvar o projeto.');
+      }
+    },
+    [showNotice]
+  );
+
+  const openProjectText = useCallback(
+    (text: string, handle: FileHandleLike | null, fileName: string) => {
+      const project = parseProjectFile(text);
+      if (isDirty && !window.confirm('Há alterações não salvas no projeto atual. Abrir outro projeto mesmo assim?')) {
+        return;
+      }
+      const signature = applyProject(project);
+      fileHandleRef.current = handle;
+      setProjectFileLabel(fileName);
+      setSavedSignature(signature);
+      showNotice(`Projeto aberto: ${fileName}`);
+    },
+    [applyProject, isDirty, showNotice]
+  );
+
+  const handleOpenProject = useCallback(async () => {
+    try {
+      const picked = await pickProjectFile();
+      if (picked === 'unsupported') {
+        handleTriggerImportRef.current('replace');
+        return;
+      }
+      if (!picked) return;
+      openProjectText(picked.text, picked.handle, picked.handle.name);
+    } catch (err) {
+      console.error('Falha ao abrir projeto:', err);
+      showNotice(err instanceof Error ? err.message : 'Não foi possível abrir o projeto.');
+    }
+  }, [openProjectText, showNotice]);
+
+  // Startup: offer to restore the last autosaved session if it differs from what is on screen
+  useEffect(() => {
+    let cancelled = false;
+    readAutosave()
+      .then((found) => {
+        if (cancelled) return;
+        if (found && found.record.signature !== projectSignature(projectStateRef.current)) {
+          setRecoveryOffer({
+            project: found.project,
+            savedAt: new Date(found.record.savedAt),
+            isDirty: found.record.isDirty,
+          });
+        } else {
+          setRecoveryChecked(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setRecoveryChecked(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleRestoreRecovery = () => {
+    if (!recoveryOffer) return;
+    const signature = applyProject(recoveryOffer.project);
+    // Changes that were never written to a .marni file stay flagged as unsaved
+    setSavedSignature(recoveryOffer.isDirty ? '' : signature);
+    setProjectFileLabel(null);
+    fileHandleRef.current = null;
+    setRecoveryOffer(null);
+    setRecoveryChecked(true);
+    showNotice('Sessão anterior restaurada');
+  };
+
+  const handleDiscardRecovery = () => {
+    setRecoveryOffer(null);
+    setRecoveryChecked(true);
+  };
+
+  // Debounced autosave to IndexedDB
+  const isDirtyRef = useRef(isDirty);
+  isDirtyRef.current = isDirty;
+  const flushAutosave = useCallback(() => {
+    const state = projectStateRef.current;
+    const now = new Date();
+    return writeAutosave({
+      savedAt: now.toISOString(),
+      signature: projectSignature(state),
+      json: serializeProject(state, now),
+      isDirty: isDirtyRef.current,
+    })
+      .then(() => setLastAutosaveAt(now))
+      .catch((err) => console.warn('Autosave falhou:', err));
+  }, []);
+
+  useEffect(() => {
+    if (!recoveryChecked) return;
+    const timer = window.setTimeout(flushAutosave, AUTOSAVE_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [currentSignature, isDirty, recoveryChecked, flushAutosave]);
+
+  // Warn before closing with changes not written to a .marni file (the autosave still keeps them)
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (recoveryChecked) void flushAutosave();
+      if (!isDirtyRef.current) return;
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    const onHidden = () => {
+      if (document.visibilityState === 'hidden' && recoveryChecked) void flushAutosave();
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    document.addEventListener('visibilitychange', onHidden);
+    return () => {
+      window.removeEventListener('beforeunload', onBeforeUnload);
+      document.removeEventListener('visibilitychange', onHidden);
+    };
+  }, [recoveryChecked, flushAutosave]);
+
+  useEffect(() => {
+    document.title = `${isDirty ? '• ' : ''}${title || 'Sem título'} — Marni Web Composer`;
+  }, [title, isDirty]);
+
+  // Keyboard Shortcuts (Space, V, B, E, Ctrl+Z / Ctrl+Y for Undo/Redo, Ctrl+S / Ctrl+O for projects)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Project shortcuts work everywhere, including while typing in inputs
+      if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        void handleSaveProject(e.shiftKey);
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'o' || e.key === 'O')) {
+        e.preventDefault();
+        void handleOpenProject();
+        return;
+      }
+
       // Don't trigger shortcuts when typing in inputs
       if (
         document.activeElement?.tagName === 'INPUT' ||
@@ -605,7 +868,7 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isPlaying, handlePlay, handlePause, handleStop, handleUndo, handleRedo]);
+  }, [isPlaying, handlePlay, handlePause, handleStop, handleUndo, handleRedo, handleSaveProject, handleOpenProject]);
 
   // Import Mode ('replace' | 'append')
   const importModeRef = useRef<ImportMode>('replace');
@@ -617,6 +880,8 @@ export default function App() {
       fileInputRef.current.click();
     }
   }, []);
+  const handleTriggerImportRef = useRef(handleTriggerImport);
+  handleTriggerImportRef.current = handleTriggerImport;
 
   const applyImportedData = useCallback(
     (data: {
@@ -816,8 +1081,14 @@ export default function App() {
         return;
       }
 
+      if (isProjectFileContent(text) || file.name.toLowerCase().endsWith('.marni')) {
+        // Full Marni project: always replaces the session (tracks, tempo, effects, metadata)
+        openProjectText(text, null, file.name);
+        return;
+      }
+
       if (text.trim().startsWith('{')) {
-        // Parse JSON project
+        // Parse legacy JSON (tracks only)
         const parsed = JSON.parse(text);
         if (Array.isArray(parsed.tracks) && parsed.tracks.length > 0) {
           applyImportedData({
@@ -831,7 +1102,7 @@ export default function App() {
       }
     } catch (err) {
       console.error('Falha ao importar partitura:', err);
-      alert('Não foi possível processar o arquivo selecionado.');
+      alert(err instanceof Error && err.name === 'ProjectFormatError' ? err.message : 'Não foi possível processar o arquivo selecionado.');
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
@@ -1026,14 +1297,31 @@ export default function App() {
         onExportBdo={() => setIsBdoExportOpen(true)}
         onExportWav={handleExportWav}
         isExportingAudio={isExportingAudio}
+        onOpenProject={handleOpenProject}
+        onSaveProject={() => void handleSaveProject(false)}
+        isDirty={isDirty}
+        projectFileLabel={projectFileLabel}
+        lastAutosaveAt={lastAutosaveAt}
+        projectNotice={projectNotice}
       />
+
+      {recoveryOffer && (
+        <RecoveryBanner
+          savedAt={recoveryOffer.savedAt}
+          title={recoveryOffer.project.title}
+          trackCount={recoveryOffer.project.tracks.length}
+          noteCount={recoveryOffer.project.tracks.reduce((acc, t) => acc + t.notes.length, 0)}
+          onRestore={handleRestoreRecovery}
+          onDiscard={handleDiscardRecovery}
+        />
+      )}
 
       {/* Hidden File Input for import */}
       <input
         type="file"
         ref={fileInputRef}
         onChange={handleFileImport}
-        accept=".xml,.bdo,.mid,.midi,.musicxml,.mxl,.json,.bms,*"
+        accept=".marni,.xml,.bdo,.mid,.midi,.musicxml,.mxl,.json,.bms,*"
         className="hidden"
         aria-hidden="true"
       />

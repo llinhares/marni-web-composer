@@ -1,7 +1,13 @@
 import React, { useState } from 'react';
-import { Download, Music, Disc, ChevronUp, FileAudio, Lock } from 'lucide-react';
+import { Download, Music, Disc, ChevronUp, FileAudio, Lock, FolderOpen, Save } from 'lucide-react';
 
 interface BottomBarProps {
+  onOpenProject: () => void;
+  onSaveProject: () => void;
+  isDirty: boolean;
+  projectFileLabel: string | null;
+  lastAutosaveAt: Date | null;
+  projectNotice: string | null;
   title: string;
   onTitleChange: (newTitle: string) => void;
   author?: string;
@@ -23,13 +29,50 @@ export const BottomBar: React.FC<BottomBarProps> = ({
   onExportBdo,
   onExportWav,
   isExportingAudio,
+  onOpenProject,
+  onSaveProject,
+  isDirty,
+  projectFileLabel,
+  lastAutosaveAt,
+  projectNotice,
 }) => {
   const [audioMenuOpen, setAudioMenuOpen] = useState(false);
+  const autosaveTime = lastAutosaveAt?.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  const statusText =
+    projectNotice ??
+    (isDirty
+      ? `Alterações não salvas${autosaveTime ? ` • autosalvo ${autosaveTime}` : ''}`
+      : projectFileLabel
+        ? `Salvo • ${projectFileLabel}`
+        : autosaveTime
+          ? `Autosalvo ${autosaveTime}`
+          : '');
 
   return (
     <footer className="relative h-14 bg-[#141210] border-t border-[#2d2722] px-3 sm:px-4 flex items-center justify-between gap-3 shrink-0 z-40 text-xs text-stone-300">
-      {/* Left / Song Title & Author Input */}
-      <div className="flex-1 max-w-lg flex items-center gap-2">
+      {/* Left / Project file actions, Song Title & Author Input */}
+      <div className="flex-1 max-w-2xl flex items-center gap-2 min-w-0">
+        <div className="flex items-center gap-1 shrink-0">
+          <button
+            onClick={onOpenProject}
+            className="p-1.5 rounded-lg bg-stone-900 hover:bg-stone-850 border border-[#2d2722] hover:border-amber-700/60 text-stone-300 transition-colors"
+            title="Abrir projeto .marni (Ctrl+O)"
+            aria-label="Abrir projeto"
+          >
+            <FolderOpen className="w-3.5 h-3.5 text-amber-400" />
+          </button>
+          <button
+            onClick={onSaveProject}
+            className="relative p-1.5 rounded-lg bg-stone-900 hover:bg-stone-850 border border-[#2d2722] hover:border-amber-700/60 text-stone-300 transition-colors"
+            title="Salvar projeto .marni (Ctrl+S) • Salvar como: Ctrl+Shift+S"
+            aria-label={isDirty ? 'Salvar projeto (alterações não salvas)' : 'Salvar projeto'}
+          >
+            <Save className="w-3.5 h-3.5 text-amber-400" />
+            {isDirty && (
+              <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.9)]" />
+            )}
+          </button>
+        </div>
         <input
           type="text"
           value={title}
@@ -72,6 +115,15 @@ export const BottomBar: React.FC<BottomBarProps> = ({
               </span>
             )}
           </div>
+        )}
+        {statusText && (
+          <span
+            className={`hidden md:inline truncate text-[11px] ${isDirty && !projectNotice ? 'text-amber-400/80' : 'text-stone-500'}`}
+            role="status"
+            aria-live="polite"
+          >
+            {statusText}
+          </span>
         )}
       </div>
 
