@@ -243,8 +243,11 @@ test('shiftLayoutOctave transposes detected layout pitches by exact octaves', ()
     whiteKeyWidthRatio: 0.02,
     blackKeyWidthRatio: 0.01,
     keyboardYRatio: 0.7,
+    topYRatio: 0.65,
     lowestPitch: 60,
     highestPitch: 61,
+    keyCount: 2,
+    standardSize: null,
     score: 30,
   };
 
@@ -359,8 +362,11 @@ test('analyzeKeyColumns rejects flame/amber glow and bridges white letters insid
     whiteKeyWidthRatio: 0.02,
     blackKeyWidthRatio: 0.01,
     keyboardYRatio: 0.7,
+    topYRatio: 0.65,
     lowestPitch: 48,
     highestPitch: 60,
+    keyCount: 3,
+    standardSize: null,
     score: 30,
   };
 
@@ -434,8 +440,11 @@ const makeLaneLayout = () => ({
   whiteKeyWidthRatio: 20 / 400,
   blackKeyWidthRatio: 11 / 400,
   keyboardYRatio: 0.7,
+  topYRatio: 0.65,
   lowestPitch: 60,
   highestPitch: 64,
+  keyCount: 5,
+  standardSize: null,
   score: 30,
 });
 
@@ -510,4 +519,76 @@ test('buildNotesFromTape ignores static smoke seen by only a few frames', () => 
   }
   const notes = buildNotesFromTape(frames, { fallSpeed: 200, scanY: 150, areaTop: 0, startTime: 0, duration: 1.3 });
   assert.equal(notes.length, 0);
+});
+
+test('analyzeKeyColumns splits stacked repeated notes joined only by a dim seam', () => {
+  const width = 400;
+  const rows = 60;
+  const data = new Uint8ClampedArray(width * rows * 4);
+  // Two purple bars touching through 3 rows of dark purple shading (still coloured, but dim)
+  paint(data, width, 21, 39, 0, 20, [160, 110, 240]);
+  paint(data, width, 21, 39, 21, 23, [40, 25, 60]);
+  paint(data, width, 21, 39, 24, 45, [160, 110, 240]);
+
+  const segments = analyzeKeyColumns(data, width, rows, 0, makeLaneLayout(), { barBrightness: 240 }).filter(
+    (s) => s.pitch === 60
+  );
+  assert.equal(segments.length, 2, 'The dim seam between stacked bars must split them');
+});
+
+test('analyzeKeyColumns reads a bar whose colour is not one of the hand colours', () => {
+  const width = 400;
+  const rows = 30;
+  const data = new Uint8ClampedArray(width * rows * 4);
+  paint(data, width, 41, 59, 0, 20, [60, 200, 70]); // green bar while the hands are set to blue/purple
+  const segments = analyzeKeyColumns(data, width, rows, 0, makeLaneLayout(), {
+    colorOptions: {
+      colorMode: 'two-colors',
+      hand1Color: { r: 168, g: 85, b: 247 },
+      hand2Color: { r: 56, g: 131, b: 216 },
+      splitPitch: 60,
+    },
+  });
+  assert.deepEqual(
+    segments.map((s) => s.pitch),
+    [62]
+  );
+});
+
+test('buildNotesFromTape keeps very short gaps between repeated notes despite a fall-speed error', () => {
+  // Three notes separated by 0.04 s gaps on one key; the frames are read with a 4% speed error,
+  // which blurs the tape by more than the gaps
+  const trueSpeed = 120;
+  const usedSpeed = trueSpeed * 1.04;
+  const scanY = 330;
+  const areaTop = 30;
+  const notes = [
+    [1.0, 1.29],
+    [1.33, 1.58],
+    [1.62, 1.85],
+  ];
+  const frames: FrameRecord[] = [];
+  for (let i = 0; i <= 120; i++) {
+    const t = i / 30;
+    const segments = [];
+    for (const [on, off] of notes) {
+      const yBottom = scanY - (on - t) * trueSpeed;
+      const yTop = scanY - (off - t) * trueSpeed;
+      const top = Math.max(areaTop, yTop);
+      const bottom = Math.min(scanY, yBottom);
+      if (bottom - top < 3) continue;
+      segments.push({
+        pitch: 64,
+        yTop: Math.round(top),
+        yBottom: Math.round(bottom),
+        touchesTop: yTop <= areaTop,
+        touchesBottom: yBottom >= scanY,
+        rightVotes: 5,
+        leftVotes: 0,
+      });
+    }
+    frames.push({ t, segments });
+  }
+  const out = buildNotesFromTape(frames, { fallSpeed: usedSpeed, scanY, areaTop, startTime: 0, duration: 4 });
+  assert.equal(out.length, 3, `expected 3 notes, got ${out.map((n) => `${n.startSec.toFixed(2)}-${n.endSec.toFixed(2)}`).join(' ')}`);
 });

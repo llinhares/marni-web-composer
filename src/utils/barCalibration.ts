@@ -25,6 +25,11 @@ export interface BarCalibration {
   edgeBrightness: number;
   /** Bar colours found in the video, most common first (at most 2). */
   barHues: BarHue[];
+  /**
+   * Typical brightness (max channel) of bar pixels, 0 when unknown. Pixels much darker than this are
+   * not bar body: shading between stacked repeated notes, outlines, background showing through.
+   */
+  barBrightness: number;
 }
 
 export interface FrameSample {
@@ -102,6 +107,7 @@ export function calibrateBars(samples: FrameSample[], whiteKeyPx: number): BarCa
     return chroma >= minChroma && max >= 80 && chroma / max >= 0.25 && hueDist(hueOf(r, g, b), hue) <= 25;
   };
   const bins = new Float64Array(36);
+  const barBrightHist = new Float64Array(256);
   const binX = new Float64Array(36);
   const binRgb = Array.from({ length: 36 }, () => [0, 0, 0]);
   for (const s of samples) {
@@ -124,6 +130,7 @@ export function calibrateBars(samples: FrameSample[], whiteKeyPx: number): BarCa
           const b = sumB / len;
           const bin = Math.floor(hueOf(r, g, b) / 10) % 36;
           bins[bin] += len;
+          barBrightHist[Math.round(Math.max(r, g, b))] += len;
           binX[bin] += ((runStart + end) / 2 / s.width) * len;
           binRgb[bin][0] += r * len;
           binRgb[bin][1] += g * len;
@@ -194,7 +201,19 @@ export function calibrateBars(samples: FrameSample[], whiteKeyPx: number): BarCa
       });
     }
   }
-  return { minChroma, edgeBrightness, barHues };
+  let barBrightness = 0;
+  const barTotal = barBrightHist.reduce((a, v) => a + v, 0);
+  if (barTotal > 0) {
+    let accBar = 0;
+    for (let v = 0; v < 256; v++) {
+      accBar += barBrightHist[v];
+      if (accBar >= barTotal * 0.5) {
+        barBrightness = v;
+        break;
+      }
+    }
+  }
+  return { minChroma, edgeBrightness, barHues, barBrightness };
 }
 
 export interface ResolvedColors {

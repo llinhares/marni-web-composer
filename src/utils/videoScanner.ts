@@ -1,6 +1,22 @@
 import type { Note } from '../types/music.ts';
 import { calibrateBars, resolveHandColors, type BarCalibration, type FrameSample } from './barCalibration.ts';
 import { TICKS_PER_BEAT } from '../types/music.ts';
+import {
+  collectKeyboardRows,
+  describeKeyboard,
+  detectKeyboard,
+  detectKeyboardLayoutFromRow,
+  detectKeyboardLayoutInFrame,
+  keyboardRange,
+  keyboardRowMatches,
+  mergeKeyboardRows,
+  shiftLayoutOctave,
+  suggestReadingLine,
+  whiteIndexToPitch,
+  type KeyboardKey,
+  type KeyboardLayout,
+  type KeyboardRowGeometry,
+} from './keyboardDetection.ts';
 
 export type RGB = { r: number; g: number; b: number };
 
@@ -35,7 +51,7 @@ export interface KeyHit {
 }
 
 export interface VideoScanOptions {
-  scanlineYRatio?: number; // 0.0 to 1.0 - bottom of the note-reading area (just above key glow/smoke)
+  scanlineYRatio?: number; // 0.0 to 1.0 - bottom of the note-reading area; omitted = placed above the keys automatically
   minPitch?: number; // fallback mode only
   maxPitch?: number; // fallback mode only
   keyboardXStartRatio?: number; // fallback mode only (no keyboard detected)
@@ -64,6 +80,7 @@ export interface VideoScanResult {
   };
   totalFramesScanned: number;
   keyboardLayout: KeyboardLayout | null; // detected (unshifted) layout
+  readingLineRatio: number; // bottom of the reading area actually used (0..1 of frame height)
   sampleFps: number; // analysed frames per second of media
   fallSpeedPxPerSec: number | null; // estimated bar fall speed (working-canvas px/s)
   method: 'tape' | 'scanline';
@@ -216,339 +233,23 @@ export function xToPianoPitch(
 }
 
 // ---------------------------------------------------------------------------
-// Keyboard detection (reads the real keyboard drawn in the video)
+// Keyboard detection (reads the real keyboard drawn in the video): see keyboardDetection.ts
 // ---------------------------------------------------------------------------
 
-export interface KeyboardKey {
-  pitch: number;
-  isBlack: boolean;
-  centerRatio: number; // 0..1 of the full frame width
-  widthRatio: number;
-}
-
-export interface KeyboardLayout {
-  keys: KeyboardKey[];
-  whiteKeyWidthRatio: number;
-  blackKeyWidthRatio: number;
-  keyboardYRatio: number; // row (0..1 of frame height) where the black keys were measured
-  lowestPitch: number;
-  highestPitch: number;
-  score: number; // number of black keys that fit the piano pattern
-}
-
-const WHITE_KEY_SEMITONES = [0, 2, 4, 5, 7, 9, 11];
-// Boundaries (counted in white keys from a C) that hold a black key: C#, D#, F#, G#, A#
-const BLACK_KEY_BOUNDARIES = new Set([1, 2, 4, 5, 6]);
-const mod7 = (v: number) => ((v % 7) + 7) % 7;
-
-/** White-key index (C0 = 0, D0 = 1 ... C4 = 28) to MIDI pitch. */
-export function whiteIndexToPitch(whiteIndex: number): number {
-  const octave = Math.floor(whiteIndex / 7);
-  return 12 * (octave + 1) + WHITE_KEY_SEMITONES[mod7(whiteIndex)];
-}
-
-function percentileOf(sorted: ArrayLike<number>, p: number): number {
-  if (sorted.length === 0) return 0;
-  const idx = Math.min(sorted.length - 1, Math.max(0, Math.round(p * (sorted.length - 1))));
-  return sorted[idx];
-}
-
-/**
- * Detects the piano keyboard from a single pixel row crossing the black keys.
- * Black keys are located as dark neutral runs; the 2-3-2-3 grouping of their spacing
- * reveals exactly which keys are C#/D# and F#/G#/A#, so every key position comes from
- * the video itself (works for 88, 76, 61, 49-key or cropped/zoomed keyboards).
- */
-export function detectKeyboardLayoutFromRow(
-  rowData: Uint8ClampedArray,
-  width: number,
-  keyboardYRatio = 0
-): KeyboardLayout | null {
-  if (width < 120) return null;
-
-  const lum = new Float32Array(width);
-  const neutral = new Uint8Array(width);
-  for (let px = 0; px < width; px++) {
-    const i = px * 4;
-    const r = rowData[i];
-    const g = rowData[i + 1];
-    const b = rowData[i + 2];
-    lum[px] = 0.299 * r + 0.587 * g + 0.114 * b;
-    neutral[px] = Math.max(r, g, b) - Math.min(r, g, b) < 60 ? 1 : 0;
-  }
-
-  const sortedLum = Float32Array.from(lum).sort();
-  const p10 = percentileOf(sortedLum, 0.1);
-  const p90 = percentileOf(sortedLum, 0.9);
-  if (p90 - p10 < 80 || p90 < 150) return null;
-  const threshold = (p10 + p90) / 2;
-
-  // Dark neutral runs (pressed keys are colored, so they are excluded and treated as "missing")
-  const runs: Array<{ start: number; end: number }> = [];
-  let runStart = -1;
-  for (let px = 0; px <= width; px++) {
-    const dark = px < width && lum[px] < threshold && neutral[px] === 1;
-    if (dark) {
-      if (runStart < 0) runStart = px;
-    } else if (runStart >= 0) {
-      runs.push({ start: runStart, end: px });
-      runStart = -1;
-    }
-  }
-
-  const widths = runs
-    .map((r) => r.end - r.start)
-    .filter((w) => w >= 3)
-    .sort((a, b) => a - b);
-  if (widths.length < 8) return null;
-  const blackW = percentileOf(widths, 0.5);
-
-  const candidates = runs.filter((r) => {
-    const w = r.end - r.start;
-    return w >= Math.max(2, blackW * 0.5) && w <= blackW * 1.6;
-  });
-  if (candidates.length < 8) return null;
-
-  const centers = candidates.map((r) => (r.start + r.end) / 2);
-  const gaps: number[] = [];
-  for (let i = 0; i < centers.length - 1; i++) gaps.push(centers[i + 1] - centers[i]);
-  const sortedGaps = [...gaps].sort((a, b) => a - b);
-  // 3 of every 5 gaps are one white key wide (C#-D#, F#-G#, G#-A#)
-  const unitGuess = percentileOf(sortedGaps, 0.3);
-  if (unitGuess < blackW * 1.15) return null;
-
-  const units = gaps.map((g) => Math.max(1, Math.round(g / unitGuess)));
-  const unitEstimate = gaps.reduce((s, g) => s + g, 0) / units.reduce((s, u) => s + u, 0);
-
-  const boundaries = [0];
-  for (const u of units) boundaries.push(boundaries[boundaries.length - 1] + u);
-
-  let bestShift = 0;
-  let bestAligned = -1;
-  for (let k = 0; k < 7; k++) {
-    let aligned = 0;
-    for (const b of boundaries) if (BLACK_KEY_BOUNDARIES.has(mod7(b + k))) aligned++;
-    if (aligned > bestAligned) {
-      bestAligned = aligned;
-      bestShift = k;
-    }
-  }
-  if (bestAligned < 8 || bestAligned / centers.length < 0.8) return null;
-
-  // Least-squares fit: x = origin + whiteW * boundaryIndex
-  let n = 0;
-  let sB = 0;
-  let sX = 0;
-  let sBB = 0;
-  let sBX = 0;
-  boundaries.forEach((b, i) => {
-    const B = b + bestShift;
-    if (!BLACK_KEY_BOUNDARIES.has(mod7(B))) return;
-    const x = centers[i];
-    n++;
-    sB += B;
-    sX += x;
-    sBB += B * B;
-    sBX += B * x;
-  });
-  const denom = n * sBB - sB * sB;
-  if (n < 8 || denom === 0) return null;
-  const whiteW = (n * sBX - sB * sX) / denom;
-  const origin = (sX - whiteW * sB) / n;
-  if (!(whiteW > 0) || Math.abs(whiteW - unitEstimate) / unitEstimate > 0.2) return null;
-
-  let residual = 0;
-  boundaries.forEach((b, i) => {
-    const B = b + bestShift;
-    if (BLACK_KEY_BOUNDARIES.has(mod7(B))) residual += Math.abs(centers[i] - (origin + whiteW * B));
-  });
-  residual /= n;
-  if (residual > whiteW * 0.25) return null;
-
-  // Visible white keys
-  const jMin = Math.ceil(-origin / whiteW - 0.3);
-  const jMax = Math.floor((width - origin) / whiteW + 0.3) - 1;
-  if (jMax - jMin + 1 < 14) return null;
-
-  // Absolute octave: center the keyboard around E4/F4 (true for 88, 76, 61 and 49-key boards).
-  // The user can still correct it with the octave shift control.
-  const centerJ = (jMin + jMax) / 2;
-  let octaveOffset = Math.round((30.5 - centerJ) / 7);
-  while (jMin + 7 * octaveOffset < 0) octaveOffset++;
-  while (jMax + 7 * octaveOffset > 67) octaveOffset--;
-
-  // Map each black key pitch to its measured candidate center (or fitted line)
-  const blackKeyX = new Map<number, number>();
-  for (let B = jMin + 1; B <= jMax; B++) {
-    if (!BLACK_KEY_BOUNDARIES.has(mod7(B))) continue;
-    const pitch = whiteIndexToPitch(B - 1 + 7 * octaveOffset) + 1;
-    if (pitch < 21 || pitch > 108) continue;
-    const fittedX = origin + whiteW * B;
-    let bestDist = whiteW * 0.35;
-    let chosenX = fittedX;
-    for (const cx of centers) {
-      const d = Math.abs(cx - fittedX);
-      if (d < bestDist) {
-        bestDist = d;
-        chosenX = cx;
-      }
-    }
-    blackKeyX.set(pitch, chosenX);
-  }
-
-  // Generate 88 waterfall lane centers (pitches 21 to 108)
-  const keys: KeyboardKey[] = [];
-  for (let p = 21; p <= 108; p++) {
-    const isBlack = [1, 3, 6, 8, 10].includes(p % 12);
-    let cx = 0;
-    if (isBlack) {
-      cx = blackKeyX.get(p) ?? (origin + whiteW * ((p % 12) + 7 * Math.floor((p - 12) / 12)));
-    } else {
-      const note = p % 12;
-      switch (note) {
-        case 0: cx = (blackKeyX.get(p + 1) ?? 0) - 0.55 * whiteW; break;
-        case 2: cx = ((blackKeyX.get(p - 1) ?? 0) + (blackKeyX.get(p + 1) ?? 0)) / 2; break;
-        case 4: cx = (blackKeyX.get(p - 1) ?? 0) + 0.55 * whiteW; break;
-        case 5: cx = (blackKeyX.get(p + 1) ?? 0) - 0.55 * whiteW; break;
-        case 7: cx = ((blackKeyX.get(p - 1) ?? 0) + (blackKeyX.get(p + 1) ?? 0)) / 2; break;
-        case 9:
-          if (p === 21) cx = (blackKeyX.get(22) ?? 0) - 0.55 * whiteW;
-          else cx = ((blackKeyX.get(p - 1) ?? 0) + (blackKeyX.get(p + 1) ?? 0)) / 2;
-          break;
-        case 11:
-          if (p === 23) cx = (blackKeyX.get(22) ?? 0) + 0.55 * whiteW;
-          else cx = (blackKeyX.get(p - 1) ?? 0) + 0.55 * whiteW;
-          break;
-      }
-      if (p === 108) cx = (blackKeyX.get(106) ?? 0) + 1.1 * whiteW;
-    }
-    keys.push({
-      pitch: p,
-      isBlack,
-      centerRatio: cx / width,
-      widthRatio: (isBlack ? blackW : whiteW) / width,
-    });
-  }
-
-  return {
-    keys,
-    whiteKeyWidthRatio: whiteW / width,
-    blackKeyWidthRatio: blackW / width,
-    keyboardYRatio,
-    lowestPitch: 21,
-    highestPitch: 108,
-    score: bestAligned,
-  };
-}
-
-/**
- * Searches the rows below `minYRatio` of a video frame for the piano keyboard and returns the best layout.
- */
-/**
- * Picks the real keyboard among per-row detections. Black keys are tall, so the true keyboard gives
- * the same geometry on many consecutive rows; note-name letters printed on the white keys, labels
- * and other regular patterns only span a few rows. Detections are grouped by geometry (key width and
- * position of middle C); the group covering the most rows wins and its middle row is used.
- */
-export function pickKeyboardLayout(layouts: KeyboardLayout[]): KeyboardLayout | null {
-  if (layouts.length === 0) return null;
-  const c4 = (l: KeyboardLayout) => l.keys.find((k) => k.pitch === 60)?.centerRatio ?? 0;
-  const same = (a: KeyboardLayout, b: KeyboardLayout) =>
-    Math.abs(a.whiteKeyWidthRatio - b.whiteKeyWidthRatio) <= a.whiteKeyWidthRatio * 0.04 &&
-    Math.abs(c4(a) - c4(b)) <= a.whiteKeyWidthRatio * 0.3;
-
-  let bestGroup: KeyboardLayout[] = [];
-  let bestScore = -1;
-  for (const candidate of layouts) {
-    const group = layouts.filter((l) => same(candidate, l));
-    const score = group.length * 1000 + group.reduce((sum, l) => sum + l.score, 0);
-    if (score > bestScore) {
-      bestScore = score;
-      bestGroup = group;
-    }
-  }
-  const sorted = [...bestGroup].sort((a, b) => a.keyboardYRatio - b.keyboardYRatio);
-  const middle = sorted[Math.floor(sorted.length / 2)];
-  // The middle row of the black keys, with the best-fitting geometry among the group
-  const bestFit = bestGroup.reduce((a, b) => (b.score > a.score ? b : a));
-  return { ...bestFit, keyboardYRatio: middle.keyboardYRatio };
-}
-
-export function detectKeyboardLayoutInFrame(
-  ctx: CanvasRenderingContext2D,
-  source: CanvasImageSource,
-  width: number,
-  height: number,
-  minYRatio = 0.4
-): KeyboardLayout | null {
-  ctx.drawImage(source, 0, 0, width, height);
-  const startY = Math.max(0, Math.min(height - 1, Math.floor(height * minYRatio)));
-  const rows = height - startY;
-  if (rows <= 0) return null;
-
-  const data = ctx.getImageData(0, startY, width, rows).data;
-  const step = Math.max(1, Math.round(height * 0.006));
-  const found: KeyboardLayout[] = [];
-
-  for (let y = 0; y < rows; y += step) {
-    const row = data.subarray(y * width * 4, (y + 1) * width * 4);
-    const layout = detectKeyboardLayoutFromRow(row, width, (startY + y) / height);
-    if (layout) found.push(layout);
-  }
-  return pickKeyboardLayout(found);
-}
-
-/**
- * Checks that the detected keyboard is still on screen in a frame, using the pixel row where its
- * black keys were measured: black keys must be dark, white keys bright, pressed keys colored.
- * Intros, outros, title cards and scene cuts fail the check and are not read as notes.
- */
-export function keyboardRowMatches(rowData: Uint8ClampedArray, width: number, layout: KeyboardLayout): boolean {
-  const samples: Array<{ isBlack: boolean; lum: number; lit: boolean }> = [];
-  for (const key of layout.keys) {
-    const x = Math.round(key.centerRatio * width);
-    if (x < 0 || x >= width) continue;
-    const i = x * 4;
-    const r = rowData[i];
-    const g = rowData[i + 1];
-    const b = rowData[i + 2];
-    const maxC = Math.max(r, g, b);
-    const sat = maxC > 0 ? (maxC - Math.min(r, g, b)) / maxC : 0;
-    samples.push({ isBlack: key.isBlack, lum: 0.299 * r + 0.587 * g + 0.114 * b, lit: sat > 0.3 && maxC > 80 });
-  }
-  if (samples.length < 12) return false;
-
-  const lit = samples.filter((s) => s.lit).length;
-  if (lit > samples.length * 0.4) return false; // colored screen, not a keyboard with a few keys pressed
-
-  const median = (vals: number[]) => {
-    const sorted = [...vals].sort((a, b) => a - b);
-    return sorted.length ? sorted[sorted.length >> 1] : 0;
-  };
-  const whiteLum = median(samples.filter((s) => !s.isBlack && !s.lit).map((s) => s.lum));
-  const blackLum = median(samples.filter((s) => s.isBlack && !s.lit).map((s) => s.lum));
-  // Key glow can lift black keys to mid grey, so the test is relative to this frame's contrast
-  if (whiteLum - blackLum < 40) return false;
-  const threshold = (whiteLum + blackLum) / 2;
-
-  let matching = 0;
-  for (const s of samples) {
-    if (s.lit || (s.isBlack ? s.lum < threshold : s.lum >= threshold)) matching++;
-  }
-  return matching >= samples.length * 0.8;
-}
-
-/** Transposes a detected layout by whole octaves. */
-export function shiftLayoutOctave(layout: KeyboardLayout, octaves: number): KeyboardLayout {
-  if (!octaves) return layout;
-  const delta = 12 * octaves;
-  return {
-    ...layout,
-    keys: layout.keys.map((k) => ({ ...k, pitch: k.pitch + delta })),
-    lowestPitch: layout.lowestPitch + delta,
-    highestPitch: layout.highestPitch + delta,
-  };
-}
+export {
+  collectKeyboardRows,
+  describeKeyboard,
+  detectKeyboard,
+  detectKeyboardLayoutFromRow,
+  detectKeyboardLayoutInFrame,
+  keyboardRange,
+  keyboardRowMatches,
+  mergeKeyboardRows,
+  shiftLayoutOctave,
+  suggestReadingLine,
+  whiteIndexToPitch,
+};
+export type { KeyboardKey, KeyboardLayout, KeyboardRowGeometry };
 
 // ---------------------------------------------------------------------------
 // Pixel classification
@@ -570,11 +271,13 @@ function makePixelClassifier(
   minSaturation: number,
   brightnessThreshold: number,
   colorOptions?: ColorOptions,
-  minChroma = 16
+  minChroma = 16,
+  barBrightness = 0
 ): PixelClassifier {
   return {
     minSat: Math.min(minSaturation, 0.22),
-    minBright: Math.min(brightnessThreshold, 40),
+    // Well below the measured bar brightness = the dark seam between stacked bars, not bar body
+    minBright: Math.max(Math.min(brightnessThreshold, 40), barBrightness * 0.45),
     minChroma: Math.max(16, minChroma),
     h1: colorOptions?.hand1Color
       ? rgbToHsl(colorOptions.hand1Color.r, colorOptions.hand1Color.g, colorOptions.hand1Color.b).h
@@ -599,23 +302,13 @@ function classifyPixel(r: number, g: number, b: number, c: PixelClassifier): num
 
   const h = rgbToHsl(r, g, b).h;
 
-  if (c.h1 !== null || c.h2 !== null) {
-    const matchH1 = c.h1 !== null && hueDistance(h, c.h1) <= 38;
-    const matchH2 = c.h2 !== null && hueDistance(h, c.h2) <= 38;
-    if (matchH1 || matchH2) {
-      return PIXEL_NOTE;
-    }
-    const isTargetFlame =
-      (c.h1 !== null && c.h1 >= 15 && c.h1 <= 60) || (c.h2 !== null && c.h2 >= 15 && c.h2 <= 60);
-    if (!isTargetFlame && h >= 18 && h <= 55) {
-      return PIXEL_DARK;
-    }
-    return maxC >= 140 ? PIXEL_BRIGHT : PIXEL_DARK;
-  }
-
-  if (h >= 18 && h <= 55) {
-    return PIXEL_DARK;
-  }
+  // The hand colours only decide left/right later: a bar of any colour is still a note (videos often
+  // shade black-key bars differently, and a colour missing from the calibration frames must not vanish)
+  if (c.h1 !== null && hueDistance(h, c.h1) <= 38) return PIXEL_NOTE;
+  if (c.h2 !== null && hueDistance(h, c.h2) <= 38) return PIXEL_NOTE;
+  // Amber flames/sparks over the keys, unless a hand is drawn in that colour
+  const amberTarget = (c.h1 !== null && c.h1 >= 15 && c.h1 <= 60) || (c.h2 !== null && c.h2 >= 15 && c.h2 <= 60);
+  if (!amberTarget && h >= 18 && h <= 55) return PIXEL_DARK;
   if (sat >= c.minSat && delta >= 20) return PIXEL_NOTE;
   return maxC >= 140 ? PIXEL_BRIGHT : PIXEL_DARK;
 }
@@ -1007,6 +700,8 @@ export function analyzeKeyColumns(
     colorOptions?: ColorOptions;
     bridgeRows?: number;
     minChroma?: number;
+    /** Typical bar brightness (calibrated): much darker pixels are not bar body. */
+    barBrightness?: number;
     /** Brightness of hollow-bar outlines (calibrated); omitted = hollow bars are not read. */
     edgeBrightness?: number;
   } = {}
@@ -1017,7 +712,8 @@ export function analyzeKeyColumns(
     opts.minSaturation ?? 0.2,
     opts.brightnessThreshold ?? 38,
     opts.colorOptions,
-    opts.minChroma
+    opts.minChroma,
+    opts.barBrightness
   );
   const bridgeRows = opts.bridgeRows ?? 14;
   const wPx = layout.whiteKeyWidthRatio * width;
@@ -1318,6 +1014,7 @@ export function detectKeyHitsFromVideoContext(
       colorOptions,
       bridgeRows: 2,
       minChroma: o.calibration?.minChroma,
+      barBrightness: o.calibration?.barBrightness,
       edgeBrightness: o.calibration?.edgeBrightness,
     });
     return segmentsToHits(
@@ -1422,6 +1119,10 @@ export function estimateFallSpeed(frames: FrameRecord[], maxSpeed: number): numb
  * reading line at t + (scanY - y) / speed. Every frame votes on that tape and a time bin is active only
  * when most frames that saw it agree, which removes particles, letters, static overlays and frame drops,
  * while the small dark gaps between repeated notes are preserved.
+ *
+ * Frames also vote on where bars begin and end. A tiny error in the measured fall speed blurs the
+ * tape slightly, which can close a very short gap between repeated notes; when many frames agree on
+ * an end followed by a new start inside one coloured run, the run is split there.
  */
 export function buildNotesFromTape(
   frames: FrameRecord[],
@@ -1449,7 +1150,10 @@ export function buildNotesFromTape(
   const blindAhead = (scanY - areaBottom) / fallSpeed; // tape between the area bottom and the reading line
   const totalBins = Math.ceil((duration + lookahead) / BIN) + 2;
   const observed = new Uint16Array(totalBins);
-  const tapes = new Map<number, { colored: Uint16Array; right: Uint16Array; left: Uint16Array }>();
+  const tapes = new Map<
+    number,
+    { colored: Uint16Array; right: Uint16Array; left: Uint16Array; onsets: Uint16Array; offsets: Uint16Array }
+  >();
 
   const toBin = (sec: number) => Math.max(0, Math.min(totalBins - 1, Math.round(sec / BIN)));
 
@@ -1470,8 +1174,19 @@ export function buildNotesFromTape(
           colored: new Uint16Array(totalBins),
           right: new Uint16Array(totalBins),
           left: new Uint16Array(totalBins),
+          onsets: new Uint16Array(totalBins),
+          offsets: new Uint16Array(totalBins),
         };
         tapes.set(s.pitch, tape);
+      }
+      // Visible bar edges (not cut by the borders of the reading area)
+      if (!s.touchesBottom) {
+        const ob = toBin(tauBottom);
+        if (ob >= b0 && tape.onsets[ob] < 65535) tape.onsets[ob]++;
+      }
+      if (!s.touchesTop) {
+        const fb = toBin(tauTop);
+        if (fb <= b1 && tape.offsets[fb] < 65535) tape.offsets[fb]++;
       }
       const isRight = voteHand(s.rightVotes, s.leftVotes, s.pitch, splitPitch) === 'right';
       const sb = Math.max(b0, toBin(tauBottom));
@@ -1486,6 +1201,39 @@ export function buildNotesFromTape(
       }
     }
   }
+
+  // Bar edges agreed on by many frames (votes summed over +-20 ms, local maximum)
+  const edgeScore = (votes: Uint16Array, b: number) => {
+    let v = 0;
+    for (let k = Math.max(0, b - 2); k <= Math.min(totalBins - 1, b + 2); k++) v += votes[k];
+    return v;
+  };
+  const strongEdge = (votes: Uint16Array, b: number) => {
+    const v = edgeScore(votes, b);
+    return v >= Math.max(3, observed[b] * 0.3) && v >= edgeScore(votes, b - 1) && v > edgeScore(votes, b + 1);
+  };
+  // Splits a coloured run [startBin, endBin] where frames saw a bar end followed by a new bar start
+  const splitRun = (tape: { onsets: Uint16Array; offsets: Uint16Array }, startBin: number, endBin: number) => {
+    const parts: Array<[number, number]> = [];
+    let cur = startBin;
+    for (let b = startBin + 4; b <= endBin - 3; b++) {
+      if (!strongEdge(tape.onsets, b)) continue;
+      let end = -1;
+      let best = 0;
+      for (let o = Math.max(cur + 3, b - 15); o < b; o++) {
+        if (strongEdge(tape.offsets, o) && edgeScore(tape.offsets, o) > best) {
+          best = edgeScore(tape.offsets, o);
+          end = o;
+        }
+      }
+      if (end < 0) continue;
+      parts.push([cur, end]);
+      cur = b;
+      b += 3;
+    }
+    parts.push([cur, endBin]);
+    return parts;
+  };
 
   const notes: VisualNoteEvent[] = [];
   for (const [pitch, tape] of tapes) {
@@ -1515,17 +1263,19 @@ export function buildNotesFromTape(
         gapBins++;
         if (gapBins > 1 || b >= totalBins) {
           const endBin = b - gapBins;
-          const startSec = start * BIN;
-          const endSec = endBin * BIN;
-          if (endSec - startSec >= 0.03 && startSec < duration) {
-            const hand = voteHand(rv, lv, pitch, splitPitch);
-            notes.push({
-              pitch,
-              startSec,
-              endSec,
-              hand,
-              color: hand === 'right' ? hand1Color : hand2Color,
-            });
+          const hand = voteHand(rv, lv, pitch, splitPitch);
+          for (const [sb, eb] of splitRun(tape, start, endBin)) {
+            const startSec = sb * BIN;
+            const endSec = eb * BIN;
+            if (endSec - startSec >= 0.03 && startSec < duration) {
+              notes.push({
+                pitch,
+                startSec,
+                endSec,
+                hand,
+                color: hand === 'right' ? hand1Color : hand2Color,
+              });
+            }
           }
           start = -1;
           gapBins = 0;
@@ -1621,17 +1371,20 @@ type FrameCallbackHost = {
 
 /**
  * Scans the video inside [startTime, endTime]:
- * 1. Detects the real keyboard (or uses the provided layout) to know where every key is.
+ * 1. Samples frames across the selection to find the real keyboard (or uses the provided layout),
+ *    place the reading line above the keys and their glow, and measure the bar colours.
  * 2. Plays the video muted at an accelerated rate and analyses every presented frame using
- *    requestVideoFrameCallback (exact media timestamps), with polling/stepped-seek fallbacks.
- * 3. Reconstructs the notes with the tape model (falls back to scanline tracking if needed).
+ *    requestVideoFrameCallback (exact media timestamps). Stretches the browser skipped (background
+ *    tab, slow decoder) are filled afterwards by seeking, so every part of the song is read.
+ * 3. Reconstructs the notes with the tape model, timed when each bar reaches the keys
+ *    (falls back to scanline tracking when no keyboard is found).
  */
 export async function scanVideoFrames(
   videoElement: HTMLVideoElement,
   options: VideoScanOptions = {}
 ): Promise<VideoScanResult> {
   const {
-    scanlineYRatio = 0.64,
+    scanlineYRatio,
     minPitch = 21,
     maxPitch = 108,
     keyboardXStartRatio = 0.0,
@@ -1671,16 +1424,16 @@ export async function scanVideoFrames(
     throw new Error('Não foi possível inicializar contexto 2D de renderização.');
   }
 
-  const scanY = Math.max(12, Math.min(canvasHeight - 2, Math.round(canvasHeight * scanlineYRatio)));
-  // Analysis window: from below the title area down to the reading line (which the user places above
-  // the key glow). Amber flames are rejected by hue, smoke/particles by the tape majority vote.
+  // Analysis window: from below the title area down to the reading line. Set once the keyboard is
+  // known; amber flames are rejected by hue, smoke/particles by the tape majority vote.
   const areaTop = Math.max(0, Math.round(canvasHeight * 0.12));
-  const areaBottom = Math.max(areaTop + 20, scanY - 3);
-  const areaRows = areaBottom - areaTop + 1;
+  let readingLineRatio = scanlineYRatio ?? 0.64;
+  let playY = Math.round(canvasHeight * readingLineRatio); // where a bar means "key pressed"
+  let areaBottom = Math.max(areaTop + 20, playY - 3);
+  let areaRows = areaBottom - areaTop + 1;
   const bridgeRows = Math.max(8, Math.round(canvasHeight * 0.03));
   // Replaced by the calibrated values once the sample frames have been measured
   let colorOptions: ColorOptions = { colorMode, hand1Color, hand2Color, splitPitch };
-  let minChroma = 16;
   let calibration: BarCalibration | null = null;
   let colorsAdjusted = false;
 
@@ -1693,16 +1446,16 @@ export async function scanVideoFrames(
   let lastProcessedTime = startCrop;
   let lastUiUpdate = 0;
 
-  const emitUi = (t: number, hits: KeyHit[]) => {
+  const emitUi = (t: number, hits: KeyHit[], stage?: string) => {
     const now = performance.now();
     if (now - lastUiUpdate < 100) return;
     lastUiUpdate = now;
     onFrameDetections?.(hits, t);
     const p = Math.max(0, Math.min(1, (t - startCrop) / duration));
-    onProgress?.(p, `Lendo barras no vídeo (${Math.round(p * 100)}%) • ${framesScanned} quadros analisados...`);
+    onProgress?.(p, stage ?? `Lendo barras no vídeo (${Math.round(p * 100)}%) • ${framesScanned} quadros analisados...`);
   };
 
-  const processFrame = (t: number, dt: number) => {
+  const processFrame = (t: number, dt: number, stage?: string) => {
     framesScanned++;
     lastProcessedTime = t;
     let hits: KeyHit[];
@@ -1711,8 +1464,7 @@ export async function scanVideoFrames(
       const keyRow = scanCtx.getImageData(0, keyboardRowY, canvasWidth, 1).data;
       if (!keyboardRowMatches(keyRow, canvasWidth, layout)) {
         // Keyboard not on screen (intro/outro/cut): this frame saw nothing of the tape
-        tracker.track(t - startCrop, dt, []);
-        emitUi(t, []);
+        emitUi(t, [], stage);
         return;
       }
       const data = scanCtx.getImageData(0, areaTop, canvasWidth, areaRows).data;
@@ -1721,7 +1473,8 @@ export async function scanVideoFrames(
         brightnessThreshold,
         colorOptions,
         bridgeRows,
-        minChroma,
+        minChroma: calibration?.minChroma,
+        barBrightness: calibration?.barBrightness,
         edgeBrightness: calibration?.edgeBrightness,
       });
       frames.push({ t, segments });
@@ -1732,7 +1485,7 @@ export async function scanVideoFrames(
       );
     } else {
       hits = detectKeyHitsFromVideoContext(scanCtx, videoElement, canvasWidth, canvasHeight, {
-        scanlineYRatio,
+        scanlineYRatio: readingLineRatio,
         keyboardXStartRatio,
         keyboardXEndRatio,
         minPitch,
@@ -1745,9 +1498,9 @@ export async function scanVideoFrames(
         splitPitch,
         layout: null,
       });
+      tracker.track(t - startCrop, dt, hits);
     }
-    tracker.track(t - startCrop, dt, hits);
-    emitUi(t, hits);
+    emitUi(t, hits, stage);
   };
 
   const seekAndWait = async (targetTime: number, maxWaitMs = 500) => {
@@ -1846,39 +1599,42 @@ export async function scanVideoFrames(
   videoElement.muted = true;
 
   try {
-    // Sample frames across the selection: find the keyboard (unless given) and measure the video
+    // 1. Sample frames across the selection: keyboard, reading line and colours of this video
     onProgress?.(0, baseLayout ? 'Analisando as cores do vídeo...' : 'Procurando o teclado no vídeo...');
-    const perFrame: KeyboardLayout[] = [];
-    const samples: FrameSample[] = [];
-    for (let i = 0; i < 6; i++) {
-      await seekAndWait(startCrop + (duration * (i + 0.5)) / 6, 900);
-      if (!baseLayout) {
-        const found = detectKeyboardLayoutInFrame(
-          scanCtx,
-          videoElement,
-          canvasWidth,
-          canvasHeight,
-          Math.min(0.45, scanlineYRatio * 0.75)
-        );
-        if (found) perFrame.push(found);
-      } else {
-        scanCtx.drawImage(videoElement, 0, 0, canvasWidth, canvasHeight);
-      }
-      samples.push({ data: scanCtx.getImageData(0, areaTop, canvasWidth, areaRows).data, width: canvasWidth, rows: areaRows });
+    const sampleFrames: Uint8ClampedArray[] = [];
+    const SAMPLE_COUNT = 8;
+    for (let i = 0; i < SAMPLE_COUNT; i++) {
+      await seekAndWait(startCrop + (duration * (i + 0.5)) / SAMPLE_COUNT, 900);
+      scanCtx.drawImage(videoElement, 0, 0, canvasWidth, canvasHeight);
+      sampleFrames.push(scanCtx.getImageData(0, 0, canvasWidth, canvasHeight).data);
     }
-    if (!baseLayout) baseLayout = pickKeyboardLayout(perFrame);
+    if (!baseLayout) baseLayout = detectKeyboard(sampleFrames, canvasWidth, canvasHeight, 0.4);
     layout = baseLayout ? shiftLayoutOctave(baseLayout, octaveShift) : null;
+
     if (layout) {
       keyboardRowY = Math.max(0, Math.min(canvasHeight - 1, Math.round(layout.keyboardYRatio * canvasHeight)));
+      // Notes start when their bar reaches the top of the keys; the reading area stops above the glow
+      playY = Math.round(layout.topYRatio * canvasHeight);
+      readingLineRatio = Math.min(
+        scanlineYRatio ?? suggestReadingLine(sampleFrames, canvasWidth, canvasHeight, layout),
+        (playY - 3) / canvasHeight
+      );
+      areaBottom = Math.max(areaTop + 20, Math.round(canvasHeight * readingLineRatio) - 3);
+      areaRows = areaBottom - areaTop + 1;
     }
 
+    const samples: FrameSample[] = sampleFrames.map((d) => ({
+      data: d.subarray(areaTop * canvasWidth * 4, (areaTop + areaRows) * canvasWidth * 4),
+      width: canvasWidth,
+      rows: areaRows,
+    }));
     const whiteKeyPx = (layout?.whiteKeyWidthRatio ?? 1 / 52) * canvasWidth;
     calibration = calibrateBars(samples, whiteKeyPx);
-    minChroma = calibration.minChroma;
     const resolved = resolveHandColors({ colorMode, hand1Color, hand2Color }, calibration);
     colorsAdjusted = resolved.adjusted;
     colorOptions = { colorMode: resolved.colorMode, hand1Color: resolved.hand1Color, hand2Color: resolved.hand2Color, splitPitch };
 
+    // 2. Accelerated playback
     await seekAndWait(startCrop, 900);
     try {
       videoElement.playbackRate = playbackRate;
@@ -1895,10 +1651,33 @@ export async function scanVideoFrames(
     } catch {
       reachedEnd = false;
     }
+    videoElement.pause();
 
-    // Fallback: finish whatever is left with properly awaited seeks
-    if (!reachedEnd) {
-      videoElement.pause();
+    if (layout) {
+      // 3. Fill every stretch the playback skipped by seeking (each bar is seen by many frames, so a
+      //    frame every 0.1 s is plenty for the tape model)
+      const STEP = 0.1;
+      const MAX_GAP = 0.25;
+      const seen = frames.map((f) => f.t).sort((a, b) => a - b);
+      const targets: number[] = [];
+      let prev = startCrop - STEP;
+      for (const t of [...seen, endCrop + STEP]) {
+        if (t - prev > MAX_GAP) {
+          for (let x = prev + STEP; x < t - STEP / 2 && x < endCrop; x += STEP) targets.push(Math.max(startCrop, x));
+        }
+        prev = t;
+      }
+      for (let k = 0; k < targets.length; k++) {
+        await seekAndWait(targets[k], 450);
+        processFrame(
+          targets[k],
+          STEP,
+          `Completando trechos que o navegador pulou (${Math.round(((k + 1) / targets.length) * 100)}%)...`
+        );
+      }
+      frames.sort((a, b) => a.t - b.t);
+    } else if (!reachedEnd) {
+      // No keyboard: finish the scanline tracking with properly awaited seeks
       const frameInterval = 1 / Math.max(8, fps);
       const resumeStart = Math.max(startCrop, lastProcessedTime + frameInterval);
       const remainingFrames = Math.max(0, Math.floor((endCrop - resumeStart) / frameInterval));
@@ -1923,7 +1702,7 @@ export async function scanVideoFrames(
     if (fallSpeed) {
       const tapeNotes = buildNotesFromTape(frames, {
         fallSpeed,
-        scanY,
+        scanY: playY,
         areaTop,
         areaBottom,
         startTime: startCrop,
@@ -1957,6 +1736,7 @@ export async function scanVideoFrames(
     colorModeUsed: colorOptions.colorMode === 'single-color' ? 'single-color' : 'two-colors',
     totalFramesScanned: framesScanned,
     keyboardLayout: baseLayout,
+    readingLineRatio,
     sampleFps: framesScanned / duration,
     fallSpeedPxPerSec: fallSpeed,
     method,
@@ -2027,6 +1807,31 @@ export function estimateAudioVisualLag(
   if (near.length < minVotes) return { lagSec: 0, votes: near.length };
 
   return { lagSec: near.reduce((s, d) => s + d, 0) / near.length, votes: near.length };
+}
+
+/**
+ * Octave of a zoomed or cropped keyboard (the absolute octave of its visible keys is only a guess):
+ * the video notes are compared with the audio notes after whole-octave shifts. Returns the shift (in
+ * octaves) that clearly explains the audio better than the current one, or 0.
+ */
+export function estimateOctaveFromAudio(
+  audioNotes: Note[],
+  visualNotes: VisualNoteEvent[],
+  ticksPerSecond: number
+): number {
+  let best = 0;
+  let bestVotes = -1;
+  let currentVotes = 0;
+  for (const k of [-2, -1, 0, 1, 2]) {
+    const shifted = visualNotes.map((v) => ({ ...v, pitch: v.pitch + 12 * k }));
+    const { votes } = estimateAudioVisualLag(audioNotes, shifted, ticksPerSecond);
+    if (k === 0) currentVotes = votes;
+    if (votes > bestVotes) {
+      bestVotes = votes;
+      best = k;
+    }
+  }
+  return best !== 0 && bestVotes >= 12 && bestVotes >= currentVotes * 1.5 ? best : 0;
 }
 
 export interface FusionOptions {

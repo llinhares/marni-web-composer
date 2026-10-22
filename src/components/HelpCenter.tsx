@@ -167,6 +167,8 @@ const GUIDE: GuideSection[] = [
       </>,
       <>
         <b>Vídeo/Áudio para MIDI</b>: transcreve vídeos no estilo Synthesia (lendo as barras coloridas) e gravações de áudio.
+        O teclado (quantidade de teclas e extensão), a linha de leitura e as cores das mãos são detectados sozinhos;
+        em teclados parciais (vídeo com zoom) o modo Híbrido confirma a oitava pelo áudio.
       </>,
     ],
   },

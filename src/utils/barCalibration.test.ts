@@ -50,14 +50,14 @@ test('teal background behind teal bars: threshold rises above the background, sp
 });
 
 test('user colours that match the video are kept', () => {
-  const cal = { minChroma: 20, edgeBrightness: 200, barHues: [{ hue: 212, share: 0.7, meanXRatio: 0.3, color: { r: 56, g: 131, b: 216 } }, { hue: 270, share: 0.3, meanXRatio: 0.7, color: { r: 168, g: 85, b: 247 } }] };
+  const cal = { minChroma: 20, edgeBrightness: 200, barBrightness: 200, barHues: [{ hue: 212, share: 0.7, meanXRatio: 0.3, color: { r: 56, g: 131, b: 216 } }, { hue: 270, share: 0.3, meanXRatio: 0.7, color: { r: 168, g: 85, b: 247 } }] };
   const r = resolveHandColors({ colorMode: 'two-colors', hand1Color: { r: 168, g: 85, b: 247 }, hand2Color: { r: 56, g: 189, b: 248 } }, cal);
   assert.equal(r.adjusted, false);
   assert.deepEqual(r.hand1Color, { r: 168, g: 85, b: 247 });
 });
 
 test('mismatching user colours are replaced: the colour further right is the right hand', () => {
-  const cal = { minChroma: 20, edgeBrightness: 200, barHues: [{ hue: 212, share: 0.7, meanXRatio: 0.3, color: { r: 56, g: 131, b: 216 } }, { hue: 270, share: 0.3, meanXRatio: 0.7, color: { r: 168, g: 85, b: 247 } }] };
+  const cal = { minChroma: 20, edgeBrightness: 200, barBrightness: 200, barHues: [{ hue: 212, share: 0.7, meanXRatio: 0.3, color: { r: 56, g: 131, b: 216 } }, { hue: 270, share: 0.3, meanXRatio: 0.7, color: { r: 168, g: 85, b: 247 } }] };
   const r = resolveHandColors({ colorMode: 'two-colors', hand1Color: { r: 34, g: 197, b: 94 }, hand2Color: { r: 239, g: 68, b: 68 } }, cal);
   assert.equal(r.adjusted, true);
   assert.equal(r.colorMode, 'two-colors');
@@ -66,7 +66,7 @@ test('mismatching user colours are replaced: the colour further right is the rig
 });
 
 test('a single bar colour switches to one-colour mode (hands split by pitch)', () => {
-  const cal = { minChroma: 40, edgeBrightness: 200, barHues: [{ hue: 173, share: 1, meanXRatio: 0.4, color: { r: 70, g: 190, b: 175 } }] };
+  const cal = { minChroma: 40, edgeBrightness: 200, barBrightness: 200, barHues: [{ hue: 173, share: 1, meanXRatio: 0.4, color: { r: 70, g: 190, b: 175 } }] };
   const r = resolveHandColors({ colorMode: 'two-colors', hand1Color: { r: 34, g: 197, b: 94 }, hand2Color: { r: 56, g: 189, b: 248 } }, cal);
   assert.equal(r.colorMode, 'single-color');
   assert.equal(r.adjusted, true);
