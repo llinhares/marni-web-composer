@@ -23,6 +23,7 @@ const TRACK_FIELDS: (keyof Track)[] = [
   'isSolo',
   'auxSend',
   'sustainPedal',
+  'mixer',
 ];
 
 function notesEqual(a: Note[], b: Note[]): boolean {

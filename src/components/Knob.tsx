@@ -8,6 +8,7 @@ interface KnobProps {
   max?: number;
   unit?: string;
   size?: number;
+  compact?: boolean; // small label, for dense layouts like the mixer
 }
 
 export const Knob: React.FC<KnobProps> = ({
@@ -18,6 +19,7 @@ export const Knob: React.FC<KnobProps> = ({
   max = 100,
   unit = '',
   size = 64,
+  compact = false,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const startYRef = useRef(0);
@@ -61,7 +63,15 @@ export const Knob: React.FC<KnobProps> = ({
 
   return (
     <div className="flex flex-col items-center select-none text-stone-300">
-      <span className="text-xs font-medium text-amber-200/80 mb-2 uppercase tracking-wider">{label}</span>
+      <span
+        className={
+          compact
+            ? 'text-[9px] font-medium text-amber-200/80 mb-1 uppercase'
+            : 'text-xs font-medium text-amber-200/80 mb-2 uppercase tracking-wider'
+        }
+      >
+        {label}
+      </span>
       <div
         className="relative cursor-ns-resize group touch-none"
         style={{ width: size, height: size }}

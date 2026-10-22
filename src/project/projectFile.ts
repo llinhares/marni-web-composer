@@ -16,6 +16,7 @@ import type {
   Track,
 } from '../types/music.ts';
 import { BDO_INSTRUMENTS } from '../types/music.ts';
+import { sanitizeMixer } from '../audio/mixer.ts';
 
 export const PROJECT_FORMAT = 'marni-project';
 export const PROJECT_VERSION = 1;
@@ -226,6 +227,8 @@ function parseTrack(raw: unknown, index: number, usedIds: Set<string>): Track {
     notes,
   };
   if (typeof t.sustainPedal === 'boolean') track.sustainPedal = t.sustainPedal;
+  const mixer = sanitizeMixer(t.mixer);
+  if (mixer) track.mixer = mixer;
   return track;
 }
 

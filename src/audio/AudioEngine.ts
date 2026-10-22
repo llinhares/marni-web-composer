@@ -19,6 +19,17 @@ import {
   type TimelineAnchor,
 } from './scheduling.ts';
 import { sampleLibrary, pickSample, DECAYING_INSTRUMENTS, type SampleSet } from './sampleLibrary.ts';
+import { EQ_BANDS, mixerOf } from './mixer.ts';
+
+/** Per-track channel strip: input -> EQ low/mid/high -> compressor -> output (+ meter tap, FX send). */
+interface ChannelStrip {
+  input: GainNode;
+  eq: BiquadFilterNode[];
+  comp: DynamicsCompressorNode;
+  output: GainNode;
+  analyser: AnalyserNode;
+  auxConnected: boolean;
+}
 
 const LOOKAHEAD_SEC = 0.15;
 
@@ -62,6 +73,9 @@ export class AudioEngine {
   private playStartTick = 0; // notes before this tick are never played (count-in region)
   private songEnd = 0;
   private metronome = { enabled: false, beatsPerBar: 4 };
+  private strips = new Map<string, ChannelStrip>();
+  private masterAnalyser: AnalyserNode | null = null;
+  private meterBuffer = new Float32Array(512);
   private loop: { start: number; end: number } | null = null;
   private preWrapAnchor: TimelineAnchor | null = null;
   private wrapAudioTime = 0;
@@ -117,6 +131,9 @@ export class AudioEngine {
 
     this.masterGain.connect(this.masterLimiter);
     this.masterLimiter.connect(this.ctx.destination);
+    this.masterAnalyser = this.ctx.createAnalyser();
+    this.masterAnalyser.fftSize = 512;
+    this.masterLimiter.connect(this.masterAnalyser);
 
     // 2. Aux Send FX Bus
     this.auxSendBus = this.ctx.createGain();
@@ -380,7 +397,8 @@ export class AudioEngine {
     auxSend: boolean,
     pan: number,
     isPlayback = true,
-    sustain = false
+    sustain = false,
+    trackId?: string
   ): (stopTime: number) => void {
     if (!this.ctx || !this.masterGain) return () => {};
 
@@ -389,8 +407,11 @@ export class AudioEngine {
     const volFactor = (trackVolume / 100) * 0.6;
     const noteEndTime = startTime + duration;
 
-    // Connect through playbackBus for songs, or masterGain for direct auditions
-    const destinationNode = isPlayback && this.playbackBus ? this.playbackBus : this.masterGain;
+    // Song notes go through their track's channel strip (which also feeds the FX send);
+    // direct auditions go straight to the master
+    const strip = isPlayback && trackId ? this.strips.get(trackId) : undefined;
+    const destinationNode = strip ? strip.input : isPlayback && this.playbackBus ? this.playbackBus : this.masterGain;
+    if (strip) auxSend = false;
 
     const voiceGain = this.ctx.createGain();
     voiceGain.gain.setValueAtTime(0, startTime);
@@ -1025,6 +1046,7 @@ export class AudioEngine {
     this.tempoBpm = bpm;
     this.activeTracks = tracks;
     this.songEnd = songEndTick(tracks);
+    this.configureStrips(tracks);
     this.onPlayheadTickUpdate = onTickUpdate || null;
     this.onPlaybackEnded = onEnded || null;
     // A count-in starts the clock earlier: the metronome clicks while the playhead waits at startTick
@@ -1107,7 +1129,8 @@ export class AudioEngine {
           track.auxSend,
           track.pan,
           true,
-          isSustain
+          isSustain,
+          track.id
         );
 
         let voices = this.activePlaybackVoices.get(track.id);
@@ -1131,9 +1154,88 @@ export class AudioEngine {
    * Live song update while playing (note edits, mute/solo, added/removed tracks).
    * Voices of tracks that became silent are released immediately.
    */
+  /** Creates/updates one channel strip per track and removes strips of deleted tracks. */
+  private configureStrips(tracks: Track[]) {
+    const ctx = this.ctx;
+    if (!ctx || !this.playbackBus) return;
+    const now = ctx.currentTime;
+    const set = (param: AudioParam, value: number) =>
+      this.isOffline ? param.setValueAtTime(value, now) : param.setTargetAtTime(value, now, 0.02);
+
+    const ids = new Set(tracks.map((t) => t.id));
+    for (const [id, strip] of this.strips) {
+      if (ids.has(id)) continue;
+      try {
+        strip.output.disconnect();
+      } catch {}
+      this.strips.delete(id);
+    }
+
+    for (const track of tracks) {
+      let strip = this.strips.get(track.id);
+      if (!strip) {
+        const input = ctx.createGain();
+        const eq = EQ_BANDS.map((band) => {
+          const f = ctx.createBiquadFilter();
+          f.type = band.type;
+          f.frequency.setValueAtTime(band.frequency, now);
+          if (band.type === 'peaking') f.Q.setValueAtTime(0.8, now);
+          return f;
+        });
+        const comp = ctx.createDynamicsCompressor();
+        comp.knee.setValueAtTime(6, now);
+        comp.attack.setValueAtTime(0.005, now);
+        comp.release.setValueAtTime(0.15, now);
+        const output = ctx.createGain();
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 512;
+        input.connect(eq[0]);
+        eq[0].connect(eq[1]);
+        eq[1].connect(eq[2]);
+        eq[2].connect(comp);
+        comp.connect(output);
+        output.connect(this.playbackBus);
+        output.connect(analyser);
+        strip = { input, eq, comp, output, analyser, auxConnected: false };
+        this.strips.set(track.id, strip);
+      }
+
+      const m = mixerOf(track);
+      set(strip.eq[0].gain, m.eqLow);
+      set(strip.eq[1].gain, m.eqMid);
+      set(strip.eq[2].gain, m.eqHigh);
+      set(strip.comp.threshold, m.compressor ? m.compThreshold : 0);
+      set(strip.comp.ratio, m.compressor ? m.compRatio : 1);
+
+      if (this.auxSendBus && track.auxSend !== strip.auxConnected) {
+        if (track.auxSend) strip.output.connect(this.auxSendBus);
+        else
+          try {
+            strip.output.disconnect(this.auxSendBus);
+          } catch {}
+        strip.auxConnected = track.auxSend;
+      }
+    }
+  }
+
+  /** Current peak level (linear) per track and for the master output. */
+  public getMeterPeaks(): { tracks: Record<string, number>; master: number } {
+    const peakOf = (analyser: AnalyserNode | null) => {
+      if (!analyser) return 0;
+      analyser.getFloatTimeDomainData(this.meterBuffer);
+      let peak = 0;
+      for (let i = 0; i < this.meterBuffer.length; i++) peak = Math.max(peak, Math.abs(this.meterBuffer[i]));
+      return peak;
+    };
+    const tracks: Record<string, number> = {};
+    this.strips.forEach((strip, id) => (tracks[id] = peakOf(strip.analyser)));
+    return { tracks, master: peakOf(this.masterAnalyser) };
+  }
+
   public updateSong(tracks: Track[]) {
     this.activeTracks = tracks;
     this.songEnd = songEndTick(tracks);
+    this.configureStrips(tracks);
     if (!this.isPlaying || !this.ctx) return;
 
     const audible = new Set(audibleTracks(tracks).map((t) => t.id));
@@ -1264,6 +1366,7 @@ export class AudioEngine {
     const engine = new AudioEngine({ context: ctx });
     engine.currentEffectorSettings = effector;
     await engine.init();
+    engine.configureStrips(audible);
 
     for (const track of audible) {
       for (const note of track.notes) {
@@ -1278,7 +1381,8 @@ export class AudioEngine {
           track.auxSend,
           track.pan,
           true,
-          isSustain
+          isSustain,
+          track.id
         );
       }
     }

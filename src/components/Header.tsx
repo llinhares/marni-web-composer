@@ -20,6 +20,7 @@ import {
   Timer,
   Hourglass,
   Repeat,
+  SlidersVertical,
 } from 'lucide-react';
 import type { ToolMode, GridSnap, TimeSignature, EffectorSettings, InstrumentId } from '../types/music.ts';
 import { formatTimecode, ticksToSeconds } from '../utils/musicMath.ts';
@@ -71,6 +72,8 @@ interface HeaderProps {
   loopOn: boolean;
   onToggleLoop: () => void;
   beatsPerBar: number;
+  isMixerOpen: boolean;
+  onToggleMixer: () => void;
   markers: Marker[];
   onAddMarker: () => void;
   onJumpToTick: (tick: number) => void;
@@ -127,6 +130,8 @@ export const Header: React.FC<HeaderProps> = ({
   loopOn,
   onToggleLoop,
   beatsPerBar,
+  isMixerOpen,
+  onToggleMixer,
   markers,
   onAddMarker,
   onJumpToTick,
@@ -420,6 +425,19 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Timecode Readout (only this element re-renders while playing) */}
         <Timecode playhead={playhead} maxTick={maxTick} bpm={bpm} beatsPerBar={beatsPerBar} />
+        <button
+          onClick={onToggleMixer}
+          className={`hidden sm:block p-1.5 rounded-md border transition-colors ${
+            isMixerOpen
+              ? 'bg-amber-500/15 border-amber-500/60 text-amber-400'
+              : 'bg-stone-900 border-[#2d2722] text-stone-400 hover:text-stone-200'
+          }`}
+          title="Mixer: EQ, compressor e medidores por faixa (X)"
+          aria-label="Mixer"
+          aria-pressed={isMixerOpen}
+        >
+          <SlidersVertical className="w-3.5 h-3.5" />
+        </button>
         <MarkersMenu
           markers={markers}
           formatPosition={(tick) => formatBarBeat(tick, beatsPerBar)}

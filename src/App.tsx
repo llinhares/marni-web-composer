@@ -45,6 +45,7 @@ import { MidiSettingsModal } from './components/MidiSettingsModal.tsx';
 import { AiSheetScannerModal } from './components/AiSheetScannerModal.tsx';
 import { VideoAudioTranscriberModal } from './components/VideoAudioTranscriberModal.tsx';
 import { RecoveryBanner } from './components/RecoveryBanner.tsx';
+import { MixerPanel } from './components/MixerPanel.tsx';
 import {
   DEFAULT_EFFECTOR_SETTINGS,
   isProjectFileContent,
@@ -172,6 +173,8 @@ export default function App() {
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
   const [isAiSheetScannerOpen, setIsAiSheetScannerOpen] = useState(false);
   const [isVideoTranscriberOpen, setIsVideoTranscriberOpen] = useState(false);
+  const [isMixerOpen, setIsMixerOpen] = useState(false);
+  const readMeterPeaks = useCallback(() => audioEngineRef.current?.getMeterPeaks() ?? null, []);
 
   // Hidden file input for importing MIDI / XML / JSON
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1013,6 +1016,8 @@ export default function App() {
         setMetronomeOn((v) => !v);
       } else if ((e.key === 'l' || e.key === 'L') && !e.ctrlKey && !e.metaKey) {
         handleToggleLoop();
+      } else if ((e.key === 'x' || e.key === 'X') && !e.ctrlKey && !e.metaKey) {
+        setIsMixerOpen((v) => !v);
       } else if (e.key === '[') {
         jumpToMarker(-1);
       } else if (e.key === ']') {
@@ -1361,6 +1366,8 @@ export default function App() {
         loopOn={!!loop?.enabled}
         onToggleLoop={handleToggleLoop}
         beatsPerBar={getBeatsPerMeasure(timeSignature)}
+        isMixerOpen={isMixerOpen}
+        onToggleMixer={() => setIsMixerOpen((v) => !v)}
         markers={markers}
         onAddMarker={handleAddMarker}
         onJumpToTick={handleSeek}
@@ -1475,6 +1482,16 @@ export default function App() {
         projectFileLabel={projectFileLabel}
         lastAutosaveAt={lastAutosaveAt}
         projectNotice={projectNotice}
+      />
+
+      <MixerPanel
+        isOpen={isMixerOpen}
+        onClose={() => setIsMixerOpen(false)}
+        tracks={tracks}
+        activeTrackId={activeTrackId}
+        onSelectTrack={setActiveTrackId}
+        onUpdateTrack={handleUpdateTrack}
+        readPeaks={readMeterPeaks}
       />
 
       {recoveryOffer && (
