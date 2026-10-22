@@ -16,6 +16,9 @@ import {
   Undo2,
   Redo2,
   Hand,
+  Circle,
+  Timer,
+  Hourglass,
 } from 'lucide-react';
 import type { ToolMode, GridSnap, TimeSignature, EffectorSettings, InstrumentId } from '../types/music.ts';
 import { formatTimecode, ticksToSeconds } from '../utils/musicMath.ts';
@@ -41,6 +44,12 @@ interface HeaderProps {
   onPause: () => void;
   onStop: () => void;
   playhead: PlayheadStore;
+  isRecording: boolean;
+  onRecord: () => void;
+  metronomeOn: boolean;
+  onToggleMetronome: () => void;
+  countInOn: boolean;
+  onToggleCountIn: () => void;
   maxTick: number;
   instrumentIds: InstrumentId[];
   bpm: number;
@@ -83,6 +92,12 @@ export const Header: React.FC<HeaderProps> = ({
   onPause,
   onStop,
   playhead,
+  isRecording,
+  onRecord,
+  metronomeOn,
+  onToggleMetronome,
+  countInOn,
+  onToggleCountIn,
   maxTick,
   instrumentIds,
   bpm,
@@ -312,6 +327,49 @@ export const Header: React.FC<HeaderProps> = ({
         >
           <Square className="w-3.5 h-3.5 fill-current" />
         </button>
+
+        <button
+          onClick={onRecord}
+          className={`p-2 rounded-lg border transition-colors ${
+            isRecording
+              ? 'bg-red-600 border-red-500 text-white animate-pulse'
+              : 'bg-stone-900 hover:bg-stone-800 border-[#2d2722] text-red-500 hover:text-red-400'
+          }`}
+          title={isRecording ? 'Parar gravação (R)' : 'Gravar do teclado MIDI na faixa ativa (R)'}
+          aria-label={isRecording ? 'Parar gravação' : 'Gravar'}
+          aria-pressed={isRecording}
+        >
+          <Circle className="w-3.5 h-3.5 fill-current" />
+        </button>
+
+        <div className="hidden sm:flex items-center gap-1">
+          <button
+            onClick={onToggleMetronome}
+            className={`p-1.5 rounded-md border transition-colors ${
+              metronomeOn
+                ? 'bg-amber-500/15 border-amber-500/60 text-amber-400'
+                : 'bg-stone-900 border-[#2d2722] text-stone-500 hover:text-stone-300'
+            }`}
+            title={metronomeOn ? 'Metrônomo ligado (K)' : 'Metrônomo desligado (K)'}
+            aria-label="Metrônomo"
+            aria-pressed={metronomeOn}
+          >
+            <Timer className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={onToggleCountIn}
+            className={`p-1.5 rounded-md border transition-colors ${
+              countInOn
+                ? 'bg-amber-500/15 border-amber-500/60 text-amber-400'
+                : 'bg-stone-900 border-[#2d2722] text-stone-500 hover:text-stone-300'
+            }`}
+            title={countInOn ? 'Contagem de 1 compasso antes de gravar: ligada' : 'Contagem antes de gravar: desligada'}
+            aria-label="Contagem antes de gravar"
+            aria-pressed={countInOn}
+          >
+            <Hourglass className="w-3.5 h-3.5" />
+          </button>
+        </div>
 
         {/* Timecode Readout (only this element re-renders while playing) */}
         <Timecode playhead={playhead} maxTick={maxTick} bpm={bpm} />

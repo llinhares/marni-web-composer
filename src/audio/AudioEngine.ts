@@ -59,7 +59,9 @@ export class AudioEngine {
   private activeTracks: Track[] = [];
   private anchor: TimelineAnchor = { audioTime: 0, tick: 0, bpm: 120 };
   private scheduledUntilTick = 0;
+  private playStartTick = 0; // notes before this tick are never played (count-in region)
   private songEnd = 0;
+  private metronome = { enabled: false, beatsPerBar: 4 };
   private onPlayheadTickUpdate: ((tick: number) => void) | null = null;
   private onPlaybackEnded: (() => void) | null = null;
   private currentEffectorSettings: EffectorSettings | null = null;
@@ -356,9 +358,11 @@ export class AudioEngine {
 
     return (stopTime: number) => {
       try {
+        // Released key: decaying instruments ring briefly (longer with sustain), others stop quickly
+        const tau = Math.max(0.02, ring / 4);
         amp.gain.cancelScheduledValues(stopTime);
-        amp.gain.setTargetAtTime(0, stopTime, 0.02);
-        src.stop(stopTime + 0.1);
+        amp.gain.setTargetAtTime(0, stopTime, tau);
+        src.stop(stopTime + tau * 6);
       } catch {}
     };
   }
@@ -986,7 +990,8 @@ export class AudioEngine {
     bpm: number,
     startTick: number = 0,
     onTickUpdate?: (tick: number) => void,
-    onEnded?: () => void
+    onEnded?: () => void,
+    options: { countInTicks?: number } = {}
   ) {
     if (!this.ctx) {
       this.init();
@@ -1019,8 +1024,11 @@ export class AudioEngine {
     this.songEnd = songEndTick(tracks);
     this.onPlayheadTickUpdate = onTickUpdate || null;
     this.onPlaybackEnded = onEnded || null;
-    this.anchor = { audioTime: this.ctx.currentTime + 0.05, tick: startTick, bpm };
-    this.scheduledUntilTick = startTick;
+    // A count-in starts the clock earlier: the metronome clicks while the playhead waits at startTick
+    const countIn = Math.max(0, options.countInTicks ?? 0);
+    this.anchor = { audioTime: this.ctx.currentTime + 0.05, tick: startTick - countIn, bpm };
+    this.scheduledUntilTick = startTick - countIn;
+    this.playStartTick = startTick;
 
     this.workerTimer?.start(() => this.schedulerTick());
   }
@@ -1033,7 +1041,7 @@ export class AudioEngine {
     if (!this.isPlaying || !this.ctx) return;
 
     const now = this.ctx.currentTime;
-    const currentTick = Math.max(0, Math.round(tickAtTime(this.anchor, now)));
+    const currentTick = Math.max(this.playStartTick, Math.round(tickAtTime(this.anchor, now)));
     this.playheadTick = currentTick;
     this.onPlayheadTickUpdate?.(currentTick);
 
@@ -1047,8 +1055,17 @@ export class AudioEngine {
     if (horizonTick <= this.scheduledUntilTick) return;
     const secondsPerTick = 60 / (this.anchor.bpm * 480);
 
+    // Metronome: always during the count-in, then only when enabled
+    for (let beat = Math.ceil(this.scheduledUntilTick / 480) * 480; beat < horizonTick; beat += 480) {
+      if (beat >= this.playStartTick && !this.metronome.enabled) continue;
+      const beatIndex = Math.round(beat / 480);
+      const n = Math.max(1, this.metronome.beatsPerBar);
+      this.click(timeAtTick(this.anchor, beat), ((beatIndex % n) + n) % n === 0);
+    }
+
+    const fromTick = Math.max(this.scheduledUntilTick, this.playStartTick);
     for (const track of audibleTracks(this.activeTracks)) {
-      for (const note of notesInWindow(sortedByStart(track.notes), this.scheduledUntilTick, horizonTick)) {
+      for (const note of notesInWindow(sortedByStart(track.notes), fromTick, horizonTick)) {
         const durationSec = note.durationTicks * secondsPerTick;
         const isSustain = !!(note.sustain ?? track.sustainPedal ?? (track.instrumentId === 'grand-piano'));
         const stopVoice = this.synthesizeInstrument(
@@ -1098,6 +1115,49 @@ export class AudioEngine {
       });
       this.activePlaybackVoices.delete(trackId);
     }
+  }
+
+  /** Short metronome tick (accented on the first beat of the bar); never part of exports. */
+  private click(time: number, accent: boolean) {
+    if (!this.ctx || !this.masterGain || time < this.ctx.currentTime - 0.01) return;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(accent ? 1760 : 1175, time);
+    gain.gain.setValueAtTime(0.0001, time);
+    gain.gain.exponentialRampToValueAtTime(accent ? 0.35 : 0.2, time + 0.002);
+    gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.05);
+    osc.connect(gain);
+    gain.connect(this.masterGain);
+    osc.start(time);
+    osc.stop(time + 0.06);
+  }
+
+  public setMetronome(enabled: boolean, beatsPerBar: number) {
+    this.metronome = { enabled, beatsPerBar };
+  }
+
+  /** Exact playback position right now (more precise than the last published playhead). */
+  public currentTick(): number {
+    if (!this.isPlaying || !this.ctx) return this.playheadTick;
+    return tickAtTime(this.anchor, this.ctx.currentTime);
+  }
+
+  /** Note held from a MIDI keyboard: sounds until releaseHeldNote (no fixed length). */
+  public startHeldNote(
+    instrumentId: InstrumentId,
+    pitch: number,
+    velocity: number,
+    trackVolume: number,
+    auxSend: boolean,
+    pan: number,
+    sustain: boolean
+  ): string {
+    return this.playNote(instrumentId, pitch, velocity, 30, trackVolume, auxSend, pan, sustain);
+  }
+
+  public releaseHeldNote(noteVoiceId: string) {
+    this.stopNote(noteVoiceId);
   }
 
   /** Live tempo change: playback continues from the current position at the new tempo. */

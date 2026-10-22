@@ -18,12 +18,14 @@ import type {
 import { BDO_INSTRUMENTS, BDO_GRADE_LIMITS } from './types/music.ts';
 import { AudioEngine } from './audio/AudioEngine.ts';
 import { createPlayheadStore } from './audio/playheadStore.ts';
+import { newId } from './utils/ids.ts';
+import { createMidiRecorder, recordedToNotes, type MidiRecorder, type RecordedNoteEvent } from './midi/midiRecorder.ts';
 import { sampleLibrary } from './audio/sampleLibrary.ts';
 import { WebMidiManager } from './midi/webMidi.ts';
 import { createStandardMidiFile, triggerFileDownload } from './midi/midiEncoder.ts';
 import { parseStandardMidiFile } from './midi/midiDecoder.ts';
 import { exportWavFile } from './export/audioExporter.ts';
-import { isBlackKey } from './utils/musicMath.ts';
+import { getBeatsPerMeasure, isBlackKey } from './utils/musicMath.ts';
 import { isMusicXmlContent, parseMusicXml } from './musicxml/musicXmlDecoder.ts';
 import { isBdoBinaryContent, parseBdoBinaryFile } from './bdo/bdoDecoder.ts';
 import { mergeImportedTracks, type ImportMode } from './utils/trackImport.ts';
@@ -184,17 +186,8 @@ export default function App() {
         }
       });
 
-      midi.onNote((event) => {
-        if (event.type === 'noteon') {
-          // Audition note in active track
-          const currentTracks = tracksRef.current;
-          const currentActiveId = activeTrackIdRef.current;
-          const active = currentTracks.find((t) => t.id === currentActiveId) || currentTracks[0];
-          if (active) {
-            engine.playNote(active.instrumentId, event.pitch, event.velocity);
-          }
-        }
-      });
+      midi.onNote((event) => handleMidiNoteRef.current(event));
+      midi.onSustain((down) => handleMidiSustainRef.current(down));
     }
 
     return () => {
@@ -369,19 +362,65 @@ export default function App() {
     ]
   );
 
-  // Playback Controls
-  const startEngineAt = useCallback((tick: number) => {
-    audioEngineRef.current?.startPlayback(
-      tracksRef.current,
-      bpmRef.current,
-      tick,
-      (t) => playhead.set(t),
-      () => {
-        setIsPlaying(false);
-        playhead.set(0);
-      }
-    );
-  }, [playhead]);
+  // Playback & recording
+  const [isRecording, setIsRecording] = useState(false);
+  const [metronomeOn, setMetronomeOn] = useState<boolean>(() => localStorage.getItem('marni_metronome') === '1');
+  const [countInOn, setCountInOn] = useState<boolean>(() => localStorage.getItem('marni_count_in') !== '0');
+  const recorderRef = useRef<{ recorder: MidiRecorder; trackId: string; baseNotes: Note[] } | null>(null);
+  const liveTakeRef = useRef<RecordedNoteEvent[]>([]);
+  const countInRef = useRef(countInOn);
+  countInRef.current = countInOn;
+  const timeSignatureRef = useRef(timeSignature);
+  timeSignatureRef.current = timeSignature;
+
+  useEffect(() => {
+    localStorage.setItem('marni_metronome', metronomeOn ? '1' : '0');
+    localStorage.setItem('marni_count_in', countInOn ? '1' : '0');
+    audioEngineRef.current?.setMetronome(metronomeOn, getBeatsPerMeasure(timeSignature));
+  }, [metronomeOn, countInOn, timeSignature]);
+
+  /** Writes the take into its track: notes appear live while recording, one undo step at the end. */
+  const showTake = useCallback(
+    (events: RecordedNoteEvent[], commit: boolean) => {
+      const rec = recorderRef.current;
+      if (!rec) return;
+      const recorded = recordedToNotes(events, rec.trackId, () => newId('note'));
+      setTracks((prev) => {
+        const updated = prev.map((t) => (t.id === rec.trackId ? { ...t, notes: [...rec.baseNotes, ...recorded] } : t));
+        if (commit) pushHistory(updated, rec.trackId);
+        return updated;
+      });
+    },
+    [pushHistory]
+  );
+
+  const finishRecording = useCallback(() => {
+    const rec = recorderRef.current;
+    if (!rec) return;
+    const events = rec.recorder.finish(audioEngineRef.current?.currentTick() ?? playhead.get());
+    if (events.length > 0) showTake(events, true);
+    recorderRef.current = null;
+    liveTakeRef.current = [];
+    setIsRecording(false);
+  }, [playhead, showTake]);
+
+  const startEngineAt = useCallback(
+    (tick: number, countInTicks = 0) => {
+      audioEngineRef.current?.startPlayback(
+        tracksRef.current,
+        bpmRef.current,
+        tick,
+        (t) => playhead.set(t),
+        () => {
+          finishRecording();
+          setIsPlaying(false);
+          playhead.set(0);
+        },
+        { countInTicks }
+      );
+    },
+    [playhead, finishRecording]
+  );
 
   const handlePlay = useCallback(() => {
     if (!audioEngineRef.current) return;
@@ -392,20 +431,103 @@ export default function App() {
   }, [playhead, startEngineAt]);
 
   const handlePause = useCallback(() => {
+    finishRecording();
     audioEngineRef.current?.pausePlayback();
     setIsPlaying(false);
-  }, []);
+  }, [finishRecording]);
 
   const handleStop = useCallback(() => {
+    finishRecording();
     audioEngineRef.current?.stopPlayback();
     setIsPlaying(false);
     playhead.set(0);
-  }, [playhead]);
+  }, [playhead, finishRecording]);
+
+  /** Records the MIDI keyboard into the active track, from the playhead (optionally after a count-in bar). */
+  const handleRecord = useCallback(() => {
+    if (recorderRef.current) {
+      handlePause();
+      return;
+    }
+    const engine = audioEngineRef.current;
+    const track = tracksRef.current.find((t) => t.id === activeTrackIdRef.current);
+    if (!engine || !track) return;
+    engine.init().then(() => {
+      const startTick = playhead.get();
+      recorderRef.current = { recorder: createMidiRecorder(startTick), trackId: track.id, baseNotes: track.notes };
+      liveTakeRef.current = [];
+      setIsRecording(true);
+      setIsPlaying(true);
+      startEngineAt(startTick, countInRef.current ? getBeatsPerMeasure(timeSignatureRef.current) * 480 : 0);
+    });
+  }, [handlePause, playhead, startEngineAt]);
+
+  // MIDI keyboard: notes sound while the key is held; captured when recording
+  const handleMidiNoteRef = useRef<(e: { type: 'noteon' | 'noteoff'; pitch: number; velocity: number }) => void>(
+    () => {}
+  );
+  const handleMidiSustainRef = useRef<(down: boolean) => void>(() => {});
+  const heldVoicesRef = useRef(new Map<number, string>());
+  const pedalDownRef = useRef(false);
+  handleMidiNoteRef.current = (e) => {
+    const engine = audioEngineRef.current;
+    if (!engine) return;
+    const rec = recorderRef.current;
+    const tick = engine.currentTick();
+    if (e.type === 'noteon') {
+      const track =
+        tracksRef.current.find((t) => t.id === (rec?.trackId ?? activeTrackIdRef.current)) ?? tracksRef.current[0];
+      if (!track) return;
+      void engine.init();
+      const prev = heldVoicesRef.current.get(e.pitch);
+      if (prev) engine.releaseHeldNote(prev);
+      heldVoicesRef.current.set(
+        e.pitch,
+        engine.startHeldNote(
+          track.instrumentId,
+          e.pitch,
+          e.velocity,
+          track.volume,
+          track.auxSend,
+          track.pan,
+          pedalDownRef.current || !!track.sustainPedal
+        )
+      );
+      rec?.recorder.noteOn(e.pitch, e.velocity, tick);
+    } else {
+      const voice = heldVoicesRef.current.get(e.pitch);
+      if (voice && !pedalDownRef.current) {
+        engine.releaseHeldNote(voice);
+        heldVoicesRef.current.delete(e.pitch);
+      }
+      const closed = rec?.recorder.noteOff(e.pitch, tick);
+      if (closed) {
+        liveTakeRef.current = [...liveTakeRef.current, closed];
+        showTake(liveTakeRef.current, false);
+      }
+    }
+  };
+  handleMidiSustainRef.current = (down) => {
+    pedalDownRef.current = down;
+    const engine = audioEngineRef.current;
+    if (!down && engine) {
+      heldVoicesRef.current.forEach((voice) => engine.releaseHeldNote(voice));
+      heldVoicesRef.current.clear();
+    }
+    const rec = recorderRef.current;
+    if (rec && engine) {
+      const closed = rec.recorder.sustainPedal(down, engine.currentTick());
+      if (closed.length > 0) {
+        liveTakeRef.current = [...liveTakeRef.current, ...closed];
+        showTake(liveTakeRef.current, false);
+      }
+    }
+  };
 
   const handleSeek = useCallback(
     (tick: number) => {
       playhead.set(tick);
-      if (isPlaying) startEngineAt(tick);
+      if (isPlaying && !recorderRef.current) startEngineAt(tick);
     },
     [isPlaying, playhead, startEngineAt]
   );
@@ -873,12 +995,16 @@ export default function App() {
         setToolMode('eraser');
       } else if (e.key === 'h' || e.key === 'H') {
         setToolMode('pan');
+      } else if (e.key === 'r' || e.key === 'R') {
+        handleRecord();
+      } else if (e.key === 'k' || e.key === 'K') {
+        setMetronomeOn((v) => !v);
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isPlaying, handlePlay, handlePause, handleStop, handleUndo, handleRedo, handleSaveProject, handleOpenProject]);
+  }, [isPlaying, handlePlay, handlePause, handleStop, handleUndo, handleRedo, handleSaveProject, handleOpenProject, handleRecord]);
 
   // Import Mode ('replace' | 'append')
   const importModeRef = useRef<ImportMode>('replace');
@@ -1208,6 +1334,12 @@ export default function App() {
         onPause={handlePause}
         onStop={handleStop}
         playhead={playhead}
+        isRecording={isRecording}
+        onRecord={handleRecord}
+        metronomeOn={metronomeOn}
+        onToggleMetronome={() => setMetronomeOn((v) => !v)}
+        countInOn={countInOn}
+        onToggleCountIn={() => setCountInOn((v) => !v)}
         maxTick={maxTick}
         instrumentIds={instrumentIds}
         bpm={bpm}

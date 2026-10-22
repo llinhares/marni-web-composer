@@ -20,6 +20,7 @@ export class WebMidiManager {
   private midiAccess: MIDIAccess | null = null;
   private isSupported: boolean = false;
   private noteCallbacks: Set<MidiNoteCallback> = new Set();
+  private sustainCallbacks: Set<(down: boolean) => void> = new Set();
   private devices: MidiDevice[] = [];
   private onDevicesChanged: ((devices: MidiDevice[]) => void) | null = null;
 
@@ -38,9 +39,10 @@ export class WebMidiManager {
       this.midiAccess = await navigator.requestMIDIAccess({ sysex: false });
       this.refreshDevices();
 
-      // Listen for hotplugging
+      // Listen for hotplugging (devices connected later must be bound too)
       this.midiAccess.onstatechange = () => {
         this.refreshDevices();
+        this.bindInputs();
       };
 
       // Bind input handlers
@@ -87,6 +89,9 @@ export class WebMidiManager {
               channel,
             })
           );
+        } else if (command === 11 && noteNumber === 64) {
+          // Control Change 64: sustain pedal (>= 64 = down)
+          this.sustainCallbacks.forEach((cb) => cb(velocity >= 64));
         } else if (command === 8 || (command === 9 && velocity === 0)) {
           // Note Off
           this.noteCallbacks.forEach((cb) =>
@@ -105,6 +110,11 @@ export class WebMidiManager {
   public onNote(callback: MidiNoteCallback) {
     this.noteCallbacks.add(callback);
     return () => this.noteCallbacks.delete(callback);
+  }
+
+  public onSustain(callback: (down: boolean) => void) {
+    this.sustainCallbacks.add(callback);
+    return () => this.sustainCallbacks.delete(callback);
   }
 
   public setDevicesChangedListener(listener: (devices: MidiDevice[]) => void) {
