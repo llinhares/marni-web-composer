@@ -77,7 +77,7 @@ test('noteEventsToNotes converts basic-pitch events to ticks and velocities', ()
 
 test('basicPitchThresholds is piano-calibrated at the default sensitivity and lowers thresholds when more sensitive', () => {
   const def = basicPitchThresholds(0.55);
-  assert.ok(Math.abs(def.onsetThreshold - 0.575) <= 0.01 && Math.abs(def.frameThreshold - 0.33) <= 0.01);
+  assert.ok(Math.abs(def.onsetThreshold - 0.65) <= 0.01 && Math.abs(def.frameThreshold - 0.4) <= 0.01);
   const low = basicPitchThresholds(0.1);
   const high = basicPitchThresholds(1);
   assert.ok(high.onsetThreshold < low.onsetThreshold && high.frameThreshold < low.frameThreshold);

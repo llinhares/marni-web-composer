@@ -29,12 +29,17 @@ import {
   fuseAudioAndVisionNotes,
   detectKeyHitsFromVideoContext,
   detectKeyboardLayoutInFrame,
+  describeKeyboard,
+  estimateOctaveFromAudio,
+  suggestReadingLine,
   KeyboardLayout,
   hexToRgb,
   rgbToHex,
   DetectedBarSegment,
   KeyHit,
 } from '../utils/videoScanner.ts';
+import { calibrateBars, type BarCalibration } from '../utils/barCalibration.ts';
+import { notify } from '../ui/notify.ts';
 import { pitchToNoteName, formatTimecode } from '../utils/musicMath.ts';
 import { newId } from '../utils/ids.ts';
 
@@ -110,10 +115,14 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
 
   // Video Calibration
   const [scanlineY, setScanlineY] = useState<number>(64); // 64% from top (above white smoke)
+  // Placed automatically above the keys and their glow until the user moves the slider
+  const [scanlineAuto, setScanlineAuto] = useState<boolean>(true);
   const [keyboardXStart, setKeyboardXStart] = useState<number>(0); // 0% from left
   const [keyboardXEnd, setKeyboardXEnd] = useState<number>(100); // 100% from left
   const [octaveShift, setOctaveShift] = useState<number>(0); // -2 to +2 octaves
   const [detectedLayout, setDetectedLayout] = useState<KeyboardLayout | null>(null);
+  // Background level and bar colours measured from the video (makes the preview match the scan)
+  const [detectedCalibration, setDetectedCalibration] = useState<BarCalibration | null>(null);
   const [brightnessThreshold] = useState<number>(38);
   const [minSaturation] = useState<number>(0.20);
   const [liveBars, setLiveBars] = useState<{ right: number; left: number }>({ right: 0, left: 0 });
@@ -165,6 +174,8 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
       setEyedropperTarget(null);
       setHoveredColor(null);
       setDetectedLayout(null);
+      setDetectedCalibration(null);
+      setScanlineAuto(true);
     }
   }, [isOpen, activeTrackId]);
 
@@ -276,6 +287,8 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
       setEyedropperTarget(null);
       setHoveredColor(null);
       setDetectedLayout(null);
+      setDetectedCalibration(null);
+      setScanlineAuto(true);
     }
   };
 
@@ -363,17 +376,38 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
       ctx.stroke();
 
       let currentLayout = detectedLayout;
-      if (!currentLayout && video.videoWidth > 0 && video.readyState >= 2) {
+      let currentCalibration = detectedCalibration;
+      if ((!currentLayout || !currentCalibration) && video.videoWidth > 0 && video.readyState >= 2) {
         try {
           const off = document.createElement('canvas');
           off.width = 640;
           off.height = 360;
           const offCtx = off.getContext('2d', { willReadFrequently: true });
           if (offCtx) {
-            const found = detectKeyboardLayoutInFrame(offCtx, video, 640, 360, 0.45);
-            if (found) {
-              currentLayout = found;
-              setDetectedLayout(found);
+            if (!currentLayout) {
+              const found = detectKeyboardLayoutInFrame(offCtx, video, 640, 360, 0.4);
+              if (found) {
+                currentLayout = found;
+                setDetectedLayout(found);
+                if (scanlineAuto) {
+                  const line = suggestReadingLine([offCtx.getImageData(0, 0, 640, 360).data], 640, 360, found);
+                  setScanlineY(Math.round(line * 100));
+                }
+              }
+            }
+            if (currentLayout && !currentCalibration) {
+              offCtx.drawImage(video, 0, 0, 640, 360);
+              const top = Math.round(360 * 0.12);
+              const rows = Math.max(20, Math.round(360 * (scanlineY / 100)) - 3 - top);
+              const cal = calibrateBars(
+                [{ data: offCtx.getImageData(0, top, 640, rows).data, width: 640, rows }],
+                currentLayout.whiteKeyWidthRatio * 640
+              );
+              // Keep measuring until a frame with bars on screen is seen
+              if (cal.barHues.length > 0) {
+                currentCalibration = cal;
+                setDetectedCalibration(cal);
+              }
             }
           }
         } catch {
@@ -447,6 +481,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
               hand2Color: hexToRgb(hand2ColorHex),
               splitPitch,
               layout: currentLayout,
+              calibration: currentCalibration,
             });
           }
         } catch {
@@ -499,6 +534,9 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
       hand2ColorHex,
       splitPitch,
       octaveShift,
+      detectedLayout,
+      detectedCalibration,
+      scanlineAuto,
     ]
   );
 
@@ -597,7 +635,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
 
         setStatusMessage('Lendo barras coloridas do teclado no vídeo...');
         const videoScanResult = await scanVideoFrames(videoRef.current, {
-          scanlineYRatio: scanlineY / 100,
+          scanlineYRatio: scanlineAuto ? undefined : scanlineY / 100,
           keyboardXStartRatio: keyboardXStart / 100,
           keyboardXEndRatio: keyboardXEnd / 100,
           brightnessThreshold,
@@ -610,7 +648,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
           hand2Color: hexToRgb(hand2ColorHex),
           splitPitch,
           octaveShift,
-          keyboardLayout: detectedLayout,
+          keyboardLayout: null,
           onFrameDetections: (segments) => {
             renderOverlay(segments);
           },
@@ -620,8 +658,21 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
           },
         });
 
-        if (videoScanResult.keyboardLayout && !detectedLayout) {
-          setDetectedLayout(videoScanResult.keyboardLayout);
+        // The scan measures the keyboard on several frames: keep its result for the preview
+        if (videoScanResult.keyboardLayout) setDetectedLayout(videoScanResult.keyboardLayout);
+        if (scanlineAuto) setScanlineY(Math.round(videoScanResult.readingLineRatio * 100));
+
+        // Show the colours actually used (detected from the video when the chosen ones did not match)
+        if (videoScanResult.calibration) setDetectedCalibration(videoScanResult.calibration);
+        if (videoScanResult.colorsAdjusted) {
+          setColorMode(videoScanResult.colorModeUsed);
+          setHand1ColorHex(rgbToHex(videoScanResult.dominantColors.rightHand.r, videoScanResult.dominantColors.rightHand.g, videoScanResult.dominantColors.rightHand.b));
+          setHand2ColorHex(rgbToHex(videoScanResult.dominantColors.leftHand.r, videoScanResult.dominantColors.leftHand.g, videoScanResult.dominantColors.leftHand.b));
+          notify.info(
+            videoScanResult.colorModeUsed === 'single-color'
+              ? 'As duas mãos usam a mesma cor no vídeo: as mãos foram separadas pela altura das notas.'
+              : 'As cores escolhidas não batiam com o vídeo: as cores das barras foram detectadas automaticamente.'
+          );
         }
 
         const ticksPerSecond = (effectiveBpm * TICKS_PER_BEAT) / 60;
@@ -723,7 +774,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
         if (isVideo && videoRef.current) {
           setStatusMessage('Lendo barras coloridas do teclado no vídeo...');
           const videoScanResult = await scanVideoFrames(videoRef.current, {
-            scanlineYRatio: scanlineY / 100,
+            scanlineYRatio: scanlineAuto ? undefined : scanlineY / 100,
             keyboardXStartRatio: keyboardXStart / 100,
             keyboardXEndRatio: keyboardXEnd / 100,
             brightnessThreshold,
@@ -736,7 +787,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
             hand2Color: hexToRgb(hand2ColorHex),
             splitPitch,
             octaveShift,
-            keyboardLayout: detectedLayout,
+            keyboardLayout: null,
             onFrameDetections: (segments) => {
               renderOverlay(segments);
             },
@@ -746,14 +797,41 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
             },
           });
 
-          if (videoScanResult.keyboardLayout && !detectedLayout) {
-            setDetectedLayout(videoScanResult.keyboardLayout);
+          // The scan measures the keyboard on several frames: keep its result for the preview
+          if (videoScanResult.keyboardLayout) setDetectedLayout(videoScanResult.keyboardLayout);
+          if (scanlineAuto) setScanlineY(Math.round(videoScanResult.readingLineRatio * 100));
+
+          // Show the colours actually used (detected from the video when the chosen ones did not match)
+          if (videoScanResult.calibration) setDetectedCalibration(videoScanResult.calibration);
+          if (videoScanResult.colorsAdjusted) {
+            setColorMode(videoScanResult.colorModeUsed);
+            setHand1ColorHex(rgbToHex(videoScanResult.dominantColors.rightHand.r, videoScanResult.dominantColors.rightHand.g, videoScanResult.dominantColors.rightHand.b));
+            setHand2ColorHex(rgbToHex(videoScanResult.dominantColors.leftHand.r, videoScanResult.dominantColors.leftHand.g, videoScanResult.dominantColors.leftHand.b));
+            notify.info(
+              videoScanResult.colorModeUsed === 'single-color'
+                ? 'As duas mãos usam a mesma cor no vídeo: as mãos foram separadas pela altura das notas.'
+                : 'As cores escolhidas não batiam com o vídeo: as cores das barras foram detectadas automaticamente.'
+            );
+          }
+
+          // Zoomed or cropped keyboards: the octave of the visible keys is a guess, the audio settles it
+          let visualNotes = videoScanResult.visualNotes;
+          if (videoScanResult.keyboardLayout && videoScanResult.keyboardLayout.standardSize === null && octaveShift === 0) {
+            const tps = (effectiveBpm * TICKS_PER_BEAT) / 60;
+            const octave = estimateOctaveFromAudio(audioResult.notes, visualNotes, tps);
+            if (octave !== 0) {
+              visualNotes = visualNotes.map((v) => ({ ...v, pitch: v.pitch + 12 * octave }));
+              setOctaveShift(octave);
+              notify.info(
+                `Teclado parcial no vídeo: a oitava foi corrigida pelo áudio (${octave > 0 ? '+' : ''}${octave}).`
+              );
+            }
           }
 
           setStatusMessage('Cruzando notas do áudio com visão computacional...');
           const fused = fuseAudioAndVisionNotes(
             audioResult.notes,
-            videoScanResult.visualNotes,
+            visualNotes,
             effectiveBpm,
             TICKS_PER_BEAT,
             splitPitch,
@@ -973,7 +1051,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
                   Calibração da Visão Computacional (Cascata Synthesia)
                 </span>
                 <span className="text-[11px] text-stone-400">
-                  {eyedropperTarget ? 'Clique no vídeo para capturar a cor!' : 'Ajuste a linha amarela acima das teclas'}
+                  {eyedropperTarget ? 'Clique no vídeo para capturar a cor!' : 'Teclado e linha de leitura detectados automaticamente'}
                 </span>
               </div>
 
@@ -1115,20 +1193,56 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
               {/* Calibration Sliders */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-1">
                 <div>
-                  <div className="flex justify-between text-[11px] text-stone-400 mb-1">
+                  <div className="flex justify-between items-center text-[11px] text-stone-400 mb-1">
                     <span>Altura da Linha (Y)</span>
-                    <span className="font-mono text-amber-300 font-bold">{scanlineY}%</span>
+                    <span className="flex items-center gap-1.5">
+                      {scanlineAuto ? (
+                        <span className="text-[10px] text-emerald-400" title="Posicionada acima das teclas e do brilho">
+                          auto
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setScanlineAuto(true);
+                            setDetectedLayout(null);
+                          }}
+                          className="text-[10px] text-amber-400 hover:text-amber-300 underline"
+                          title="Voltar a posicionar a linha automaticamente"
+                        >
+                          automático
+                        </button>
+                      )}
+                      <span className="font-mono text-amber-300 font-bold">{scanlineY}%</span>
+                    </span>
                   </div>
                   <input
                     type="range"
                     min={20}
                     max={90}
                     value={scanlineY}
-                    onChange={(e) => setScanlineY(Number(e.target.value))}
+                    onChange={(e) => {
+                      setScanlineAuto(false);
+                      setScanlineY(Number(e.target.value));
+                    }}
                     className="w-full accent-amber-500 cursor-pointer"
                   />
                 </div>
 
+                {detectedLayout ? (
+                  <div className="sm:col-span-2 flex flex-col justify-center text-[11px] text-stone-400">
+                    <span>
+                      Teclado detectado:{' '}
+                      <span className="font-mono text-amber-300 font-bold">{describeKeyboard(detectedLayout)}</span>
+                    </span>
+                    {detectedLayout.standardSize === null && (
+                      <span className="text-[10px] text-stone-500">
+                        Teclado parcial: a oitava é estimada. No modo híbrido o áudio confirma; ou ajuste ao lado.
+                      </span>
+                    )}
+                  </div>
+                ) : (
+                <>
                 <div>
                   <div className="flex justify-between text-[11px] text-stone-400 mb-1">
                     <span>Início Teclado (X)</span>
@@ -1158,6 +1272,8 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
                     className="w-full accent-amber-500 cursor-pointer"
                   />
                 </div>
+                </>
+                )}
 
                 <div>
                   <div className="flex justify-between text-[11px] text-stone-400 mb-1">

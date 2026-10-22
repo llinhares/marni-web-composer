@@ -124,14 +124,15 @@ export interface TimedNoteEvent {
 
 /**
  * Maps the user's sensitivity (0.1..1) to basic-pitch's detection thresholds.
- * Calibrated on solo piano: the modal default (0.55) gives onset 0.58 / frame 0.33, slightly stricter
- * than the model authors' generic defaults (0.5 / 0.3), which over-detect octave harmonics on piano.
+ * Calibrated on solo piano against note-by-note references of piano tutorial videos: the modal default
+ * (0.55) gives onset 0.65 / frame 0.40, stricter than the model authors' generic defaults (0.5 / 0.3),
+ * which over-detect octave harmonics and re-attacks inside held notes on piano.
  */
 export function basicPitchThresholds(sensitivity: number): { onsetThreshold: number; frameThreshold: number } {
   const s = Math.max(0.1, Math.min(1, sensitivity));
   return {
-    onsetThreshold: Math.round((0.85 - 0.5 * s) * 100) / 100,
-    frameThreshold: Math.round((0.44 - 0.2 * s) * 100) / 100,
+    onsetThreshold: Math.round((0.925 - 0.5 * s) * 100) / 100,
+    frameThreshold: Math.round((0.51 - 0.2 * s) * 100) / 100,
   };
 }
 
