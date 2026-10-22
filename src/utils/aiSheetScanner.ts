@@ -1,4 +1,15 @@
 import type { Note, TimeSignature } from '../types/music.ts';
+import { newId } from './ids.ts';
+import {
+  buildScore,
+  findInvalidMeasures,
+  measureIsValid,
+  mergeRepairedMeasures,
+  timeSignatureAt,
+  type ScoreBuildResult,
+  type ScoreJson,
+  type ScoreMeasure,
+} from './scoreTranscription.ts';
 
 export type SheetTranscriptionCompactNote = [number, number, number, number?, (string | number)?];
 
@@ -42,6 +53,9 @@ export interface ParsedScoreResult {
     highestPitch: number;
     lowestPitch: number;
   };
+  /** Things the user should check (e.g. measures whose rhythm did not add up). */
+  warnings?: string[];
+  measuresToReview?: number[];
 }
 
 export interface ScanOptions {
@@ -49,6 +63,7 @@ export interface ScanOptions {
   targetTrackId?: string;
   pageRange?: string;
   startTickOffset?: number;
+  onProgress?: (stage: string) => void;
 }
 
 const STORAGE_KEY = 'mwc_gemini_api_key';
@@ -61,7 +76,10 @@ export async function fetchAvailableGeminiModels(apiKey: string): Promise<string
   if (!apiKey || !apiKey.trim()) return fallbackList;
 
   try {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey.trim()}`);
+    // Key in a header, not the URL: URLs end up in history, proxies and logs
+    const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models', {
+      headers: { 'x-goog-api-key': apiKey.trim() },
+    });
     if (!res.ok) return fallbackList;
     const data = await res.json();
     if (Array.isArray(data.models)) {
@@ -233,53 +251,204 @@ export async function fileToBase64(file: File): Promise<{ mimeType: string; data
   });
 }
 
-const OMR_SYSTEM_PROMPT = `Você é um especialista em transcrição de partituras para piano (Optical Music Recognition - OMR).
-Analise com máxima atenção a imagem ou PDF da partitura e transcreva as notas musicais para a grade do Piano Roll.
+const OMR_SYSTEM_PROMPT = `Você é um copista musical especialista em leitura óptica de partituras (OMR).
+Sua tarefa é DESCREVER EXATAMENTE O QUE ESTÁ IMPRESSO na partitura, compasso por compasso.
+NÃO calcule números MIDI, NÃO aplique a armadura de clave, NÃO conte tempos: o programa faz isso.
 
-[DIRETRIZES CRÍTICAS DE TRANSCRIÇÃO]:
-1. PENTAGRAMA DUPLO / GRAND STAFF (Mão Direita e Mão Esquerda):
-   - Pauta Superior: Clave de Sol (Mão Direita / Treble Clef). Linhas: E4(64), G4(67), B4(71), D5(74), F5(77). Espaços: F4(65), A4(69), C5(72), E5(76). Dó Central = C4 (MIDI 60).
-   - Pauta Inferior: Clave de Fá (Mão Esquerda / Bass Clef). Linhas: G2(43), B2(47), D3(50), F3(53), A3(57). Espaços: A2(45), C3(48), E3(52), G3(55). Dó Central = C4 (MIDI 60).
-   - Transcreva AMBAS as mãos simultaneamente!
+COMO LER:
+1. Percorra todos os sistemas e todas as páginas, da esquerda para a direita. Numere os compassos em sequência a partir de 1 (uma anacruse/compasso incompleto inicial é o compasso 1). Não pule nenhum compasso.
+2. Pautas: staff 1 = pauta superior (mão direita); staff 2 = pauta inferior (mão esquerda). Melodia em pauta única: só staff 1.
+   Informe a clave de cada pauta em cada compasso ("treble" ou "bass") e preste atenção em trocas de clave (a pauta inferior às vezes passa para clave de sol).
+3. Nome das notas: letra + oitava científica (Dó central = C4), lido pela posição na pauta COM a clave dela.
+   Clave de sol: linhas E4 G4 B4 D5 F5, espaços F4 A4 C5 E5. Clave de fá: linhas G2 B2 D3 F3 A3, espaços A2 C3 E3 G3.
+   Conte as linhas suplementares com cuidado. Sob "8va" a oitava soa uma acima; sob "8vb", uma abaixo: informe a oitava que SOA.
+4. Acidentes: escreva #, b, n (bequadro), ## ou bb SOMENTE quando o símbolo estiver desenhado imediatamente antes daquela cabeça de nota.
+   Nunca aplique a armadura. Informe a armadura em keyFifths (+n sustenidos, -n bemóis, 0 nenhum).
+5. Ritmo de cada evento: d = "w" (semibreve), "h" (mínima), "q" (semínima), "8", "16", "32" (colcheia, semicolcheia, fusa) pela cabeça, haste, colchetes e barras.
+   dots = número de pontos de aumento. Quiálteras (número 3, 5, 6 sobre o grupo): tuplet [3,2] (ou [5,4], [6,4]).
+   Pausas são eventos com rest:true e sua figura. Compasso inteiro de pausa: rest com a figura que preenche o compasso.
+6. Acordes: notas na mesma haste formam UM evento com várias notas.
+7. Vozes: se uma pauta tem duas linhas independentes (hastes para cima e para baixo com ritmos diferentes), separe em vozes. Cada voz deve preencher o compasso inteiro (inclua pausas).
+8. Ligadura de prolongamento (curva unindo duas notas de MESMA altura): tie:true na primeira nota. Ligaduras de expressão (frases) NÃO são tie.
+9. Apojaturas/notas de enfeite pequenas: grace:true.
+10. Estrutura: repeatStart / repeatEnd (barras de repetição), repeatTimes se indicado (ex.: "3x"), ending [1] ou [2] para casas de 1ª/2ª vez, segno, coda (início da coda), toCoda, fine, jump ("dc", "dc-al-fine", "dc-al-coda", "ds", "ds-al-fine", "ds-al-coda") no compasso onde está escrito.
+11. Dinâmica (pp, p, mp, mf, f, ff) no compasso onde aparece. Andamento: bpm se houver indicação metronômica, e tempoText com o texto (ex.: "Allegro").
+12. Confira antes de responder: em cada voz, a soma das figuras deve fechar a fórmula de compasso.`;
 
-2. ARMADURA DE CLAVE (Key Signature) E ACIDENTES:
-   - Identifique os acidentes (bemóis ou sustenidos) no início da pauta.
-   - Aplique os acidentes a todas as notas correspondentes em toda a música, a menos que haja um bequadro.
+const SCORE_EVENT_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    notes: { type: 'ARRAY', items: { type: 'STRING' } },
+    rest: { type: 'BOOLEAN' },
+    d: { type: 'STRING', enum: ['w', 'h', 'q', '8', '16', '32', '64'] },
+    dots: { type: 'INTEGER' },
+    tuplet: { type: 'ARRAY', items: { type: 'INTEGER' } },
+    tie: { type: 'BOOLEAN' },
+    grace: { type: 'BOOLEAN' },
+  },
+  required: ['d'],
+};
 
-3. CONTINUIDADE E COMPASSOS (NUNCA PULE COMPASSOS):
-   - Transcreva todos os compassos em ordem sequencial (1, 2, 3, 4...).
-   - NUNCA deixe saltos ou buracos de compassos vazios entre as seções.
-   - Para acordes, liste todas as notas que soam juntas com o mesmo compasso e mesmo beat.
+const SCORE_MEASURE_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    number: { type: 'INTEGER' },
+    timeSignature: { type: 'STRING' },
+    keyFifths: { type: 'INTEGER' },
+    repeatStart: { type: 'BOOLEAN' },
+    repeatEnd: { type: 'BOOLEAN' },
+    repeatTimes: { type: 'INTEGER' },
+    ending: { type: 'ARRAY', items: { type: 'INTEGER' } },
+    dynamic: { type: 'STRING' },
+    segno: { type: 'BOOLEAN' },
+    coda: { type: 'BOOLEAN' },
+    toCoda: { type: 'BOOLEAN' },
+    fine: { type: 'BOOLEAN' },
+    jump: { type: 'STRING', enum: ['dc', 'dc-al-fine', 'dc-al-coda', 'ds', 'ds-al-fine', 'ds-al-coda'] },
+    staves: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          staff: { type: 'INTEGER' },
+          clef: { type: 'STRING', enum: ['treble', 'bass', 'alto', 'tenor'] },
+          voices: {
+            type: 'ARRAY',
+            items: { type: 'OBJECT', properties: { events: { type: 'ARRAY', items: SCORE_EVENT_SCHEMA } }, required: ['events'] },
+          },
+        },
+        required: ['staff', 'voices'],
+      },
+    },
+  },
+  required: ['number', 'staves'],
+};
 
-4. FORMATO DE NOTAS (ARRAY COM 5 ELEMENTOS):
-   Cada nota no array "notes" DEVE ser uma lista compacta:
-   [pitch, measure, beat, durationBeats, hand]
+const SCORE_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    title: { type: 'STRING' },
+    bpm: { type: 'NUMBER' },
+    tempoText: { type: 'STRING' },
+    timeSignature: { type: 'STRING' },
+    keyFifths: { type: 'INTEGER' },
+    measures: { type: 'ARRAY', items: SCORE_MEASURE_SCHEMA },
+  },
+  required: ['timeSignature', 'keyFifths', 'measures'],
+};
 
-   - pitch: número MIDI da nota (12 a 119, C0 a B8).
-   - measure: número do compasso na partitura (1, 2, 3, 4...).
-   - beat: tempo dentro do compasso onde a nota inicia (1.0 = início do compasso, 1.5 = meio do primeiro tempo, 2.0 = segundo tempo, etc.).
-   - durationBeats: duração em tempos (1.0 = semínima / quarter note, 0.5 = colcheia / eighth note, 0.25 = semicolcheia / sixteenth note, 2.0 = mínima / half note, 4.0 = semibreve / whole note, 1.5 = semínima pontuada).
-   - hand: "right" para mão direita (Clave de Sol) ou "left" para mão esquerda (Clave de Fá).
+const REPAIR_SCHEMA = {
+  type: 'OBJECT',
+  properties: { measures: { type: 'ARRAY', items: SCORE_MEASURE_SCHEMA } },
+  required: ['measures'],
+};
 
-Responda APENAS em JSON estrito:
-{
-  "title": "Nome da Música",
-  "bpm": 140,
-  "timeSignature": "4/4",
-  "keySignature": "C minor (3 flats: Bb, Eb, Ab)",
-  "chords": [
-    { "measure": 1, "chord": "Cm" }
-  ],
-  "notes": [
-    [72, 1, 1.0, 1.0, "right"],
-    [48, 1, 1.0, 2.0, "left"],
-    [75, 1, 2.0, 0.5, "right"],
-    [74, 1, 2.5, 0.5, "right"]
-  ]
-}`;
+/** At most this many measures are sent back for a second reading. */
+const MAX_REPAIR_MEASURES = 40;
+
+interface GeminiRequest {
+  apiKey: string;
+  models: string[];
+  parts: Array<Record<string, unknown>>;
+  schema: Record<string, unknown>;
+}
+
+/**
+ * Calls Gemini with structured JSON output. Falls through to the next model on 404 and retries once
+ * without the schema if the model rejects it (older models / API changes).
+ */
+async function callGemini(req: GeminiRequest): Promise<string> {
+  let lastError: Error | null = null;
+  for (const model of req.models) {
+    for (const useSchema of [true, false]) {
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+      const body = {
+        contents: [{ parts: req.parts }],
+        generationConfig: {
+          responseMimeType: 'application/json',
+          ...(useSchema ? { responseSchema: req.schema } : {}),
+          temperature: 0,
+          maxOutputTokens: 65536,
+        },
+      };
+
+      let response: Response;
+      try {
+        response = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': req.apiKey.trim() },
+          body: JSON.stringify(body),
+        });
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw new Error(`Falha de conexão com a API do Gemini: ${message}. Verifique sua internet.`);
+      }
+
+      if (response.ok) {
+        const data = await response.json();
+        const candidate = data.candidates?.[0];
+        const text: string | undefined = candidate?.content?.parts
+          ?.map((p: { text?: string }) => p.text ?? '')
+          .join('');
+        if (candidate?.finishReason === 'MAX_TOKENS') {
+          throw new Error('A partitura é longa demais para uma leitura só. Envie menos páginas por vez (ex.: "1-2", depois "3-4").');
+        }
+        if (text) return text;
+        lastError = new Error('A IA não retornou dados legíveis para a imagem enviada. Verifique se a partitura está nítida.');
+        break;
+      }
+
+      let detail = '';
+      try {
+        const errJson = await response.json();
+        detail = errJson.error?.message || response.statusText;
+      } catch {
+        detail = response.statusText;
+      }
+      if (/API_KEY_INVALID|API key not valid|PERMISSION_DENIED/i.test(detail) || response.status === 401 || response.status === 403) {
+        throw new Error('Chave de API do Gemini inválida ou não autorizada. Verifique no Google AI Studio.');
+      }
+      if (response.status === 429 || detail.includes('RESOURCE_EXHAUSTED')) {
+        throw new Error('Limite de requisições do Gemini atingido. Aguarde um minuto e tente novamente.');
+      }
+      lastError = new Error(`Erro na API Gemini (${response.status}): ${detail}`);
+      if (response.status === 404) break; // model unavailable: next model
+      if (response.status === 400 && useSchema) continue; // schema rejected: retry without it
+      throw lastError;
+    }
+  }
+  throw lastError ?? new Error('Nenhum modelo do Gemini respondeu.');
+}
+
+function parseJsonText(text: string): unknown {
+  try {
+    return JSON.parse(text.replace(/```json/gi, '').replace(/```/g, '').trim());
+  } catch {
+    throw new Error('Erro ao interpretar a resposta estruturada da IA. Tente novamente com outra foto ou formato.');
+  }
+}
+
+function toParsedResult(built: ScoreBuildResult): ParsedScoreResult {
+  return {
+    title: built.title,
+    bpm: built.bpm,
+    timeSignature: built.timeSignature,
+    keySignature: built.keySignature,
+    notes: built.notes,
+    rightHandNotes: built.rightHandNotes,
+    leftHandNotes: built.leftHandNotes,
+    chords: [],
+    stats: built.stats,
+    warnings: built.warnings,
+    measuresToReview: built.measuresToReview,
+  };
+}
 
 /**
  * Transcribes a sheet music image or PDF using Google Gemini Vision API.
+ * 1. The model describes what is printed (measures, notes as written, note values, repeats).
+ * 2. Measures whose voices do not add up are sent back for a second, focused reading.
+ * 3. Pitches, accidentals, timing and repeats are resolved deterministically (scoreTranscription.ts).
  */
 export async function transcribeSheetImageWithGemini(
   file: File,
@@ -291,112 +460,66 @@ export async function transcribeSheetImageWithGemini(
   }
 
   const requestedModel = options?.model || 'gemini-3.8-flash';
-  const targetTrackId = options?.targetTrackId || `track-${Date.now()}`;
+  const targetTrackId = options?.targetTrackId || newId('track');
   const startTickOffset = options?.startTickOffset || 0;
+  const report = options?.onProgress ?? (() => {});
+  const models = [requestedModel, 'gemini-3.8-flash', 'gemini-3.8-flash-lite', 'gemini-2.5-flash'].filter(
+    (m, i, arr) => m && arr.indexOf(m) === i
+  );
 
   const { mimeType, data: base64Data } = await fileToBase64(file);
+  const image = { inlineData: { mimeType, data: base64Data } };
 
-  // Model retry candidates if 404 (model not found / deprecated for new accounts)
-  const candidateModels = [
-    requestedModel,
-    'gemini-3.8-flash',
-    'gemini-3.8-flash-lite',
-    'gemini-2.5-flash',
-  ].filter((m, i, arr) => m && arr.indexOf(m) === i);
-
-  let promptText = OMR_SYSTEM_PROMPT;
+  let prompt = OMR_SYSTEM_PROMPT;
   if (options?.pageRange && options.pageRange !== 'all') {
-    promptText += `\n\nATENÇÃO: Foque e transcreva rigorosamente as páginas solicitadas: ${options.pageRange}.`;
+    prompt += `\n\nTranscreva SOMENTE as páginas ${options.pageRange}, numerando os compassos a partir de 1.`;
   }
 
-  let lastError: Error | null = null;
-  let rawText: string | undefined;
+  report('Lendo a partitura compasso por compasso...');
+  const raw = parseJsonText(await callGemini({ apiKey, models, parts: [image, { text: prompt }], schema: SCORE_SCHEMA }));
 
-  for (const modelToTry of candidateModels) {
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelToTry}:generateContent?key=${apiKey.trim()}`;
+  // Older/unexpected answers in the previous note-list format are still accepted
+  if (!raw || typeof raw !== 'object' || !Array.isArray((raw as ScoreJson).measures)) {
+    return parseAiTranscription(raw, targetTrackId, { startTickOffset });
+  }
 
-    const requestBody = {
-      contents: [
-        {
-          parts: [
-            {
-              inlineData: {
-                mimeType,
-                data: base64Data,
-              },
-            },
-            {
-              text: promptText,
-            },
-          ],
-        },
-      ],
-      generationConfig: {
-        responseMimeType: 'application/json',
-        temperature: 0.1,
-        maxOutputTokens: 65536,
-      },
-    };
+  let score = raw as ScoreJson;
+  const invalid = findInvalidMeasures(score);
+  if (invalid.length > 0 && invalid.length <= MAX_REPAIR_MEASURES) {
+    report(`Relendo ${invalid.length} compasso(s) com ritmo inconsistente...`);
+    const previous = score.measures.filter((m) => invalid.includes(m.number));
+    const repairPrompt = `${OMR_SYSTEM_PROMPT}
 
-    let response: Response;
+REVISÃO: na leitura anterior, as durações dos compassos ${invalid.join(', ')} não fecham com a fórmula de compasso ${score.timeSignature ?? ''}.
+Leitura anterior desses compassos (JSON):
+${JSON.stringify(previous)}
+
+Olhe de novo SOMENTE esses compassos na imagem (mesma numeração) e devolva {"measures": [...]} apenas com eles, corrigidos.
+Verifique figuras, pontos, quiálteras, pausas e a separação em vozes.`;
     try {
-      response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-      });
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      throw new Error(`Falha de conexão com a API do Gemini: ${message}. Verifique sua internet.`);
+      const repaired = parseJsonText(
+        await callGemini({ apiKey, models, parts: [image, { text: repairPrompt }], schema: REPAIR_SCHEMA })
+      ) as { measures?: ScoreMeasure[] };
+      if (Array.isArray(repaired.measures)) {
+        // Keep a re-read measure only if it is actually valid now
+        const tsAt = timeSignatureAt(score);
+        const lastNumber = score.measures[score.measures.length - 1]?.number;
+        const firstNumber = score.measures[0]?.number;
+        const better = repaired.measures.filter(
+          (m) =>
+            invalid.includes(m.number) &&
+            Array.isArray(m.staves) &&
+            measureIsValid(m, tsAt.get(m.number) ?? '4/4', m.number === firstNumber || m.number === lastNumber)
+        );
+        score = mergeRepairedMeasures(score, better);
+      }
+    } catch (err) {
+      console.warn('Revisão dos compassos falhou, mantendo a primeira leitura:', err);
     }
-
-    if (!response.ok) {
-      let errorDetail = '';
-      try {
-        const errJson = await response.json();
-        errorDetail = errJson.error?.message || response.statusText;
-      } catch {
-        errorDetail = response.statusText;
-      }
-
-      if (response.status === 400 || errorDetail.includes('API_KEY_INVALID')) {
-        throw new Error('Chave de API do Gemini inválida ou não autorizada. Verifique no Google AI Studio.');
-      }
-      if (response.status === 429 || errorDetail.includes('RESOURCE_EXHAUSTED')) {
-        throw new Error('Limite de requisições gratuitas por minuto atingido no Gemini. Aguarde 30 segundos e tente novamente.');
-      }
-
-      // If 404 (model not found or deprecated for new users), continue to next candidate
-      if (response.status === 404) {
-        lastError = new Error(`Erro na API Gemini (${response.status}): ${errorDetail}`);
-        continue;
-      }
-
-      throw new Error(`Erro na API Gemini (${response.status}): ${errorDetail}`);
-    }
-
-    const resultData = await response.json();
-    rawText = resultData.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (rawText) break;
   }
 
-  if (!rawText) {
-    if (lastError) throw lastError;
-    throw new Error('A IA não retornou dados legíveis para a imagem enviada. Verifique se a foto da partitura está nítida.');
-  }
-
-  // Parse JSON response safely
-  let parsedJson: unknown;
-  try {
-    const cleanedText = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
-    parsedJson = JSON.parse(cleanedText);
-  } catch (parseErr) {
-    throw new Error('Erro ao interpretar a resposta estruturada da IA. Tente novamente com outra foto ou formato.');
-  }
-
-  return parseAiTranscription(parsedJson, targetTrackId, { startTickOffset });
+  report('Aplicando armadura, acidentes, ligaduras e repetições...');
+  return toParsedResult(buildScore(score, targetTrackId, { startTickOffset }));
 }
 
 /**
@@ -556,7 +679,7 @@ export function parseAiTranscription(
   let lowestPitch = 127;
   let maxEndTick = offset;
 
-  rawParsedNotes.forEach((item, idx) => {
+  rawParsedNotes.forEach((item) => {
     if (item.pitch < lowestPitch) lowestPitch = item.pitch;
     if (item.pitch > highestPitch) highestPitch = item.pitch;
 
@@ -564,7 +687,7 @@ export function parseAiTranscription(
     if (endTick > maxEndTick) maxEndTick = endTick;
 
     const noteObj: Note = {
-      id: `ai-note-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 7)}`,
+      id: newId('note'),
       trackId: targetTrackId,
       pitch: item.pitch,
       startTick: item.rawStartTick,

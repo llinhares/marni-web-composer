@@ -1,7 +1,12 @@
 import React, { useState } from 'react';
-import { Download, Music, Disc, ChevronUp, FileAudio, Lock } from 'lucide-react';
+import { Download, Music, Disc, ChevronUp, FileAudio, Lock, FolderOpen, Save } from 'lucide-react';
 
 interface BottomBarProps {
+  onOpenProject: () => void;
+  onSaveProject: () => void;
+  isDirty: boolean;
+  projectFileLabel: string | null;
+  lastAutosaveAt: Date | null;
   title: string;
   onTitleChange: (newTitle: string) => void;
   author?: string;
@@ -23,13 +28,48 @@ export const BottomBar: React.FC<BottomBarProps> = ({
   onExportBdo,
   onExportWav,
   isExportingAudio,
+  onOpenProject,
+  onSaveProject,
+  isDirty,
+  projectFileLabel,
+  lastAutosaveAt,
 }) => {
   const [audioMenuOpen, setAudioMenuOpen] = useState(false);
+  const autosaveTime = lastAutosaveAt?.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  const statusText =
+    isDirty
+      ? `Alterações não salvas${autosaveTime ? ` • autosalvo ${autosaveTime}` : ''}`
+      : projectFileLabel
+        ? `Salvo • ${projectFileLabel}`
+        : autosaveTime
+          ? `Autosalvo ${autosaveTime}`
+          : '';
 
   return (
     <footer className="relative h-14 bg-[#141210] border-t border-[#2d2722] px-3 sm:px-4 flex items-center justify-between gap-3 shrink-0 z-40 text-xs text-stone-300">
-      {/* Left / Song Title & Author Input */}
-      <div className="flex-1 max-w-lg flex items-center gap-2">
+      {/* Left / Project file actions, Song Title & Author Input */}
+      <div className="flex-1 max-w-2xl flex items-center gap-2 min-w-0">
+        <div data-tour="project" className="flex items-center gap-1 shrink-0">
+          <button
+            onClick={onOpenProject}
+            className="p-1.5 rounded-lg bg-stone-900 hover:bg-stone-850 border border-[#2d2722] hover:border-amber-700/60 text-stone-300 transition-colors"
+            title="Abrir projeto .marni (Ctrl+O)"
+            aria-label="Abrir projeto"
+          >
+            <FolderOpen className="w-3.5 h-3.5 text-amber-400" />
+          </button>
+          <button
+            onClick={onSaveProject}
+            className="relative p-1.5 rounded-lg bg-stone-900 hover:bg-stone-850 border border-[#2d2722] hover:border-amber-700/60 text-stone-300 transition-colors"
+            title="Salvar projeto .marni (Ctrl+S) • Salvar como: Ctrl+Shift+S"
+            aria-label={isDirty ? 'Salvar projeto (alterações não salvas)' : 'Salvar projeto'}
+          >
+            <Save className="w-3.5 h-3.5 text-amber-400" />
+            {isDirty && (
+              <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.9)]" />
+            )}
+          </button>
+        </div>
         <input
           type="text"
           value={title}
@@ -50,7 +90,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
               }}
               readOnly={isBdoProtected}
               disabled={isBdoProtected}
-              placeholder="Personagem / Família..."
+              placeholder="Seu nome (autor)"
               className={`w-40 bg-stone-900/90 border rounded-lg px-2.5 py-1.5 font-medium text-xs transition-colors ${
                 isBdoProtected
                   ? 'border-amber-900/40 text-amber-400/90 cursor-not-allowed pr-7 bg-stone-900/95 selection:bg-none'
@@ -59,7 +99,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
               title={
                 isBdoProtected
                   ? 'Partitura original do Black Desert: Composição e Arranjo protegidos contra plágio.'
-                  : 'Nome de Personagem / Família (usado igualmente em Composição e Arranjo no BDO)'
+                  : 'Autor da música (salvo só neste navegador; no BDO aparece como compositor e arranjador)'
               }
               aria-label="Autor da Música"
             />
@@ -73,10 +113,19 @@ export const BottomBar: React.FC<BottomBarProps> = ({
             )}
           </div>
         )}
+        {statusText && (
+          <span
+            className={`hidden md:inline truncate text-[11px] ${isDirty ? 'text-amber-400/80' : 'text-stone-500'}`}
+            role="status"
+            aria-live="polite"
+          >
+            {statusText}
+          </span>
+        )}
       </div>
 
       {/* Center Helpful Shortcuts Hint */}
-      <div className="hidden xl:flex items-center gap-2 text-[11px] font-mono select-none">
+      <div className="hidden 2xl:flex items-center gap-2 text-[11px] font-mono select-none">
         <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-stone-900/80 border border-[#2d2722] text-stone-400">
           <span className="text-amber-500/90 font-semibold font-sans">Dica:</span>
           <span>
@@ -93,8 +142,8 @@ export const BottomBar: React.FC<BottomBarProps> = ({
         </div>
       </div>
 
-      {/* Right / Export Action Buttons matching Screenshot 1 */}
-      <div className="flex items-center gap-2">
+      {/* Right / Export Action Buttons */}
+      <div data-tour="export" className="flex items-center gap-2">
         {/* High-Resolution Lossless Audio Dropdown (WAV 24-bit / 16-bit) */}
         <div className="relative">
           <button
@@ -165,10 +214,10 @@ export const BottomBar: React.FC<BottomBarProps> = ({
         {/* Exportar para o BDO Button */}
         <button
           onClick={onExportBdo}
-          className="flex items-center gap-1.5 px-3 sm:px-4 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-stone-950 font-bold transition-all shadow-[0_0_12px_rgba(245,158,11,0.3)] text-xs"
-          title="Exportar para Black Desert Online"
+          className="flex items-center gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-lg bg-stone-900 hover:bg-stone-850 border border-[#2d2722] hover:border-amber-700/60 text-stone-200 font-semibold transition-colors text-xs shadow-sm"
+          title="Exportar partitura para Black Desert Online"
         >
-          <Download className="w-3.5 h-3.5 stroke-[2.5]" />
+          <Download className="w-3.5 h-3.5 text-amber-400" />
           <span className="hidden sm:inline">Exportar para o BDO</span>
           <span className="sm:hidden">BDO</span>
         </button>

@@ -29,7 +29,7 @@ export const AddInstrumentModal: React.FC<AddInstrumentModalProps> = ({
   onClose,
   onSelectInstrument,
   title = 'Adicionar Instrumento',
-  subtitle = 'Instrumentos autênticos do Black Desert Online para composição Marni',
+  subtitle = 'Escolha o instrumento da nova faixa (todos também exportáveis para o Black Desert)',
   initialInstrumentId = 'grand-piano',
 }) => {
   const [selectedId, setSelectedId] = useState<InstrumentId>(initialInstrumentId);
@@ -49,11 +49,11 @@ export const AddInstrumentModal: React.FC<AddInstrumentModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
+      className="modal-overlay animate-in fade-in duration-150"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-4xl bg-[#161412] border border-[#3e342b] rounded-2xl shadow-2xl p-6 text-stone-200 max-h-[90vh] flex flex-col"
+        className="w-full max-w-4xl modal-panel p-6 text-stone-200 max-h-[90vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -62,7 +62,7 @@ export const AddInstrumentModal: React.FC<AddInstrumentModalProps> = ({
         {/* Header */}
         <div className="flex items-center justify-between border-b border-[#2d2722] pb-4 mb-4">
           <div>
-            <h2 id="add-inst-title" className="text-xl font-bold tracking-wide text-amber-400 font-serif">
+            <h2 id="add-inst-title" className="modal-title">
               {title}
             </h2>
             <p className="text-xs text-stone-400 mt-0.5">{subtitle}</p>

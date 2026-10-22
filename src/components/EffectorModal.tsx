@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Sparkles, Sliders } from 'lucide-react';
+import { X, Sliders } from 'lucide-react';
 import type { EffectorSettings } from '../types/music.ts';
 import { Knob } from './Knob.tsx';
 
@@ -20,11 +20,11 @@ export const EffectorModal: React.FC<EffectorModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-in fade-in duration-150"
+      className="modal-overlay animate-in fade-in duration-150"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-2xl bg-[#1c1917] border border-[#3e342b] rounded-xl shadow-2xl p-6 text-stone-200"
+        className="w-full max-w-2xl modal-panel p-6 text-stone-200"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -34,7 +34,7 @@ export const EffectorModal: React.FC<EffectorModalProps> = ({
         <div className="flex items-center justify-between border-b border-[#2d2722] pb-4 mb-6">
           <div className="flex items-center gap-2">
             <Sliders className="w-5 h-5 text-amber-500" />
-            <h2 id="effector-title" className="text-lg font-semibold tracking-wide text-amber-400 font-serif">
+            <h2 id="effector-title" className="modal-title">
               Effector
             </h2>
           </div>

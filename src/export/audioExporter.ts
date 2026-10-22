@@ -1,128 +1,20 @@
 /**
- * High-Resolution Lossless Audio Exporter (WAV & FLAC formats)
- * Uses OfflineAudioContext for fast offline rendering of the entire multitrack composition.
+ * High-Resolution Lossless Audio Exporter (WAV)
+ * Renders offline through the same AudioEngine as live playback (sampled instruments, mix and
+ * effects), so the exported file sounds exactly like the editor.
  */
 
-import type { Track } from '../types/music.ts';
-import { pitchToFrequency, ticksToSeconds } from '../utils/musicMath.ts';
+import type { EffectorSettings, Track } from '../types/music.ts';
+import { AudioEngine } from '../audio/AudioEngine.ts';
 import { triggerFileDownload } from '../midi/midiEncoder.ts';
 
-export async function renderMultitrackAudio(
+export function renderMultitrackAudio(
   tracks: Track[],
   bpm: number,
+  effector: EffectorSettings,
   sampleRate: number = 48000
 ): Promise<AudioBuffer> {
-  // Determine total duration
-  let maxTick = 0;
-  tracks.forEach((t) => {
-    t.notes.forEach((n) => {
-      const end = n.startTick + n.durationTicks;
-      if (end > maxTick) maxTick = end;
-    });
-  });
-
-  const durationSec = Math.max(2, ticksToSeconds(maxTick, bpm) + 2.5); // Add reverb ring tail
-  const offlineCtx = new OfflineAudioContext(2, Math.ceil(sampleRate * durationSec), sampleRate);
-
-  const masterGain = offlineCtx.createGain();
-  masterGain.gain.setValueAtTime(0.85, 0);
-
-  const limiter = offlineCtx.createDynamicsCompressor();
-  limiter.threshold.setValueAtTime(-0.5, 0);
-  limiter.knee.setValueAtTime(4.0, 0);
-  limiter.ratio.setValueAtTime(10.0, 0);
-  limiter.attack.setValueAtTime(0.003, 0);
-  limiter.release.setValueAtTime(0.1, 0);
-
-  masterGain.connect(limiter);
-  limiter.connect(offlineCtx.destination);
-
-  const hasSolo = tracks.some((t) => t.isSolo);
-
-  // Render each note in offline context
-  tracks.forEach((track) => {
-    if (track.isMuted) return;
-    if (hasSolo && !track.isSolo) return;
-
-    const trackGain = offlineCtx.createGain();
-    const vol = (track.volume / 100) * 0.7;
-    trackGain.gain.setValueAtTime(vol, 0);
-
-    const panner = offlineCtx.createStereoPanner ? offlineCtx.createStereoPanner() : null;
-    if (panner) {
-      panner.pan.setValueAtTime(track.pan, 0);
-      trackGain.connect(panner);
-      panner.connect(masterGain);
-    } else {
-      trackGain.connect(masterGain);
-    }
-
-    track.notes.forEach((note) => {
-      const startSec = ticksToSeconds(note.startTick, bpm);
-      const noteDur = ticksToSeconds(note.durationTicks, bpm);
-      const freq = pitchToFrequency(note.pitch);
-      const velFactor = Math.pow(Math.max(1, Math.min(127, note.velocity)) / 127, 1.2);
-
-      // Synthesize note according to instrument
-      const osc = offlineCtx.createOscillator();
-      const osc2 = offlineCtx.createOscillator();
-      const noteGain = offlineCtx.createGain();
-      const filter = offlineCtx.createBiquadFilter();
-
-      if (track.instrumentId === 'flute') {
-        osc.type = 'sine';
-        filter.type = 'lowpass';
-        filter.frequency.setValueAtTime(freq * 3, startSec);
-      } else if (track.instrumentId === 'violin' || track.instrumentId === 'cello') {
-        osc.type = 'sawtooth';
-        filter.type = 'bandpass';
-        filter.frequency.setValueAtTime(Math.min(8000, freq * 2.2), startSec);
-        filter.Q.setValueAtTime(2.0, startSec);
-      } else if (track.instrumentId === 'percussion') {
-        osc.type = note.pitch < 40 ? 'sine' : 'square';
-        filter.type = 'lowpass';
-        filter.frequency.setValueAtTime(1000, startSec);
-      } else if (track.instrumentId === 'marnisynth') {
-        osc.type = 'square';
-        osc2.type = 'sawtooth';
-        osc2.frequency.setValueAtTime(freq * 1.005, startSec);
-        filter.type = 'lowpass';
-        filter.frequency.setValueAtTime(freq * 4, startSec);
-      } else {
-        // Piano / Guitar / Harp
-        osc.type = 'triangle';
-        osc2.type = 'sine';
-        osc2.frequency.setValueAtTime(freq * 2, startSec);
-        filter.type = 'lowpass';
-        filter.frequency.setValueAtTime(Math.min(12000, freq * 5), startSec);
-      }
-
-      osc.frequency.setValueAtTime(freq, startSec);
-      osc.connect(filter);
-      if (track.instrumentId === 'grand-piano' || track.instrumentId === 'marnisynth') {
-        osc2.connect(filter);
-      }
-
-      filter.connect(noteGain);
-      noteGain.connect(trackGain);
-
-      const isSustain = !!(note.sustain ?? track.sustainPedal ?? (track.instrumentId === 'grand-piano'));
-      const releaseTime = isSustain ? 1.8 : 0.2;
-      const targetVol = velFactor * 0.9;
-      noteGain.gain.setValueAtTime(0.0001, startSec);
-      noteGain.gain.linearRampToValueAtTime(targetVol, startSec + 0.008);
-      noteGain.gain.exponentialRampToValueAtTime(0.0001, startSec + noteDur + releaseTime);
-
-      osc.start(startSec);
-      osc.stop(startSec + noteDur + releaseTime + 0.05);
-      if (track.instrumentId === 'grand-piano' || track.instrumentId === 'marnisynth') {
-        osc2.start(startSec);
-        osc2.stop(startSec + noteDur + releaseTime + 0.05);
-      }
-    });
-  });
-
-  return await offlineCtx.startRendering();
+  return AudioEngine.renderOffline(tracks, bpm, effector, sampleRate);
 }
 
 /**
@@ -169,7 +61,7 @@ export function audioBufferToWav(buffer: AudioBuffer, bitDepth: 16 | 24 = 24): U
   let offset = 44;
   for (let i = 0; i < numSamples; i++) {
     for (let c = 0; c < numChannels; c++) {
-      let sample = Math.max(-1, Math.min(1, channels[c][i]));
+      const sample = Math.max(-1, Math.min(1, channels[c][i]));
       if (bitDepth === 16) {
         // 16-bit signed integer (-32768 to 32767)
         const intSample = sample < 0 ? sample * 32768 : sample * 32767;
@@ -201,11 +93,12 @@ function writeString(view: DataView, offset: number, string: string) {
 export async function exportWavFile(
   tracks: Track[],
   bpm: number,
+  effector: EffectorSettings,
   filename = 'marni-composition.wav',
   bitDepth: 16 | 24 = 24
 ) {
   const sampleRate = bitDepth === 24 ? 48000 : 44100;
-  const renderedBuffer = await renderMultitrackAudio(tracks, bpm, sampleRate);
+  const renderedBuffer = await renderMultitrackAudio(tracks, bpm, effector, sampleRate);
   const wavBytes = audioBufferToWav(renderedBuffer, bitDepth);
   triggerFileDownload(wavBytes, filename, 'audio/wav');
 }

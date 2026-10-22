@@ -13,7 +13,6 @@ import {
   HelpCircle,
   FileText,
   RotateCw,
-  Clock,
   Layers,
   Split,
   BookOpen,
@@ -28,6 +27,7 @@ import {
   fetchAvailableGeminiModels,
   ParsedScoreResult,
 } from '../utils/aiSheetScanner.ts';
+import { newId } from '../utils/ids.ts';
 
 interface AiSheetScannerModalProps {
   isOpen: boolean;
@@ -204,16 +204,20 @@ export const AiSheetScannerModal: React.FC<AiSheetScannerModalProps> = ({
     handleSaveKey();
 
     try {
-      setStatusMessage('Decodificando pauta dupla (Claves de Sol e Fá), notas e compassos...');
       const result = await transcribeSheetImageWithGemini(selectedFile, apiKey, {
         model: selectedModel,
-        targetTrackId: destinationMode === 'existing' ? targetTrackId : `track-ai-${Date.now()}`,
+        onProgress: setStatusMessage,
+        targetTrackId: destinationMode === 'existing' ? targetTrackId : newId('track'),
         pageRange: pageRangeMode === 'custom' && customPageRange.trim() ? customPageRange.trim() : 'all',
         startTickOffset: computedOffset,
       });
 
       setScanResult(result);
-      setStatusMessage('Transcrição concluída com sucesso!');
+      setStatusMessage(
+        result.measuresToReview && result.measuresToReview.length > 0
+          ? 'Transcrição concluída: confira os compassos indicados.'
+          : 'Transcrição concluída com sucesso!'
+      );
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setErrorMessage(msg);
@@ -228,20 +232,20 @@ export const AiSheetScannerModal: React.FC<AiSheetScannerModalProps> = ({
     const baseTitle = newTrackName || scanResult.title || 'Partitura IA';
 
     if (destinationMode === 'new-2tracks') {
-      const rightTrackId = `track-ai-rh-${Date.now()}`;
-      const leftTrackId = `track-ai-lh-${Date.now() + 1}`;
+      const rightTrackId = newId('track');
+      const leftTrackId = newId('track');
 
       const rightNotes = (
         scanResult.rightHandNotes.length > 0 ? scanResult.rightHandNotes : scanResult.notes
       ).map((n) => ({
         ...n,
-        id: `note-${Date.now()}-${Math.random()}`,
+        id: newId('note'),
         trackId: rightTrackId,
       }));
 
       const leftNotes = scanResult.leftHandNotes.map((n) => ({
         ...n,
-        id: `note-${Date.now() + 1}-${Math.random()}`,
+        id: newId('note'),
         trackId: leftTrackId,
       }));
 
@@ -266,15 +270,15 @@ export const AiSheetScannerModal: React.FC<AiSheetScannerModalProps> = ({
         timeSignature: scanResult.timeSignature,
       });
     } else if (destinationMode === 'new-1track') {
-      const newId = `track-ai-${Date.now()}`;
+      const createdTrackId = newId('track');
       const remappedNotes = scanResult.notes.map((n) => ({
         ...n,
-        id: `note-${Date.now()}-${Math.random()}`,
-        trackId: newId,
+        id: newId('note'),
+        trackId: createdTrackId,
       }));
       onImportScore({
         notes: remappedNotes,
-        targetTrackId: newId,
+        targetTrackId: createdTrackId,
         createNewTrack: {
           name: baseTitle,
           instrumentId: newTrackInstrument,
@@ -286,7 +290,7 @@ export const AiSheetScannerModal: React.FC<AiSheetScannerModalProps> = ({
     } else {
       const remappedNotes = scanResult.notes.map((n) => ({
         ...n,
-        id: `note-${Date.now()}-${Math.random()}`,
+        id: newId('note'),
         trackId: targetTrackId,
       }));
       onImportScore({
@@ -302,15 +306,14 @@ export const AiSheetScannerModal: React.FC<AiSheetScannerModalProps> = ({
     onClose();
   };
 
-  const activeTrackObj = tracks.find((t) => t.id === targetTrackId);
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150 select-none"
+      className="modal-overlay animate-in fade-in duration-150 select-none"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-3xl bg-[#161412] border border-[#3e342b] rounded-2xl shadow-2xl p-6 text-stone-200 max-h-[92vh] flex flex-col overflow-hidden"
+        className="w-full max-w-3xl modal-panel p-6 text-stone-200 max-h-[92vh] flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -324,7 +327,7 @@ export const AiSheetScannerModal: React.FC<AiSheetScannerModalProps> = ({
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h2 id="omr-title" className="text-lg font-bold tracking-wide text-amber-400 font-serif">
+                <h2 id="omr-title" className="modal-title">
                   Importar Partitura por Imagem (IA OMR)
                 </h2>
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-amber-500/25 text-amber-300 border border-amber-500/50 shadow-sm">
@@ -784,6 +787,14 @@ export const AiSheetScannerModal: React.FC<AiSheetScannerModalProps> = ({
                 </div>
               )}
 
+              {scanResult.warnings && scanResult.warnings.length > 0 && (
+                <ul className="p-2 rounded-lg bg-amber-950/30 border border-amber-700/50 text-[11px] text-amber-200 space-y-1 list-disc list-inside">
+                  {scanResult.warnings.map((w) => (
+                    <li key={w}>{w}</li>
+                  ))}
+                </ul>
+              )}
+
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
                 <div className="p-2 rounded-lg bg-stone-900/60 border border-[#2d2722]">
                   <span className="text-stone-500 block">Tonalidade / Armadura:</span>
@@ -791,7 +802,7 @@ export const AiSheetScannerModal: React.FC<AiSheetScannerModalProps> = ({
                 </div>
                 <div className="p-2 rounded-lg bg-stone-900/60 border border-[#2d2722]">
                   <span className="text-stone-500 block">Total de Compassos:</span>
-                  <span className="font-medium text-stone-200">~{scanResult.stats.measures} compassos</span>
+                  <span className="font-medium text-stone-200">{scanResult.stats.measures} compassos (com repetições)</span>
                 </div>
                 <div className="p-2 rounded-lg bg-stone-900/60 border border-[#2d2722]">
                   <span className="text-stone-500 block">Extensão / Altura:</span>

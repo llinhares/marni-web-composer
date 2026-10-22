@@ -4,7 +4,6 @@ import {
   Upload,
   RotateCcw,
   Volume2,
-  VolumeX,
   MoreVertical,
   Trash2,
   Copy,
@@ -13,10 +12,12 @@ import {
   ListPlus,
   FileUp,
   ChevronUp,
+  Video,
 } from 'lucide-react';
 import type { Track, InstrumentId } from '../types/music.ts';
 import { BDO_INSTRUMENTS } from '../types/music.ts';
 import { AddInstrumentModal } from './AddInstrumentModal.tsx';
+import { APP_VERSION_LABEL } from '../version.ts';
 
 interface TrackListProps {
   tracks: Track[];
@@ -29,6 +30,7 @@ interface TrackListProps {
   onResetAll: () => void;
   onImportClick: (mode: 'replace' | 'append') => void;
   onOpenAiSheetScanner?: () => void;
+  onOpenVideoTranscriber?: () => void;
   totalNotes: number;
   maxNotes: number;
   bdoGrade: string;
@@ -46,6 +48,7 @@ export const TrackList: React.FC<TrackListProps> = ({
   onResetAll,
   onImportClick,
   onOpenAiSheetScanner,
+  onOpenVideoTranscriber,
   totalNotes,
   maxNotes,
   bdoGrade,
@@ -57,22 +60,31 @@ export const TrackList: React.FC<TrackListProps> = ({
 
   return (
     <aside
+      data-tour="tracks"
       className={`w-64 md:w-72 bg-[#161412] border-r border-[#2d2722] flex-col justify-between shrink-0 select-none ${isOpenOnMobile
-          ? 'flex absolute inset-y-0 left-0 z-40 shadow-2xl bg-[#161412]/95 backdrop-blur-md'
-          : 'hidden md:flex z-10'
+        ? 'flex absolute inset-y-0 left-0 z-40 shadow-2xl bg-[#161412]/95 backdrop-blur-md'
+        : 'hidden md:flex z-10'
         }`}
     >
       {/* Top Section: Note Budget & Track Cards */}
       <div className="flex-1 overflow-y-auto">
-        {/* BDO Note Counter Bar matching screenshot 1 */}
+        {/* Song summary; the BDO note budget is secondary (compatibility, not the goal) */}
         <div className="px-3 py-2 bg-[#141210] border-b border-[#2d2722] flex items-center justify-between text-xs">
           <div className="flex items-center gap-1.5 font-mono text-stone-300">
             <span className="text-amber-400 font-bold">{totalNotes}</span>
-            <span className="text-stone-500">/</span>
-            <span className="text-stone-400">{maxNotes}</span>
+            <span className="text-stone-400">{totalNotes === 1 ? 'nota' : 'notas'}</span>
+            <span className="text-stone-600">•</span>
+            <span className="text-stone-400">
+              {tracks.length} {tracks.length === 1 ? 'faixa' : 'faixas'}
+            </span>
           </div>
-          <span className="px-1.5 py-0.5 rounded bg-amber-950/70 border border-amber-800/60 text-amber-300 font-mono text-[10px]">
-            Rank {bdoGrade}
+          <span
+            className={`px-1.5 py-0.5 rounded border font-mono text-[10px] ${
+              totalNotes > maxNotes ? 'bg-red-950/60 border-red-800/60 text-red-300' : 'border-[#2d2722] text-stone-500'
+            }`}
+            title={`Limite para exportar ao Black Desert no Rank ${bdoGrade}: ${maxNotes} notas`}
+          >
+            BDO {totalNotes}/{maxNotes}
           </span>
         </div>
 
@@ -87,8 +99,8 @@ export const TrackList: React.FC<TrackListProps> = ({
                 key={track.id}
                 onClick={() => onSelectTrack(track.id)}
                 className={`p-3 rounded-xl border transition-all cursor-pointer relative ${isActive
-                    ? 'border-amber-600/70 bg-gradient-to-r from-[#2a221a] to-[#221c17] shadow-[0_2px_12px_rgba(0,0,0,0.4)]'
-                    : 'border-[#2d2722] bg-[#1c1917]/80 hover:bg-[#231f1c]'
+                  ? 'border-amber-600/70 bg-gradient-to-r from-[#2a221a] to-[#221c17] shadow-[0_2px_12px_rgba(0,0,0,0.4)]'
+                  : 'border-[#2d2722] bg-[#1c1917]/80 hover:bg-[#231f1c]'
                   }`}
               >
                 {/* Track Card Header */}
@@ -111,8 +123,8 @@ export const TrackList: React.FC<TrackListProps> = ({
                         onUpdateTrack(track.id, { isMuted: !track.isMuted });
                       }}
                       className={`w-6 h-6 rounded flex items-center justify-center font-bold text-[10px] transition-colors ${track.isMuted
-                          ? 'bg-rose-900 text-rose-200 border border-rose-700'
-                          : 'bg-stone-900 text-stone-400 hover:text-stone-200 border border-[#2d2722]'
+                        ? 'bg-rose-900 text-rose-200 border border-rose-700'
+                        : 'bg-stone-900 text-stone-400 hover:text-stone-200 border border-[#2d2722]'
                         }`}
                       title={track.isMuted ? 'Desmutar Faixa' : 'Mutar Faixa'}
                       aria-label="Mutar Faixa"
@@ -127,8 +139,8 @@ export const TrackList: React.FC<TrackListProps> = ({
                         onUpdateTrack(track.id, { isSolo: !track.isSolo });
                       }}
                       className={`w-6 h-6 rounded flex items-center justify-center font-bold text-[10px] transition-colors ${track.isSolo
-                          ? 'bg-amber-500 text-stone-950 font-extrabold border border-amber-400'
-                          : 'bg-stone-900 text-stone-400 hover:text-stone-200 border border-[#2d2722]'
+                        ? 'bg-amber-500 text-stone-950 font-extrabold border border-amber-400'
+                        : 'bg-stone-900 text-stone-400 hover:text-stone-200 border border-[#2d2722]'
                         }`}
                       title={track.isSolo ? 'Desativar Solo' : 'Solo Faixa'}
                       aria-label="Solo Faixa"
@@ -240,8 +252,8 @@ export const TrackList: React.FC<TrackListProps> = ({
                       onUpdateTrack(track.id, { auxSend: !track.auxSend });
                     }}
                     className={`flex items-center gap-1.5 text-[10px] font-medium px-2 py-0.5 rounded transition-colors ${track.auxSend
-                        ? 'text-amber-400 bg-amber-950/40 border border-amber-800/50'
-                        : 'text-stone-400 bg-stone-900 border border-[#2d2722]'
+                      ? 'text-amber-400 bg-amber-950/40 border border-amber-800/50'
+                      : 'text-stone-400 bg-stone-900 border border-[#2d2722]'
                       }`}
                   >
                     <span
@@ -281,7 +293,7 @@ export const TrackList: React.FC<TrackListProps> = ({
 
       {/* Bottom Controls: + Add, Import, Reset All */}
       <div className="p-3 border-t border-[#2d2722] space-y-2 bg-[#141210]">
-        <div className="flex items-center gap-2">
+        <div data-tour="add-track" className="flex items-center gap-2">
           {/* Add Track Button */}
           <button
             onClick={onAddTrack}
@@ -296,19 +308,17 @@ export const TrackList: React.FC<TrackListProps> = ({
           <div className="relative">
             <button
               onClick={() => setIsImportMenuOpen((prev) => !prev)}
-              className={`p-2 rounded-lg border transition-colors flex items-center gap-1 ${
-                isImportMenuOpen
+              className={`p-2 rounded-lg border transition-colors flex items-center gap-1 ${isImportMenuOpen
                   ? 'bg-stone-800 border-amber-600/70 text-amber-300'
                   : 'bg-stone-900 hover:bg-stone-850 border-[#2d2722] hover:border-amber-700/60 text-stone-400 hover:text-stone-200'
-              }`}
+                }`}
               title="Opções de Importação"
               aria-label="Opções de Importação"
             >
               <Upload className="w-4 h-4" />
               <ChevronUp
-                className={`w-3 h-3 text-stone-400 transition-transform duration-200 ${
-                  isImportMenuOpen ? 'rotate-180 text-amber-400' : ''
-                }`}
+                className={`w-3 h-3 text-stone-400 transition-transform duration-200 ${isImportMenuOpen ? 'rotate-180 text-amber-400' : ''
+                  }`}
               />
             </button>
 
@@ -377,6 +387,18 @@ export const TrackList: React.FC<TrackListProps> = ({
               <Sparkles className="w-4 h-4 text-amber-400" />
             </button>
           )}
+
+          {/* Video & Audio AI Transcriber Button */}
+          {onOpenVideoTranscriber && (
+            <button
+              onClick={onOpenVideoTranscriber}
+              className="p-2 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/40 hover:border-emerald-400 text-emerald-300 transition-colors flex items-center justify-center shadow-sm"
+              title="Transcrever Vídeo (Cascata Synthesia) ou Áudio para Faixas MIDI com IA"
+              aria-label="Transcritor de Vídeo e Áudio com IA"
+            >
+              <Video className="w-4 h-4 text-emerald-400" />
+            </button>
+          )}
         </div>
 
         {/* Reset All Button */}
@@ -391,7 +413,7 @@ export const TrackList: React.FC<TrackListProps> = ({
         {/* Creator Footer & Version */}
         <div className="pt-2 text-center text-[10px] text-stone-400 flex items-center justify-center gap-1.5 flex-wrap">
           <span className="px-1.5 py-0.5 rounded bg-amber-950/70 border border-amber-800/60 text-amber-300 font-mono text-[9px] font-bold">
-            v2.0.0
+            {APP_VERSION_LABEL}
           </span>
           <span className="text-stone-600">•</span>
           <span>

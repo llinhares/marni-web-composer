@@ -4,6 +4,7 @@
  */
 
 import type { Track } from '../types/music.ts';
+import { newId } from './ids.ts';
 
 export type ImportMode = 'replace' | 'append';
 
@@ -36,15 +37,14 @@ export function mergeImportedTracks(
     currentTracks.length === 1 && currentTracks[0].notes.length === 0;
 
   if (mode === 'append' && !isCurrentProjectEmpty) {
-    const timestamp = Date.now();
-    const remappedTracks: Track[] = importedTracks.map((t, tIdx) => {
-      const newTrackId = `track-imp-${timestamp}-${tIdx}-${Math.random().toString(36).substring(2, 6)}`;
+    const remappedTracks: Track[] = importedTracks.map((t) => {
+      const newTrackId = newId('track-imp');
       return {
         ...t,
         id: newTrackId,
-        notes: t.notes.map((n, nIdx) => ({
+        notes: t.notes.map((n) => ({
           ...n,
-          id: `note-imp-${timestamp}-${tIdx}-${nIdx}-${Math.random().toString(36).substring(2, 6)}`,
+          id: newId('note-imp'),
           trackId: newTrackId,
         })),
       };

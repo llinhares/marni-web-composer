@@ -1,4 +1,4 @@
-import type { Track, Note, EffectorSettings, InstrumentId } from '../types/music.ts';
+import type { Track, Note, EffectorSettings } from '../types/music.ts';
 
 export interface SongContext {
   bpm: number;

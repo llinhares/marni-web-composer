@@ -1,6 +1,6 @@
 /**
  * Marni Web Composer - Optimized DAW & BDO Music Studio
- * Developed based on Marni Web Composer v2 by Lucas Linhares (Tchepper)
+ * Created by Lucas Linhares (Tchepper)
  */
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
@@ -14,18 +14,25 @@ import type {
   EffectorSettings,
   SongMetadata,
   InstrumentId,
+  Marker,
 } from './types/music.ts';
 import { BDO_INSTRUMENTS, BDO_GRADE_LIMITS } from './types/music.ts';
 import { AudioEngine } from './audio/AudioEngine.ts';
+import { createPlayheadStore } from './audio/playheadStore.ts';
+import { newId } from './utils/ids.ts';
+import { getSavedAuthor, getSavedOwnerId, migrateLegacyProfile, saveAuthor } from './user/userProfile.ts';
+import { barRangeOf } from './editing/noteOps.ts';
+import { readImportFile } from './import/fileImport.ts';
+import { findShortcut, isEditableElement, type ShortcutId } from './ui/shortcuts.ts';
+import { UndoHistory } from './editing/undoHistory.ts';
+import { sessionSnapshotsEqual, type SessionSnapshot } from './editing/sessionSnapshot.ts';
+import { createMidiRecorder, recordedToNotes, type MidiRecorder, type RecordedNoteEvent } from './midi/midiRecorder.ts';
+import { sampleLibrary } from './audio/sampleLibrary.ts';
 import { WebMidiManager } from './midi/webMidi.ts';
 import { createStandardMidiFile, triggerFileDownload } from './midi/midiEncoder.ts';
-import { parseStandardMidiFile } from './midi/midiDecoder.ts';
 import { exportWavFile } from './export/audioExporter.ts';
-import { isBlackKey } from './utils/musicMath.ts';
-import { isMusicXmlContent, parseMusicXml } from './musicxml/musicXmlDecoder.ts';
-import { isBdoBinaryContent, parseBdoBinaryFile } from './bdo/bdoDecoder.ts';
+import { getBeatsPerMeasure } from './utils/musicMath.ts';
 import { mergeImportedTracks, type ImportMode } from './utils/trackImport.ts';
-import { detectBdoInstrument } from './utils/instrumentDetection.ts';
 import { Header } from './components/Header.tsx';
 import { TrackList } from './components/TrackList.tsx';
 import { PianoRoll } from './components/PianoRoll.tsx';
@@ -35,6 +42,28 @@ import { AddInstrumentModal } from './components/AddInstrumentModal.tsx';
 import { BdoExportModal } from './components/BdoExportModal.tsx';
 import { MidiSettingsModal } from './components/MidiSettingsModal.tsx';
 import { AiSheetScannerModal } from './components/AiSheetScannerModal.tsx';
+import { VideoAudioTranscriberModal } from './components/VideoAudioTranscriberModal.tsx';
+import { RecoveryBanner } from './components/RecoveryBanner.tsx';
+import { MixerPanel } from './components/MixerPanel.tsx';
+import { Notifications } from './components/Notifications.tsx';
+import { HelpCenter, type HelpTab } from './components/HelpCenter.tsx';
+import { GuidedTour } from './components/GuidedTour.tsx';
+import { TOUR_STORAGE_KEY, TOUR_VERSION } from './ui/tourLayout.ts';
+import { notify, errorMessage } from './ui/notify.ts';
+import {
+  DEFAULT_EFFECTOR_SETTINGS,
+  parseProjectFile,
+  projectFileName,
+  projectSignature,
+  serializeProject,
+  type BdoGrade,
+  type ProjectFile,
+  type ProjectState,
+} from './project/projectFile.ts';
+import { readAutosave, writeAutosave } from './project/autosave.ts';
+import { pickProjectFile, saveProjectToDisk, type FileHandleLike } from './project/projectIO.ts';
+
+const AUTOSAVE_DELAY_MS = 1200;
 
 // Initial demo score inspired by Balenos Theme in Black Desert Online
 const INITIAL_TRACKS: Track[] = [
@@ -98,13 +127,12 @@ export default function App() {
   const [tracks, setTracks] = useState<Track[]>(INITIAL_TRACKS);
   const [activeTrackId, setActiveTrackId] = useState<string>('track-piano');
   const [title, setTitle] = useState<string>('Marni Web Composer - Example');
+  // The current user's name and BDO owner ID: empty until they inform them (never a built-in default)
   const [author, setAuthor] = useState<string>(() => {
-    return localStorage.getItem('marni_bdo_author') || 'Tchepper';
+    migrateLegacyProfile();
+    return getSavedAuthor();
   });
-  const [bdoOwnerId, setBdoOwnerId] = useState<number>(() => {
-    const saved = localStorage.getItem('marni_bdo_owner_id');
-    return saved ? parseInt(saved, 10) : 1009649;
-  });
+  const [bdoOwnerId, setBdoOwnerId] = useState<number>(() => getSavedOwnerId() ?? 0);
   const [isBdoProtected, setIsBdoProtected] = useState<boolean>(false);
   const [originalBdoAuthor, setOriginalBdoAuthor] = useState<string>('');
   const [originalBdoComposer, setOriginalBdoComposer] = useState<string>('');
@@ -114,28 +142,27 @@ export default function App() {
   const handleAuthorChange = useCallback((newAuthor: string) => {
     if (isBdoProtected) return;
     setAuthor(newAuthor);
-    localStorage.setItem('marni_bdo_author', newAuthor);
+    saveAuthor(newAuthor);
   }, [isBdoProtected]);
 
   const [bpm, setBpm] = useState<number>(120);
+  const bpmRef = useRef(bpm);
+  bpmRef.current = bpm;
   const [timeSignature, setTimeSignature] = useState<TimeSignature>('4/4');
   const [gridSnap, setGridSnap] = useState<GridSnap>('1/4');
   const [toolMode, setToolMode] = useState<ToolMode>('pointer');
   const [accidentals, setAccidentals] = useState<'sharp' | 'flat'>('sharp');
   const [zoomLevel, setZoomLevel] = useState<number>(1.0);
   const [scaleType, setScaleType] = useState<string>('chromatic');
-  const [bdoGrade, setBdoGrade] = useState<'F' | 'D' | 'C' | 'B' | 'A' | 'S'>('S');
+  const [bdoGrade, setBdoGrade] = useState<BdoGrade>('S');
 
   // Playback State
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
-  const [currentPlayheadTick, setCurrentPlayheadTick] = useState<number>(0);
+  // Playhead lives outside React state: only the timecode and the piano-roll overlay follow it
+  const [playhead] = useState(() => createPlayheadStore(0));
 
   // Effector / VST State
-  const [effectorSettings, setEffectorSettings] = useState<EffectorSettings>({
-    reverb: { enabled: true, time: 65, damp: 40, mix: 45 },
-    delay: { enabled: false, feedback: 35, time: 40, mix: 30 },
-    chorus: { enabled: false, feedback: 20, lfoDepth: 40, lfoFrequency: 35, mix: 35 },
-  });
+  const [effectorSettings, setEffectorSettings] = useState<EffectorSettings>(DEFAULT_EFFECTOR_SETTINGS);
 
   // Modal Dialogs
   const [isEffectorOpen, setIsEffectorOpen] = useState(false);
@@ -147,6 +174,19 @@ export default function App() {
   const [isSidebarOpenMobile, setIsSidebarOpenMobile] = useState(false);
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
   const [isAiSheetScannerOpen, setIsAiSheetScannerOpen] = useState(false);
+  const [isVideoTranscriberOpen, setIsVideoTranscriberOpen] = useState(false);
+  const [isMixerOpen, setIsMixerOpen] = useState(false);
+  const [help, setHelp] = useState<{ open: boolean; tab: HelpTab }>({ open: false, tab: 'guide' });
+  const [isTourOpen, setIsTourOpen] = useState(false);
+  const finishTour = useCallback(() => {
+    setIsTourOpen(false);
+    try {
+      localStorage.setItem(TOUR_STORAGE_KEY, TOUR_VERSION);
+    } catch {
+      // private mode: the tour may show again next time
+    }
+  }, []);
+  const readMeterPeaks = useCallback(() => audioEngineRef.current?.getMeterPeaks() ?? null, []);
 
   // Hidden file input for importing MIDI / XML / JSON
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -155,7 +195,6 @@ export default function App() {
   useEffect(() => {
     const engine = new AudioEngine();
     audioEngineRef.current = engine;
-
     const midi = new WebMidiManager();
     midiManagerRef.current = midi;
 
@@ -166,17 +205,8 @@ export default function App() {
         }
       });
 
-      midi.onNote((event) => {
-        if (event.type === 'noteon') {
-          // Audition note in active track
-          const currentTracks = tracksRef.current;
-          const currentActiveId = activeTrackIdRef.current;
-          const active = currentTracks.find((t) => t.id === currentActiveId) || currentTracks[0];
-          if (active) {
-            engine.playNote(active.instrumentId, event.pitch, event.velocity);
-          }
-        }
-      });
+      midi.onNote((event) => handleMidiNoteRef.current(event));
+      midi.onSustain((down) => handleMidiSustainRef.current(down));
     }
 
     return () => {
@@ -190,110 +220,71 @@ export default function App() {
   const activeTrackIdRef = useRef(activeTrackId);
   activeTrackIdRef.current = activeTrackId;
 
-  // Undo / Redo History Stack
-  interface HistorySnapshot {
-    tracks: Track[];
-    activeTrackId: string;
-  }
+  // Undo / Redo History (notes, tracks, tempo, meter and effects)
+  const effectorRef = useRef(effectorSettings);
+  effectorRef.current = effectorSettings;
+  const bpmHistRef = useRef(bpm);
+  bpmHistRef.current = bpm;
+  const timeSigHistRef = useRef(timeSignature);
+  timeSigHistRef.current = timeSignature;
 
-  const [history, setHistory] = useState<HistorySnapshot[]>([
-    { tracks: INITIAL_TRACKS, activeTrackId: 'track-piano' },
-  ]);
-  const [historyIndex, setHistoryIndex] = useState<number>(0);
+  const snapshotOf = (trackList: Track[], activeId: string): SessionSnapshot => ({
+    tracks: trackList,
+    activeTrackId: activeId,
+    bpm: bpmHistRef.current,
+    timeSignature: timeSigHistRef.current,
+    effectorSettings: effectorRef.current,
+  });
 
-  const historyRef = useRef(history);
-  historyRef.current = history;
-  const historyIndexRef = useRef(historyIndex);
-  historyIndexRef.current = historyIndex;
+  const historyRef = useRef<UndoHistory<SessionSnapshot> | null>(null);
+  historyRef.current ??= new UndoHistory(
+    { tracks: INITIAL_TRACKS, activeTrackId: 'track-piano', bpm: 120, timeSignature: '4/4', effectorSettings: DEFAULT_EFFECTOR_SETTINGS },
+    { equals: sessionSnapshotsEqual }
+  );
+  const [, setHistoryVersion] = useState(0);
 
-  const pushHistory = useCallback((newTracks: Track[], newActiveId?: string) => {
-    const activeId = newActiveId || activeTrackIdRef.current;
-    const currentSnap = historyRef.current[historyIndexRef.current];
-    if (
-      currentSnap &&
-      currentSnap.tracks === newTracks &&
-      currentSnap.activeTrackId === activeId
-    ) {
-      return;
-    }
-
-    // Ignore snapshots where only selection flags changed without musical differences
-    if (currentSnap && currentSnap.activeTrackId === activeId) {
-      const prevT = currentSnap.tracks;
-      if (prevT.length === newTracks.length) {
-        let isIdentical = true;
-        for (let i = 0; i < prevT.length; i++) {
-          const tA = prevT[i];
-          const tB = newTracks[i];
-          if (
-            tA.id !== tB.id ||
-            tA.instrumentId !== tB.instrumentId ||
-            tA.volume !== tB.volume ||
-            tA.pan !== tB.pan ||
-            tA.isMuted !== tB.isMuted ||
-            tA.isSolo !== tB.isSolo ||
-            tA.notes.length !== tB.notes.length
-          ) {
-            isIdentical = false;
-            break;
-          }
-          for (let j = 0; j < tA.notes.length; j++) {
-            const nA = tA.notes[j];
-            const nB = tB.notes[j];
-            if (
-              nA.id !== nB.id ||
-              nA.pitch !== nB.pitch ||
-              nA.startTick !== nB.startTick ||
-              nA.durationTicks !== nB.durationTicks ||
-              nA.velocity !== nB.velocity
-            ) {
-              isIdentical = false;
-              break;
-            }
-          }
-          if (!isIdentical) break;
-        }
-        if (isIdentical) return;
-      }
-    }
-
-    setHistory((prev) => {
-      const sliced = prev.slice(0, historyIndexRef.current + 1);
-      const updated = [...sliced, { tracks: newTracks, activeTrackId: activeId }];
-      if (updated.length > 50) {
-        updated.shift();
-      }
-      return updated;
-    });
-    setHistoryIndex((prev) => Math.min(49, prev + 1));
-  }, []);
-
-  const handleUndo = useCallback(() => {
-    if (historyIndexRef.current > 0) {
-      const newIdx = historyIndexRef.current - 1;
-      const snap = historyRef.current[newIdx];
-      if (snap) {
-        setHistoryIndex(newIdx);
-        setTracks(snap.tracks);
-        setActiveTrackId(snap.activeTrackId);
-      }
+  const pushHistory = useCallback((newTracks: Track[], newActiveId?: string, group?: string) => {
+    if (historyRef.current!.push(snapshotOf(newTracks, newActiveId || activeTrackIdRef.current), group)) {
+      setHistoryVersion((v) => v + 1);
     }
   }, []);
 
-  const handleRedo = useCallback(() => {
-    if (historyIndexRef.current < historyRef.current.length - 1) {
-      const newIdx = historyIndexRef.current + 1;
-      const snap = historyRef.current[newIdx];
-      if (snap) {
-        setHistoryIndex(newIdx);
-        setTracks(snap.tracks);
-        setActiveTrackId(snap.activeTrackId);
-      }
-    }
+  /** Applies a track change immediately (also to the ref, so edits in the same frame stack up) and records it. */
+  const commitTracks = useCallback(
+    (updater: (prev: Track[]) => Track[], opts: { history?: boolean; activeId?: string; group?: string } = {}) => {
+      const next = updater(tracksRef.current);
+      if (next === tracksRef.current) return;
+      tracksRef.current = next;
+      setTracks(next);
+      if (opts.history !== false) pushHistory(next, opts.activeId, opts.group);
+    },
+    [pushHistory]
+  );
+
+  const restoreSnapshot = useCallback((snap: SessionSnapshot | null) => {
+    if (!snap) return;
+    tracksRef.current = snap.tracks;
+    setTracks(snap.tracks);
+    setActiveTrackId(snap.activeTrackId);
+    setBpm(snap.bpm);
+    setTimeSignature(snap.timeSignature);
+    setEffectorSettings(snap.effectorSettings);
+    setHistoryVersion((v) => v + 1);
   }, []);
 
-  const canUndo = historyIndex > 0;
-  const canRedo = historyIndex < history.length - 1;
+  const handleUndo = useCallback(() => restoreSnapshot(historyRef.current!.undo()), [restoreSnapshot]);
+  const handleRedo = useCallback(() => restoreSnapshot(historyRef.current!.redo()), [restoreSnapshot]);
+
+  // Tempo, meter and effect changes are undoable too (typing/dragging collapses into one step)
+  useEffect(() => {
+    const cur = historyRef.current!.current;
+    if (cur.bpm === bpm && cur.timeSignature === timeSignature && cur.effectorSettings === effectorSettings) return;
+    const group = cur.bpm !== bpm ? 'bpm' : cur.timeSignature !== timeSignature ? 'meter' : 'fx';
+    pushHistory(tracksRef.current, activeTrackIdRef.current, group);
+  }, [bpm, timeSignature, effectorSettings, pushHistory]);
+
+  const canUndo = historyRef.current.canUndo;
+  const canRedo = historyRef.current.canRedo;
 
   // Effector update sync
   useEffect(() => {
@@ -351,55 +342,239 @@ export default function App() {
     ]
   );
 
-  // Playback Controls
+  // Playback & recording
+  const [isRecording, setIsRecording] = useState(false);
+  const [metronomeOn, setMetronomeOn] = useState<boolean>(() => localStorage.getItem('marni_metronome') === '1');
+  const [countInOn, setCountInOn] = useState<boolean>(() => localStorage.getItem('marni_count_in') !== '0');
+  const recorderRef = useRef<{ recorder: MidiRecorder; trackId: string; baseNotes: Note[] } | null>(null);
+  const liveTakeRef = useRef<RecordedNoteEvent[]>([]);
+  const countInRef = useRef(countInOn);
+  countInRef.current = countInOn;
+  const timeSignatureRef = useRef(timeSignature);
+  timeSignatureRef.current = timeSignature;
+
+  useEffect(() => {
+    localStorage.setItem('marni_metronome', metronomeOn ? '1' : '0');
+    localStorage.setItem('marni_count_in', countInOn ? '1' : '0');
+    audioEngineRef.current?.setMetronome(metronomeOn, getBeatsPerMeasure(timeSignature));
+  }, [metronomeOn, countInOn, timeSignature]);
+
+  /** Writes the take into its track: notes appear live while recording, one undo step at the end. */
+  const showTake = useCallback(
+    (events: RecordedNoteEvent[], commit: boolean) => {
+      const rec = recorderRef.current;
+      if (!rec) return;
+      const recorded = recordedToNotes(events, rec.trackId, () => newId('note'));
+      commitTracks(
+        (prev) => prev.map((t) => (t.id === rec.trackId ? { ...t, notes: [...rec.baseNotes, ...recorded] } : t)),
+        { history: commit, activeId: rec.trackId }
+      );
+    },
+    [commitTracks]
+  );
+
+  const finishRecording = useCallback(() => {
+    const rec = recorderRef.current;
+    if (!rec) return;
+    const events = rec.recorder.finish(audioEngineRef.current?.currentTick() ?? playhead.get());
+    if (events.length > 0) showTake(events, true);
+    recorderRef.current = null;
+    liveTakeRef.current = [];
+    setIsRecording(false);
+  }, [playhead, showTake]);
+
+  const startEngineAt = useCallback(
+    (tick: number, countInTicks = 0) => {
+      audioEngineRef.current?.startPlayback(
+        tracksRef.current,
+        bpmRef.current,
+        tick,
+        (t) => playhead.set(t),
+        () => {
+          finishRecording();
+          setIsPlaying(false);
+          playhead.set(0);
+        },
+        { countInTicks }
+      );
+    },
+    [playhead, finishRecording]
+  );
+
   const handlePlay = useCallback(() => {
     if (!audioEngineRef.current) return;
     audioEngineRef.current.init().then(() => {
       setIsPlaying(true);
-      audioEngineRef.current?.startPlayback(
-        tracks,
-        bpm,
-        currentPlayheadTick,
-        (tick) => {
-          setCurrentPlayheadTick(tick);
-        },
-        () => {
-          setIsPlaying(false);
-          setCurrentPlayheadTick(0);
-        }
-      );
+      startEngineAt(playhead.get());
     });
-  }, [tracks, bpm, currentPlayheadTick]);
+  }, [playhead, startEngineAt]);
 
   const handlePause = useCallback(() => {
+    finishRecording();
     audioEngineRef.current?.pausePlayback();
     setIsPlaying(false);
-  }, []);
+  }, [finishRecording]);
 
   const handleStop = useCallback(() => {
+    finishRecording();
     audioEngineRef.current?.stopPlayback();
     setIsPlaying(false);
-    setCurrentPlayheadTick(0);
-  }, []);
+    playhead.set(0);
+  }, [playhead, finishRecording]);
+
+  /** Records the MIDI keyboard into the active track, from the playhead (optionally after a count-in bar). */
+  const handleRecord = useCallback(() => {
+    if (recorderRef.current) {
+      handlePause();
+      return;
+    }
+    const engine = audioEngineRef.current;
+    const track = tracksRef.current.find((t) => t.id === activeTrackIdRef.current);
+    if (!engine || !track) return;
+    engine.init().then(() => {
+      const startTick = playhead.get();
+      recorderRef.current = { recorder: createMidiRecorder(startTick), trackId: track.id, baseNotes: track.notes };
+      liveTakeRef.current = [];
+      setIsRecording(true);
+      setIsPlaying(true);
+      startEngineAt(startTick, countInRef.current ? getBeatsPerMeasure(timeSignatureRef.current) * 480 : 0);
+    });
+  }, [handlePause, playhead, startEngineAt]);
+
+  // MIDI keyboard: notes sound while the key is held; captured when recording
+  const handleMidiNoteRef = useRef<(e: { type: 'noteon' | 'noteoff'; pitch: number; velocity: number }) => void>(
+    () => {}
+  );
+  const handleMidiSustainRef = useRef<(down: boolean) => void>(() => {});
+  const heldVoicesRef = useRef(new Map<number, string>());
+  const pedalDownRef = useRef(false);
+  handleMidiNoteRef.current = (e) => {
+    const engine = audioEngineRef.current;
+    if (!engine) return;
+    const rec = recorderRef.current;
+    const tick = engine.currentTick();
+    if (e.type === 'noteon') {
+      const track =
+        tracksRef.current.find((t) => t.id === (rec?.trackId ?? activeTrackIdRef.current)) ?? tracksRef.current[0];
+      if (!track) return;
+      void engine.init();
+      const prev = heldVoicesRef.current.get(e.pitch);
+      if (prev) engine.releaseHeldNote(prev);
+      heldVoicesRef.current.set(
+        e.pitch,
+        engine.startHeldNote(
+          track.instrumentId,
+          e.pitch,
+          e.velocity,
+          track.volume,
+          track.auxSend,
+          track.pan,
+          pedalDownRef.current || !!track.sustainPedal
+        )
+      );
+      rec?.recorder.noteOn(e.pitch, e.velocity, tick);
+    } else {
+      const voice = heldVoicesRef.current.get(e.pitch);
+      if (voice && !pedalDownRef.current) {
+        engine.releaseHeldNote(voice);
+        heldVoicesRef.current.delete(e.pitch);
+      }
+      const closed = rec?.recorder.noteOff(e.pitch, tick);
+      if (closed) {
+        liveTakeRef.current = [...liveTakeRef.current, closed];
+        showTake(liveTakeRef.current, false);
+      }
+    }
+  };
+  handleMidiSustainRef.current = (down) => {
+    pedalDownRef.current = down;
+    const engine = audioEngineRef.current;
+    if (!down && engine) {
+      heldVoicesRef.current.forEach((voice) => engine.releaseHeldNote(voice));
+      heldVoicesRef.current.clear();
+    }
+    const rec = recorderRef.current;
+    if (rec && engine) {
+      const closed = rec.recorder.sustainPedal(down, engine.currentTick());
+      if (closed.length > 0) {
+        liveTakeRef.current = [...liveTakeRef.current, ...closed];
+        showTake(liveTakeRef.current, false);
+      }
+    }
+  };
 
   const handleSeek = useCallback(
     (tick: number) => {
-      setCurrentPlayheadTick(tick);
-      if (isPlaying && audioEngineRef.current) {
-        audioEngineRef.current.startPlayback(
-          tracks,
-          bpm,
-          tick,
-          (t) => setCurrentPlayheadTick(t),
-          () => {
-            setIsPlaying(false);
-            setCurrentPlayheadTick(0);
-          }
-        );
-      }
+      playhead.set(tick);
+      if (isPlaying && !recorderRef.current) startEngineAt(tick);
     },
-    [isPlaying, tracks, bpm]
+    [isPlaying, playhead, startEngineAt]
   );
+
+  // Markers (saved with the project)
+  const [markers, setMarkers] = useState<Marker[]>([]);
+  const markersRef = useRef(markers);
+  markersRef.current = markers;
+  const handleAddMarker = useCallback(() => {
+    const tick = Math.round(playhead.get());
+    setMarkers((prev) =>
+      prev.some((m) => m.tick === tick)
+        ? prev
+        : [...prev, { id: newId('marker'), tick, name: `Marcador ${prev.length + 1}` }].sort((a, b) => a.tick - b.tick)
+    );
+  }, [playhead]);
+  const handleRenameMarker = useCallback((id: string, name: string) => {
+    setMarkers((prev) => prev.map((m) => (m.id === id ? { ...m, name } : m)));
+  }, []);
+  const handleDeleteMarker = useCallback((id: string) => {
+    setMarkers((prev) => prev.filter((m) => m.id !== id));
+  }, []);
+  const jumpToMarker = useCallback(
+    (direction: 1 | -1) => {
+      const here = playhead.get();
+      const list = markersRef.current;
+      const target =
+        direction > 0 ? list.find((m) => m.tick > here + 1) : [...list].reverse().find((m) => m.tick < here - 1);
+      if (target) handleSeek(target.tick);
+      else if (direction < 0) handleSeek(0);
+    },
+    [playhead, handleSeek]
+  );
+
+  // Loop region (Shift+drag on the ruler, or L to loop the selection / the next 4 bars)
+  const [loop, setLoop] = useState<{ start: number; end: number; enabled: boolean } | null>(null);
+  useEffect(() => {
+    audioEngineRef.current?.setLoop(loop?.enabled ? loop : null);
+  }, [loop]);
+  const handleLoopChange = useCallback((range: { start: number; end: number }) => {
+    setLoop({ ...range, enabled: true });
+  }, []);
+  const handleToggleLoop = useCallback(() => {
+    setLoop((prev) => {
+      if (prev) return { ...prev, enabled: !prev.enabled };
+      const ticksPerBar = getBeatsPerMeasure(timeSignatureRef.current) * 480;
+      const active = tracksRef.current.find((t) => t.id === activeTrackIdRef.current);
+      const fromSelection = barRangeOf(active?.notes.filter((n) => n.selected) ?? [], ticksPerBar);
+      if (fromSelection) return { ...fromSelection, enabled: true };
+      const barStart = Math.floor(playhead.get() / ticksPerBar) * ticksPerBar;
+      return { start: barStart, end: barStart + 4 * ticksPerBar, enabled: true };
+    });
+  }, [playhead]);
+
+  // Download the sampled instruments the song uses (cached after the first time)
+  const instrumentKey = [...new Set(tracks.map((t) => t.instrumentId))].sort().join(',');
+  const instrumentIds = useMemo(() => (instrumentKey ? (instrumentKey.split(',') as InstrumentId[]) : []), [instrumentKey]);
+  useEffect(() => {
+    void sampleLibrary.loadAll(instrumentIds);
+  }, [instrumentIds]);
+
+  // Edits, mute/solo and tempo changes reach the engine while it plays
+  useEffect(() => {
+    audioEngineRef.current?.updateSong(tracks);
+  }, [tracks]);
+  useEffect(() => {
+    audioEngineRef.current?.setTempo(bpm);
+  }, [bpm]);
 
   // Audition single pitch
   const handleAuditionPitch = useCallback(
@@ -425,15 +600,12 @@ export default function App() {
   // Track manipulation
   const handleUpdateNotes = useCallback(
     (trackId: string, updatedNotes: Note[], commitHistory: boolean = true) => {
-      setTracks((prev) => {
-        const updated = prev.map((t) => (t.id === trackId ? { ...t, notes: updatedNotes } : t));
-        if (commitHistory) {
-          pushHistory(updated, trackId);
-        }
-        return updated;
+      commitTracks((prev) => prev.map((t) => (t.id === trackId ? { ...t, notes: updatedNotes } : t)), {
+        history: commitHistory,
+        activeId: trackId,
       });
     },
-    [pushHistory]
+    [commitTracks]
   );
 
   const handleAddTrack = (instrumentId: InstrumentId) => {
@@ -442,7 +614,7 @@ export default function App() {
     const name = count === 0 ? (inst?.name || 'Instrumento') : `${inst?.name} ${count + 1}`;
 
     const newTrack: Track = {
-      id: `track-${Date.now()}`,
+      id: newId('track'),
       name,
       instrumentId,
       color: inst?.color || '#d4a373',
@@ -455,25 +627,16 @@ export default function App() {
       notes: [],
     };
 
-    setTracks((prev) => {
-      const updated = [...prev, newTrack];
-      pushHistory(updated, newTrack.id);
-      return updated;
-    });
+    commitTracks((prev) => [...prev, newTrack], { activeId: newTrack.id });
     setActiveTrackId(newTrack.id);
   };
 
   const handleDeleteTrack = (trackId: string) => {
-    if (tracks.length <= 1) return;
-    setTracks((prev) => {
-      const filtered = prev.filter((t) => t.id !== trackId);
-      const nextActiveId = activeTrackId === trackId ? filtered[0]?.id || '' : activeTrackId;
-      if (activeTrackId === trackId) {
-        setActiveTrackId(nextActiveId);
-      }
-      pushHistory(filtered, nextActiveId);
-      return filtered;
-    });
+    if (tracksRef.current.length <= 1) return;
+    const remaining = tracksRef.current.filter((t) => t.id !== trackId);
+    const nextActiveId = activeTrackId === trackId ? remaining[0]?.id || '' : activeTrackId;
+    if (activeTrackId === trackId) setActiveTrackId(nextActiveId);
+    commitTracks(() => remaining, { activeId: nextActiveId });
   };
 
   const handleDuplicateTrack = (trackId: string) => {
@@ -482,23 +645,21 @@ export default function App() {
 
     const duplicated: Track = {
       ...source,
-      id: `track-${Date.now()}`,
+      id: newId('track'),
       name: `${source.name} (Cópia)`,
-      notes: source.notes.map((n) => ({ ...n, id: `note-${Date.now()}-${Math.random()}` })),
+      notes: [],
     };
+    duplicated.notes = source.notes.map((n) => ({ ...n, id: newId('note'), trackId: duplicated.id }));
 
-    setTracks((prev) => {
-      const updated = [...prev, duplicated];
-      pushHistory(updated, duplicated.id);
-      return updated;
-    });
+    commitTracks((prev) => [...prev, duplicated], { activeId: duplicated.id });
     setActiveTrackId(duplicated.id);
   };
 
   const handleUpdateTrack = (trackId: string, updates: Partial<Track>) => {
-    setTracks((prev) =>
-      prev.map((t) => (t.id === trackId ? { ...t, ...updates } : t))
-    );
+    // Grouped per track and field: dragging a volume/pan slider is a single undo step
+    commitTracks((prev) => prev.map((t) => (t.id === trackId ? { ...t, ...updates } : t)), {
+      group: `track:${trackId}:${Object.keys(updates).sort().join(',')}`,
+    });
   };
 
   const handleResetAll = () => {
@@ -522,17 +683,21 @@ export default function App() {
       },
     ];
     setTracks(resetTracks);
+    setMarkers([]);
     setActiveTrackId('track-piano');
-    setCurrentPlayheadTick(0);
+    playhead.set(0);
     setTitle('Marni Web Composer - Example');
     setIsBdoProtected(false);
     setOriginalBdoAuthor('');
     setOriginalBdoComposer('');
     setOriginalBdoArranger('');
     setOriginalBdoOwnerId(null);
-    setAuthor(localStorage.getItem('marni_bdo_author') || 'Tchepper');
+    setAuthor(getSavedAuthor());
     setIsResetConfirmOpen(false);
     pushHistory(resetTracks, 'track-piano');
+    // A reset starts a new, not-yet-saved project
+    fileHandleRef.current = null;
+    setProjectFileLabel(null);
   };
 
   // Export handlers
@@ -547,63 +712,316 @@ export default function App() {
     try {
       const suffix = bitDepth === 24 ? '_master_24bit.wav' : '_cd_16bit.wav';
       const filename = `${(title || 'marni_composition').toLowerCase().replace(/\s+/g, '_')}${suffix}`;
-      await exportWavFile(tracks, bpm, filename, bitDepth);
+      await exportWavFile(tracks, bpm, effectorSettings, filename, bitDepth);
+      notify.success(`Áudio exportado: ${filename}`);
+    } catch (err) {
+      console.error('Falha ao exportar WAV:', err);
+      notify.error(errorMessage(err, 'Não foi possível exportar o áudio.'));
     } finally {
       setIsExportingAudio(false);
     }
   };
 
-  // Keyboard Shortcuts (Space, V, B, E, and Ctrl+Z / Ctrl+Y for Undo/Redo)
+  // ---------------------------------------------------------------------------
+  // Project file (.marni), dirty state, autosave & crash recovery
+  // ---------------------------------------------------------------------------
+
+  const projectState: ProjectState = useMemo(
+    () => ({
+      title,
+      author,
+      bpm,
+      timeSignature,
+      gridSnap,
+      accidentals,
+      scaleType,
+      bdoGrade,
+      bdoOwnerId,
+      effectorSettings,
+      tracks,
+      activeTrackId,
+      markers,
+      bdoProtection: {
+        isProtected: isBdoProtected,
+        author: originalBdoAuthor,
+        composer: originalBdoComposer,
+        arranger: originalBdoArranger,
+        ownerId: originalBdoOwnerId,
+      },
+    }),
+    [
+      title,
+      author,
+      bpm,
+      timeSignature,
+      gridSnap,
+      accidentals,
+      scaleType,
+      bdoGrade,
+      bdoOwnerId,
+      effectorSettings,
+      tracks,
+      activeTrackId,
+      markers,
+      isBdoProtected,
+      originalBdoAuthor,
+      originalBdoComposer,
+      originalBdoArranger,
+      originalBdoOwnerId,
+    ]
+  );
+  const projectStateRef = useRef(projectState);
+  projectStateRef.current = projectState;
+
+  const currentSignature = useMemo(() => projectSignature(projectState), [projectState]);
+  // Signature of the content last written to / read from a .marni file (or the startup state)
+  const [savedSignature, setSavedSignature] = useState<string>(currentSignature);
+  const isDirty = currentSignature !== savedSignature;
+  const fileHandleRef = useRef<FileHandleLike | null>(null);
+  const [projectFileLabel, setProjectFileLabel] = useState<string | null>(null);
+  const [lastAutosaveAt, setLastAutosaveAt] = useState<Date | null>(null);
+  // Until the user answers the recovery prompt, autosave must not overwrite the stored session
+  const [recoveryChecked, setRecoveryChecked] = useState(false);
+  const [recoveryOffer, setRecoveryOffer] = useState<{ project: ProjectFile; savedAt: Date; isDirty: boolean } | null>(
+    null
+  );
+
+
+  const applyProject = useCallback(
+    (p: ProjectFile) => {
+      handleStop();
+      setTracks(p.tracks);
+      setActiveTrackId(p.activeTrackId);
+      setTitle(p.title);
+      setAuthor(p.author);
+      setBpm(p.bpm);
+      setTimeSignature(p.timeSignature);
+      setGridSnap(p.gridSnap);
+      setAccidentals(p.accidentals);
+      setScaleType(p.scaleType);
+      setBdoGrade(p.bdoGrade);
+      if (p.bdoOwnerId > 0) setBdoOwnerId(p.bdoOwnerId);
+      setEffectorSettings(p.effectorSettings);
+      setMarkers(p.markers);
+      setIsBdoProtected(p.bdoProtection.isProtected);
+      setOriginalBdoAuthor(p.bdoProtection.author);
+      setOriginalBdoComposer(p.bdoProtection.composer);
+      setOriginalBdoArranger(p.bdoProtection.arranger);
+      setOriginalBdoOwnerId(p.bdoProtection.ownerId);
+      playhead.set(0);
+      // A loaded project starts a fresh undo history
+      historyRef.current!.reset({
+        tracks: p.tracks,
+        activeTrackId: p.activeTrackId,
+        bpm: p.bpm,
+        timeSignature: p.timeSignature,
+        effectorSettings: p.effectorSettings,
+      });
+      setHistoryVersion((v) => v + 1);
+      return projectSignature({ ...p, bdoOwnerId: p.bdoOwnerId > 0 ? p.bdoOwnerId : bdoOwnerId });
+    },
+    [handleStop, bdoOwnerId]
+  );
+
+  const handleSaveProject = useCallback(
+    async (saveAs = false) => {
+      const state = projectStateRef.current;
+      try {
+        const result = await saveProjectToDisk(
+          serializeProject(state),
+          fileHandleRef.current?.name ?? projectFileName(state.title),
+          fileHandleRef.current,
+          saveAs
+        );
+        if (result === 'cancelled') return;
+        fileHandleRef.current = result;
+        setProjectFileLabel(result?.name ?? projectFileName(state.title));
+        setSavedSignature(projectSignature(state));
+        notify.success(result ? `Projeto salvo em ${result.name}` : 'Projeto baixado (.marni)');
+      } catch (err) {
+        console.error('Falha ao salvar projeto:', err);
+        notify.error(errorMessage(err, 'Não foi possível salvar o projeto.'));
+      }
+    },
+    []
+  );
+
+  const openProjectText = useCallback(
+    async (text: string, handle: FileHandleLike | null, fileName: string) => {
+      const project = parseProjectFile(text);
+      if (
+        isDirty &&
+        !(await notify.confirm({
+          title: 'Abrir outro projeto?',
+          message: 'O projeto atual tem alterações que não foram salvas em arquivo (elas continuam no salvamento automático).',
+          confirmLabel: 'Abrir mesmo assim',
+          danger: true,
+        }))
+      ) {
+        return;
+      }
+      const signature = applyProject(project);
+      fileHandleRef.current = handle;
+      setProjectFileLabel(fileName);
+      setSavedSignature(signature);
+      notify.success(`Projeto aberto: ${fileName}`);
+    },
+    [applyProject, isDirty]
+  );
+
+  const handleOpenProject = useCallback(async () => {
+    try {
+      const picked = await pickProjectFile();
+      if (picked === 'unsupported') {
+        handleTriggerImportRef.current('replace');
+        return;
+      }
+      if (!picked) return;
+      await openProjectText(picked.text, picked.handle, picked.handle.name);
+    } catch (err) {
+      console.error('Falha ao abrir projeto:', err);
+      notify.error(errorMessage(err, 'Não foi possível abrir o projeto.'));
+    }
+  }, [openProjectText]);
+
+  // Startup: offer to restore the last autosaved session if it differs from what is on screen
+  useEffect(() => {
+    let cancelled = false;
+    readAutosave()
+      .then((found) => {
+        if (cancelled) return;
+        if (found && found.record.signature !== projectSignature(projectStateRef.current)) {
+          setRecoveryOffer({
+            project: found.project,
+            savedAt: new Date(found.record.savedAt),
+            isDirty: found.record.isDirty,
+          });
+        } else {
+          setRecoveryChecked(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setRecoveryChecked(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // First visit: guided tour, once the recovery prompt (if any) is out of the way
+  useEffect(() => {
+    if (!recoveryChecked || recoveryOffer) return;
+    let seen: string | null = null;
+    try {
+      seen = localStorage.getItem(TOUR_STORAGE_KEY);
+    } catch {
+      seen = null;
+    }
+    if (seen !== TOUR_VERSION) setIsTourOpen(true);
+  }, [recoveryChecked, recoveryOffer]);
+
+  const handleRestoreRecovery = () => {
+    if (!recoveryOffer) return;
+    const signature = applyProject(recoveryOffer.project);
+    // Changes that were never written to a .marni file stay flagged as unsaved
+    setSavedSignature(recoveryOffer.isDirty ? '' : signature);
+    setProjectFileLabel(null);
+    fileHandleRef.current = null;
+    setRecoveryOffer(null);
+    setRecoveryChecked(true);
+    notify.success('Sessão anterior restaurada');
+  };
+
+  const handleDiscardRecovery = () => {
+    setRecoveryOffer(null);
+    setRecoveryChecked(true);
+  };
+
+  // Debounced autosave to IndexedDB
+  const isDirtyRef = useRef(isDirty);
+  isDirtyRef.current = isDirty;
+  const flushAutosave = useCallback(() => {
+    const state = projectStateRef.current;
+    const now = new Date();
+    return writeAutosave({
+      savedAt: now.toISOString(),
+      signature: projectSignature(state),
+      json: serializeProject(state, now),
+      isDirty: isDirtyRef.current,
+    })
+      .then(() => setLastAutosaveAt(now))
+      .catch((err) => console.warn('Autosave falhou:', err));
+  }, []);
+
+  useEffect(() => {
+    if (!recoveryChecked) return;
+    const timer = window.setTimeout(flushAutosave, AUTOSAVE_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [currentSignature, isDirty, recoveryChecked, flushAutosave]);
+
+  // Warn before closing with changes not written to a .marni file (the autosave still keeps them)
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (recoveryChecked) void flushAutosave();
+      if (!isDirtyRef.current) return;
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    const onHidden = () => {
+      if (document.visibilityState === 'hidden' && recoveryChecked) void flushAutosave();
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    document.addEventListener('visibilitychange', onHidden);
+    return () => {
+      window.removeEventListener('beforeunload', onBeforeUnload);
+      document.removeEventListener('visibilitychange', onHidden);
+    };
+  }, [recoveryChecked, flushAutosave]);
+
+  useEffect(() => {
+    document.title = `${isDirty ? '• ' : ''}${title || 'Sem título'} — Marni Web Composer`;
+  }, [title, isDirty]);
+
+  // Global keyboard shortcuts (table in ui/shortcuts.ts; piano-roll editing keys live in PianoRoll)
+  const shortcutHandlers: Partial<Record<ShortcutId, () => void>> = {
+    save: () => void handleSaveProject(false),
+    saveAs: () => void handleSaveProject(true),
+    open: () => void handleOpenProject(),
+    undo: handleUndo,
+    redo: handleRedo,
+    redoAlt: handleRedo,
+    playPause: () => (isPlaying ? handlePause() : handlePlay()),
+    record: handleRecord,
+    metronome: () => setMetronomeOn((v) => !v),
+    loop: handleToggleLoop,
+    mixer: () => setIsMixerOpen((v) => !v),
+    addMarker: handleAddMarker,
+    prevMarker: () => jumpToMarker(-1),
+    nextMarker: () => jumpToMarker(1),
+    toolPointer: () => setToolMode('pointer'),
+    toolSelect: () => setToolMode('select'),
+    toolPencil: () => setToolMode('pencil'),
+    toolEraser: () => setToolMode('eraser'),
+    toolPan: () => setToolMode('pan'),
+    help: () => setHelp((h) => ({ open: !h.open, tab: 'commands' })),
+  };
+  const shortcutHandlersRef = useRef(shortcutHandlers);
+  shortcutHandlersRef.current = shortcutHandlers;
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't trigger shortcuts when typing in inputs
-      if (
-        document.activeElement?.tagName === 'INPUT' ||
-        document.activeElement?.tagName === 'TEXTAREA'
-      ) {
-        return;
-      }
-
-      // Undo: Ctrl+Z / Cmd+Z (without Shift)
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z') && !e.shiftKey) {
-        e.preventDefault();
-        handleUndo();
-        return;
-      }
-
-      // Redo: Ctrl+Y / Cmd+Y or Ctrl+Shift+Z / Cmd+Shift+Z
-      if (
-        (e.ctrlKey || e.metaKey) &&
-        (e.key === 'y' || e.key === 'Y' || ((e.key === 'z' || e.key === 'Z') && e.shiftKey))
-      ) {
-        e.preventDefault();
-        handleRedo();
-        return;
-      }
-
-      if (e.code === 'Space') {
-        e.preventDefault();
-        if (isPlaying) {
-          handlePause();
-        } else {
-          handlePlay();
-        }
-      } else if (e.key === 'v' || e.key === 'V') {
-        setToolMode('pointer');
-      } else if (e.key === 'm' || e.key === 'M') {
-        setToolMode('select');
-      } else if (e.key === 'b' || e.key === 'B') {
-        setToolMode('pencil');
-      } else if (e.key === 'e' || e.key === 'E') {
-        setToolMode('eraser');
-      } else if (e.key === 'h' || e.key === 'H') {
-        setToolMode('pan');
-      }
+      const focused = document.activeElement;
+      const shortcut = findShortcut(e, isEditableElement(focused));
+      const handler = shortcut && shortcutHandlersRef.current[shortcut.id];
+      if (!handler) return;
+      e.preventDefault();
+      // Space must not also "click" a focused button when its key is released
+      if (shortcut.id === 'playPause' && focused instanceof HTMLButtonElement) focused.blur();
+      handler();
     };
-
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isPlaying, handlePlay, handlePause, handleStop, handleUndo, handleRedo]);
+  }, []);
 
   // Import Mode ('replace' | 'append')
   const importModeRef = useRef<ImportMode>('replace');
@@ -615,6 +1033,8 @@ export default function App() {
       fileInputRef.current.click();
     }
   }, []);
+  const handleTriggerImportRef = useRef(handleTriggerImport);
+  handleTriggerImportRef.current = handleTriggerImport;
 
   const applyImportedData = useCallback(
     (data: {
@@ -681,155 +1101,18 @@ export default function App() {
   const handleFileImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     try {
-      const buffer = await file.arrayBuffer();
-      const bytes = new Uint8Array(buffer);
-
-      // 1. Detect Standard MIDI File (SMF): starts with "MThd" (0x4D, 0x54, 0x68, 0x64) or .mid extension
-      const isMidi =
-        (bytes.length >= 4 &&
-          bytes[0] === 0x4d &&
-          bytes[1] === 0x54 &&
-          bytes[2] === 0x68 &&
-          bytes[3] === 0x64) ||
-        file.name.toLowerCase().endsWith('.mid') ||
-        file.name.toLowerCase().endsWith('.midi');
-
-      if (isMidi) {
-        const decoded = parseStandardMidiFile(buffer, file.name);
-        if (decoded.tracks.length > 0) {
-          applyImportedData({
-            importedTracks: decoded.tracks,
-            bpm: decoded.bpm,
-            title: decoded.title,
-            timeSignature: decoded.timeSignature,
-          });
-        } else {
-          alert('O arquivo MIDI foi lido, mas nenhuma nota ou faixa com notas foi encontrada.');
-        }
-        return;
-      }
-
-      // 2. Detect BDO In-game Binary Score (BMS / ICE Encrypted format: starts with 0x09 0x00 0x00 0x00)
-      if (isBdoBinaryContent(bytes) || file.name.toLowerCase().endsWith('.bms')) {
-        const fileTitle = file.name.replace(/\.[^/.]+$/, '').trim();
-        const decoded = parseBdoBinaryFile(bytes, fileTitle);
-        if (decoded.tracks.length > 0) {
-          const detectedComposer = decoded.composer.trim();
-          const detectedArranger = decoded.arranger.trim();
-          const detectedAuthor = (decoded.author || detectedComposer || detectedArranger || 'Desconhecido').trim();
-          applyImportedData({
-            importedTracks: decoded.tracks,
-            bpm: decoded.bpm,
-            title: fileTitle || decoded.title,
-            timeSignature: decoded.timeSignature,
-            bdoMeta: {
-              author: detectedAuthor,
-              composer: detectedComposer,
-              arranger: detectedArranger,
-              ownerId: decoded.ownerId,
-              effectorSettings: decoded.effectorSettings,
-            },
-          });
-        } else {
-          alert('O arquivo de partitura do Black Desert foi lido, mas nenhuma nota foi encontrada.');
-        }
-        return;
-      }
-
-      // 3. Decode text for MusicXML / XML / JSON
-      const text = new TextDecoder().decode(buffer);
-
-      if (isMusicXmlContent(text) || file.name.toLowerCase().endsWith('.musicxml')) {
-        const decoded = parseMusicXml(text);
-        if (decoded.tracks.length > 0) {
-          applyImportedData({
-            importedTracks: decoded.tracks,
-            bpm: decoded.bpm,
-            title: decoded.title,
-            timeSignature: decoded.timeSignature,
-          });
-        } else {
-          alert('O arquivo MusicXML foi lido, mas nenhuma nota foi encontrada.');
-        }
-        return;
-      }
-
-      if (text.includes('<MarniScore') || (text.includes('<?xml') && text.includes('<Tracks>'))) {
-        // Parse BDO XML
-        const parser = new DOMParser();
-        const xmlDoc = parser.parseFromString(text, 'text/xml');
-        const titleEl = xmlDoc.querySelector('Title');
-        const bpmEl = xmlDoc.querySelector('BPM');
-        const xmlTitle = titleEl?.textContent || undefined;
-        const xmlBpm = bpmEl?.textContent ? Number(bpmEl.textContent) : undefined;
-
-        const trackElements = xmlDoc.querySelectorAll('Track');
-        if (trackElements.length > 0) {
-          const importedTracks: Track[] = [];
-          trackElements.forEach((tEl, idx) => {
-            const name = tEl.getAttribute('name') || `Faixa ${idx + 1}`;
-
-            const noteElements = tEl.querySelectorAll('Note');
-            const notes: Note[] = [];
-            noteElements.forEach((nEl) => {
-              notes.push({
-                id: `note-imp-${Date.now()}-${Math.random()}`,
-                trackId: `track-imp-${idx}`,
-                pitch: Number(nEl.getAttribute('pitch')) || 60,
-                startTick: Number(nEl.getAttribute('startTick')) || 0,
-                durationTicks: Number(nEl.getAttribute('duration')) || 480,
-                velocity: Number(nEl.getAttribute('velocity')) || 90,
-              });
-            });
-
-            const rawInstAttr = tEl.getAttribute('instrumentId');
-            const instrumentId =
-              rawInstAttr && BDO_INSTRUMENTS.some((i) => i.id === rawInstAttr)
-                ? (rawInstAttr as InstrumentId)
-                : detectBdoInstrument({ name, fileName: file.name, notes });
-            const inst = BDO_INSTRUMENTS.find((i) => i.id === instrumentId);
-
-            importedTracks.push({
-              id: `track-imp-${idx}`,
-              name,
-              instrumentId,
-              color: inst?.color || '#d4a373',
-              volume: inst?.defaultVolume || 75,
-              pan: 0,
-              isMuted: false,
-              isSolo: false,
-              auxSend: true,
-              notes,
-            });
-          });
-
-          applyImportedData({
-            importedTracks,
-            bpm: xmlBpm,
-            title: xmlTitle,
-          });
-        }
-        return;
-      }
-
-      if (text.trim().startsWith('{')) {
-        // Parse JSON project
-        const parsed = JSON.parse(text);
-        if (Array.isArray(parsed.tracks) && parsed.tracks.length > 0) {
-          applyImportedData({
-            importedTracks: parsed.tracks,
-            bpm: parsed.bpm,
-            title: parsed.title,
-            timeSignature: parsed.timeSignature,
-          });
-        }
-        return;
-      }
+      const result = await readImportFile(file);
+      if (result.kind === 'project') await openProjectText(result.text, null, result.fileName);
+      else if (result.kind === 'tracks') {
+        applyImportedData(result);
+        notify.success(`${file.name} importado`);
+      } else notify.error(result.message);
     } catch (err) {
       console.error('Falha ao importar partitura:', err);
-      alert('Não foi possível processar o arquivo selecionado.');
+      notify.error(
+        err instanceof Error && err.name === 'ProjectFormatError' ? err.message : 'Não foi possível processar o arquivo selecionado.'
+      );
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
@@ -924,8 +1207,26 @@ export default function App() {
         onPlay={handlePlay}
         onPause={handlePause}
         onStop={handleStop}
-        currentTick={currentPlayheadTick}
+        playhead={playhead}
+        isRecording={isRecording}
+        onRecord={handleRecord}
+        metronomeOn={metronomeOn}
+        onToggleMetronome={() => setMetronomeOn((v) => !v)}
+        countInOn={countInOn}
+        onToggleCountIn={() => setCountInOn((v) => !v)}
+        loopOn={!!loop?.enabled}
+        onToggleLoop={handleToggleLoop}
+        beatsPerBar={getBeatsPerMeasure(timeSignature)}
+        isMixerOpen={isMixerOpen}
+        onToggleMixer={() => setIsMixerOpen((v) => !v)}
+        onOpenHelp={() => setHelp({ open: true, tab: 'guide' })}
+        markers={markers}
+        onAddMarker={handleAddMarker}
+        onJumpToTick={handleSeek}
+        onRenameMarker={handleRenameMarker}
+        onDeleteMarker={handleDeleteMarker}
         maxTick={maxTick}
+        instrumentIds={instrumentIds}
         bpm={bpm}
         onBpmChange={setBpm}
         timeSignature={timeSignature}
@@ -956,6 +1257,7 @@ export default function App() {
         }
         onOpenMidiModal={() => setIsMidiModalOpen(true)}
         onOpenAiSheetScanner={() => setIsAiSheetScannerOpen(true)}
+        onOpenVideoTranscriber={() => setIsVideoTranscriberOpen(true)}
         hasMidiDevices={hasMidiDevices}
         scaleType={scaleType}
         onScaleChange={setScaleType}
@@ -986,6 +1288,7 @@ export default function App() {
           onResetAll={handleResetAll}
           onImportClick={handleTriggerImport}
           onOpenAiSheetScanner={() => setIsAiSheetScannerOpen(true)}
+          onOpenVideoTranscriber={() => setIsVideoTranscriberOpen(true)}
           totalNotes={totalNotes}
           maxNotes={maxNotesAllowed}
           bdoGrade={bdoGrade}
@@ -1002,8 +1305,11 @@ export default function App() {
           gridSnap={gridSnap}
           timeSignature={timeSignature}
           accidentals={accidentals}
-          currentPlayheadTick={currentPlayheadTick}
+          playhead={playhead}
           isPlaying={isPlaying}
+          loop={loop}
+          onLoopChange={handleLoopChange}
+          markers={markers}
           onSeek={handleSeek}
           zoomLevel={zoomLevel}
           onZoomChange={(delta) => setZoomLevel((prev) => Math.max(0.5, Math.min(2.5, prev + delta)))}
@@ -1022,14 +1328,52 @@ export default function App() {
         onExportBdo={() => setIsBdoExportOpen(true)}
         onExportWav={handleExportWav}
         isExportingAudio={isExportingAudio}
+        onOpenProject={handleOpenProject}
+        onSaveProject={() => void handleSaveProject(false)}
+        isDirty={isDirty}
+        projectFileLabel={projectFileLabel}
+        lastAutosaveAt={lastAutosaveAt}
       />
+
+      <Notifications />
+      <HelpCenter
+        isOpen={help.open}
+        initialTab={help.tab}
+        onClose={() => setHelp((h) => ({ ...h, open: false }))}
+        onStartTour={() => {
+          setHelp((h) => ({ ...h, open: false }));
+          setIsTourOpen(true);
+        }}
+      />
+      <GuidedTour isOpen={isTourOpen} onFinish={finishTour} />
+
+      <MixerPanel
+        isOpen={isMixerOpen}
+        onClose={() => setIsMixerOpen(false)}
+        tracks={tracks}
+        activeTrackId={activeTrackId}
+        onSelectTrack={setActiveTrackId}
+        onUpdateTrack={handleUpdateTrack}
+        readPeaks={readMeterPeaks}
+      />
+
+      {recoveryOffer && (
+        <RecoveryBanner
+          savedAt={recoveryOffer.savedAt}
+          title={recoveryOffer.project.title}
+          trackCount={recoveryOffer.project.tracks.length}
+          noteCount={recoveryOffer.project.tracks.reduce((acc, t) => acc + t.notes.length, 0)}
+          onRestore={handleRestoreRecovery}
+          onDiscard={handleDiscardRecovery}
+        />
+      )}
 
       {/* Hidden File Input for import */}
       <input
         type="file"
         ref={fileInputRef}
         onChange={handleFileImport}
-        accept=".xml,.bdo,.mid,.midi,.musicxml,.mxl,.json,.bms,*"
+        accept=".marni,.xml,.bdo,.mid,.midi,.musicxml,.mxl,.json,.bms,*"
         className="hidden"
         aria-hidden="true"
       />
@@ -1056,6 +1400,12 @@ export default function App() {
         tracks={tracks}
         metadata={metadata}
         effectorSettings={effectorSettings}
+        onApplyTracks={(fixed) => {
+          setTracks(fixed);
+          pushHistory(fixed);
+        }}
+        onGradeChange={setBdoGrade}
+        onAuthorChange={handleAuthorChange}
       />
 
       {/* Web MIDI Settings Modal */}
@@ -1076,14 +1426,24 @@ export default function App() {
         onImportScore={handleImportAiScore}
       />
 
+      {/* Video & Audio AI Transcriber Modal (Synthesia Cascata / Audio-to-MIDI) */}
+      <VideoAudioTranscriberModal
+        isOpen={isVideoTranscriberOpen}
+        onClose={() => setIsVideoTranscriberOpen(false)}
+        tracks={tracks}
+        activeTrackId={activeTrackId}
+        currentBpm={bpm}
+        onImportTranscribedNotes={handleImportAiScore}
+      />
+
       {/* Reset All Confirmation Modal */}
       {isResetConfirmOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in"
+          className="modal-overlay animate-in fade-in duration-150"
           onClick={() => setIsResetConfirmOpen(false)}
         >
           <div
-            className="w-full max-w-md bg-[#1c1a1a] border border-[#3e3832] rounded-xl shadow-2xl p-6 text-[#e0d4c8] select-none"
+            className="w-full max-w-md modal-panel p-6 text-[#e0d4c8] select-none"
             onClick={(e) => e.stopPropagation()}
             role="alertdialog"
             aria-modal="true"

@@ -39,6 +39,16 @@ export interface Note {
   sustain?: boolean; // Sustain pedal effect (BDO byte 11)
 }
 
+/** Channel strip of a track: 3-band EQ (dB) and compressor. */
+export interface TrackMixer {
+  eqLow: number; // -12..12 dB, low shelf 200 Hz
+  eqMid: number; // -12..12 dB, peak 1 kHz
+  eqHigh: number; // -12..12 dB, high shelf 5 kHz
+  compressor: boolean;
+  compThreshold: number; // dB
+  compRatio: number;
+}
+
 export interface Track {
   id: string;
   name: string;
@@ -50,7 +60,15 @@ export interface Track {
   isSolo: boolean;
   auxSend: boolean; // Reverb/Delay FX send toggle
   sustainPedal?: boolean; // Sustain pedal enabled for track (default true for piano)
+  mixer?: TrackMixer; // EQ/compressor (defaults: flat, off)
   notes: Note[];
+}
+
+/** Named position on the timeline (verse, chorus...), saved with the project. */
+export interface Marker {
+  id: string;
+  tick: number;
+  name: string;
 }
 
 export type GridSnap = '1/1' | '1/2' | '1/4' | '1/8' | '1/16' | '1/32' | '1/64' | '1/4T' | '1/8T' | '1/16T' | 'off';

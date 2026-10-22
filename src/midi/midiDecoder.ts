@@ -3,9 +3,10 @@
  * Parses binary MIDI files into Marni Web Composer tracks and notes.
  */
 
-import type { Track, Note, InstrumentId, TimeSignature } from '../types/music.ts';
+import type { Track, TimeSignature } from '../types/music.ts';
 import { BDO_INSTRUMENTS } from '../types/music.ts';
 import { detectBdoInstrument } from '../utils/instrumentDetection.ts';
+import { newId } from '../utils/ids.ts';
 
 export interface DecodedMidiSong {
   title: string;
@@ -298,7 +299,7 @@ export function parseStandardMidiFile(data: Uint8Array | ArrayBuffer, fileName?:
 
   const resultTracks: Track[] = [];
 
-  parsedTracks.forEach((pTrack, idx) => {
+  parsedTracks.forEach((pTrack) => {
     if (pTrack.notes.length === 0) return;
 
     // Format 0 handling (Single track multi-channel: split by channel)
@@ -319,7 +320,7 @@ export function parseStandardMidiFile(data: Uint8Array | ArrayBuffer, fileName?:
           notes,
         });
         const inst = BDO_INSTRUMENTS.find((i) => i.id === instId);
-        const trackId = `track-mid-${idx}-ch${ch}-${Date.now()}`;
+        const trackId = newId('track');
 
         resultTracks.push({
           id: trackId,
@@ -358,7 +359,7 @@ export function parseStandardMidiFile(data: Uint8Array | ArrayBuffer, fileName?:
     });
     const inst = BDO_INSTRUMENTS.find((i) => i.id === instId);
 
-    const trackId = `track-mid-${idx}-${Date.now()}`;
+    const trackId = newId('track');
     const name = pTrack.name.trim() || `${inst?.name || 'Faixa'} ${resultTracks.length + 1}`;
 
     resultTracks.push({

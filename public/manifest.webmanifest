@@ -1,0 +1,30 @@
+{
+  "name": "Marni Web Composer",
+  "short_name": "Marni",
+  "description": "DAW no navegador para compor, gravar, mixar e exportar música: piano roll, gravação MIDI, timbres gravados, mixer e exportação para MIDI, WAV e Black Desert Online.",
+  "lang": "pt-BR",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#141210",
+  "theme_color": "#141210",
+  "icons": [
+    {
+      "src": "MWC_Logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "file_handlers": [
+    {
+      "action": "./",
+      "accept": {
+        "application/vnd.marni.project+json": [
+          ".marni"
+        ]
+      }
+    }
+  ]
+}

@@ -2,7 +2,7 @@
  * Pure TypeScript Standard MIDI File (SMF Type 1) Encoder and Decoder
  */
 
-import type { Note, Track, InstrumentId } from '../types/music.ts';
+import type { Track, InstrumentId } from '../types/music.ts';
 import { TICKS_PER_BEAT } from '../types/music.ts';
 
 // Variable-length quantity encoder for MIDI

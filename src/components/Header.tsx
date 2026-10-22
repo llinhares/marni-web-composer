@@ -9,17 +9,51 @@ import {
   Eraser,
   Sliders,
   Radio,
-  Feather,
-  Volume2,
   ZoomIn,
   ZoomOut,
   Undo2,
   Redo2,
   Hand,
-  Sparkles,
+  Circle,
+  Timer,
+  Hourglass,
+  Repeat,
+  SlidersVertical,
+  CircleHelp,
 } from 'lucide-react';
-import type { ToolMode, GridSnap, TimeSignature, EffectorSettings } from '../types/music.ts';
+import type { ToolMode, GridSnap, TimeSignature, EffectorSettings, InstrumentId } from '../types/music.ts';
 import { formatTimecode, ticksToSeconds } from '../utils/musicMath.ts';
+import { usePlayheadTick, type PlayheadStore } from '../audio/playheadStore.ts';
+import { SampleStatusBadge } from './SampleStatusBadge.tsx';
+import { MarkersMenu } from './MarkersMenu.tsx';
+import type { Marker } from '../types/music.ts';
+
+/** "bar.beat" (1-based), e.g. 3.2 */
+export const formatBarBeat = (tick: number, beatsPerBar: number) => {
+  const beat = Math.floor(Math.max(0, tick) / 480);
+  return `${Math.floor(beat / beatsPerBar) + 1}.${(beat % beatsPerBar) + 1}`;
+};
+
+const Timecode: React.FC<{ playhead: PlayheadStore; maxTick: number; bpm: number; beatsPerBar: number }> = ({
+  playhead,
+  maxTick,
+  bpm,
+  beatsPerBar,
+}) => {
+  const currentTick = usePlayheadTick(playhead);
+  return (
+    <div className="px-2.5 py-1 rounded-md bg-stone-950 border border-stone-800 font-mono text-xs flex items-center gap-1.5 shadow-inner">
+      <span className="text-stone-300 font-bold min-w-[2.5rem] text-right" title="Compasso.tempo">
+        {formatBarBeat(currentTick, beatsPerBar)}
+      </span>
+      <span className="text-stone-700">|</span>
+      <span className="text-amber-400 font-bold">{formatTimecode(ticksToSeconds(currentTick, bpm))}</span>
+      {/* Total length only on wide screens: the header must fit on one line */}
+      <span className="hidden 2xl:inline text-stone-600">/</span>
+      <span className="hidden 2xl:inline text-stone-400">{formatTimecode(ticksToSeconds(Math.max(currentTick, maxTick), bpm))}</span>
+    </div>
+  );
+};
 
 interface HeaderProps {
   toolMode: ToolMode;
@@ -28,8 +62,26 @@ interface HeaderProps {
   onPlay: () => void;
   onPause: () => void;
   onStop: () => void;
-  currentTick: number;
+  playhead: PlayheadStore;
+  isRecording: boolean;
+  onRecord: () => void;
+  metronomeOn: boolean;
+  onToggleMetronome: () => void;
+  countInOn: boolean;
+  onToggleCountIn: () => void;
+  loopOn: boolean;
+  onToggleLoop: () => void;
+  beatsPerBar: number;
+  isMixerOpen: boolean;
+  onToggleMixer: () => void;
+  onOpenHelp: () => void;
+  markers: Marker[];
+  onAddMarker: () => void;
+  onJumpToTick: (tick: number) => void;
+  onRenameMarker: (id: string, name: string) => void;
+  onDeleteMarker: (id: string) => void;
   maxTick: number;
+  instrumentIds: InstrumentId[];
   bpm: number;
   onBpmChange: (bpm: number) => void;
   timeSignature: TimeSignature;
@@ -57,6 +109,7 @@ interface HeaderProps {
   onUndo?: () => void;
   onRedo?: () => void;
   onOpenAiSheetScanner?: () => void;
+  onOpenVideoTranscriber?: () => void;
   onToggleSidebar?: () => void;
   isSidebarOpen?: boolean;
 }
@@ -68,30 +121,39 @@ export const Header: React.FC<HeaderProps> = ({
   onPlay,
   onPause,
   onStop,
-  currentTick,
+  playhead,
+  isRecording,
+  onRecord,
+  metronomeOn,
+  onToggleMetronome,
+  countInOn,
+  onToggleCountIn,
+  loopOn,
+  onToggleLoop,
+  beatsPerBar,
+  isMixerOpen,
+  onToggleMixer,
+  onOpenHelp,
+  markers,
+  onAddMarker,
+  onJumpToTick,
+  onRenameMarker,
+  onDeleteMarker,
   maxTick,
+  instrumentIds,
   bpm,
   onBpmChange,
   timeSignature,
   onTimeSignatureChange,
   gridSnap,
   onGridSnapChange,
-  accidentals,
-  onToggleAccidentals,
-  sustenidoActive = true,
-  hasSelectedNotes = false,
-  isSelectionSharp = false,
   effectorSettings,
   onOpenEffectorModal,
   onToggleReverb,
   onToggleDelay,
   onToggleChorus,
   onOpenMidiModal,
-  onOpenAiSheetScanner,
   hasMidiDevices,
-  scaleType,
-  onScaleChange,
-  zoomLevel,
   onZoomChange,
   canUndo = false,
   canRedo = false,
@@ -100,9 +162,6 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleSidebar,
   isSidebarOpen,
 }) => {
-  const currentTimeSec = ticksToSeconds(currentTick, bpm);
-  const totalTimeSec = ticksToSeconds(Math.max(currentTick, maxTick), bpm);
-
   return (
     <header className="h-14 bg-[#141210] border-b border-[#2d2722] px-2 sm:px-4 flex items-center justify-between select-none text-stone-300 text-xs shrink-0 z-20 gap-1 sm:gap-3">
       {/* Left Segment: Mobile Sidebar Toggle, Logo, Tools, FX Toggles, BPM */}
@@ -122,7 +181,7 @@ export const Header: React.FC<HeaderProps> = ({
         )}
 
         {/* Edit Tools */}
-        <div className="flex items-center rounded-lg bg-stone-900/90 p-0.5 border border-[#2d2722]">
+        <div data-tour="tools" className="flex items-center rounded-lg bg-stone-900/90 p-0.5 border border-[#2d2722]">
           <button
             onClick={() => onSetToolMode('pointer')}
             className={`p-1.5 rounded-md transition-colors ${toolMode === 'pointer'
@@ -266,7 +325,7 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
 
         {/* BPM Selector */}
-        <div className="flex items-center gap-1 bg-stone-900/90 px-2 py-1 rounded-md border border-[#2d2722]">
+        <div data-tour="tempo" className="flex items-center gap-1 bg-stone-900/90 px-2 py-1 rounded-md border border-[#2d2722]">
           <span className="text-[11px] text-amber-400/80 font-bold">BPM</span>
           <input
             type="number"
@@ -281,7 +340,7 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
 
       {/* Center Segment: Play, Pause, Stop, Timecode Display */}
-      <div className="flex items-center gap-2.5">
+      <div data-tour="transport" className="flex items-center gap-2.5">
         <button
           onClick={isPlaying ? onPause : onPlay}
           className="p-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-stone-950 transition-all shadow-[0_0_12px_rgba(245,158,11,0.25)] flex items-center justify-center"
@@ -300,19 +359,93 @@ export const Header: React.FC<HeaderProps> = ({
           <Square className="w-3.5 h-3.5 fill-current" />
         </button>
 
-        {/* Timecode Readout */}
-        <div className="px-2.5 py-1 rounded-md bg-stone-950 border border-stone-800 font-mono text-xs flex items-center gap-1.5 shadow-inner">
-          <span className="text-amber-400 font-bold">{formatTimecode(currentTimeSec)}</span>
-          <span className="text-stone-600">/</span>
-          <span className="text-stone-400">{formatTimecode(totalTimeSec)}</span>
+        <button
+          onClick={onRecord}
+          className={`p-2 rounded-lg border transition-colors ${
+            isRecording
+              ? 'bg-red-600 border-red-500 text-white animate-pulse'
+              : 'bg-stone-900 hover:bg-stone-800 border-[#2d2722] text-red-500 hover:text-red-400'
+          }`}
+          title={isRecording ? 'Parar gravação (R)' : 'Gravar do teclado MIDI na faixa ativa (R)'}
+          aria-label={isRecording ? 'Parar gravação' : 'Gravar'}
+          aria-pressed={isRecording}
+        >
+          <Circle className="w-3.5 h-3.5 fill-current" />
+        </button>
+
+        <div className="hidden sm:flex items-center gap-1">
+          <button
+            onClick={onToggleMetronome}
+            className={`p-1.5 rounded-md border transition-colors ${
+              metronomeOn
+                ? 'bg-amber-500/15 border-amber-500/60 text-amber-400'
+                : 'bg-stone-900 border-[#2d2722] text-stone-500 hover:text-stone-300'
+            }`}
+            title={metronomeOn ? 'Metrônomo ligado (K)' : 'Metrônomo desligado (K)'}
+            aria-label="Metrônomo"
+            aria-pressed={metronomeOn}
+          >
+            <Timer className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={onToggleCountIn}
+            className={`p-1.5 rounded-md border transition-colors ${
+              countInOn
+                ? 'bg-amber-500/15 border-amber-500/60 text-amber-400'
+                : 'bg-stone-900 border-[#2d2722] text-stone-500 hover:text-stone-300'
+            }`}
+            title={countInOn ? 'Contagem de 1 compasso antes de gravar: ligada' : 'Contagem antes de gravar: desligada'}
+            aria-label="Contagem antes de gravar"
+            aria-pressed={countInOn}
+          >
+            <Hourglass className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={onToggleLoop}
+            className={`p-1.5 rounded-md border transition-colors ${
+              loopOn
+                ? 'bg-amber-500/15 border-amber-500/60 text-amber-400'
+                : 'bg-stone-900 border-[#2d2722] text-stone-500 hover:text-stone-300'
+            }`}
+            title="Loop (L) • Shift+arrastar na régua define a região"
+            aria-label="Loop"
+            aria-pressed={loopOn}
+          >
+            <Repeat className="w-3.5 h-3.5" />
+          </button>
         </div>
+
+        {/* Timecode Readout (only this element re-renders while playing) */}
+        <Timecode playhead={playhead} maxTick={maxTick} bpm={bpm} beatsPerBar={beatsPerBar} />
+        <button
+          onClick={onToggleMixer}
+          className={`hidden sm:block p-1.5 rounded-md border transition-colors ${
+            isMixerOpen
+              ? 'bg-amber-500/15 border-amber-500/60 text-amber-400'
+              : 'bg-stone-900 border-[#2d2722] text-stone-400 hover:text-stone-200'
+          }`}
+          title="Mixer: EQ, compressor e medidores por faixa (X)"
+          aria-label="Mixer"
+          aria-pressed={isMixerOpen}
+        >
+          <SlidersVertical className="w-3.5 h-3.5" />
+        </button>
+        <MarkersMenu
+          markers={markers}
+          formatPosition={(tick) => formatBarBeat(tick, beatsPerBar)}
+          onAdd={onAddMarker}
+          onJump={onJumpToTick}
+          onRename={onRenameMarker}
+          onDelete={onDeleteMarker}
+        />
+        <SampleStatusBadge instrumentIds={instrumentIds} />
       </div>
 
       {/* Right Segment: Time Signature, Grid Snap, Sustenido (#/b), MIDI, Zoom */}
-      <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+      <div className="flex items-center gap-2 flex-nowrap shrink-0">
         {/* Ritmo (Time Signature) */}
         <div className="hidden sm:flex items-center gap-1">
-          <span className="text-stone-400 text-[11px]">Ritmo</span>
+          <span className="hidden 2xl:inline text-stone-400 text-[11px]">Ritmo</span>
           <select
             value={timeSignature}
             onChange={(e) => onTimeSignatureChange(e.target.value as TimeSignature)}
@@ -329,7 +462,7 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Grade (Grid Snap) */}
         <div className="flex items-center gap-1">
-          <span className="hidden md:inline text-stone-400 text-[11px]">Grade</span>
+          <span className="hidden 2xl:inline text-stone-400 text-[11px]">Grade</span>
           <select
             value={gridSnap}
             onChange={(e) => onGridSnapChange(e.target.value as GridSnap)}
@@ -350,39 +483,6 @@ export const Header: React.FC<HeaderProps> = ({
           </select>
         </div>
 
-        {/* Sustenido (#) Toggle */}
-        <button
-          onClick={onToggleAccidentals}
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-[11px] font-semibold transition-all ${(hasSelectedNotes ? isSelectionSharp : sustenidoActive)
-            ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-[0_0_8px_rgba(245,158,11,0.3)]'
-            : 'bg-stone-900/60 border-[#2d2722] text-stone-400 hover:text-stone-200'
-            }`}
-          title={
-            hasSelectedNotes
-              ? isSelectionSharp
-                ? 'Desligar Sustenido da(s) nota(s) selecionada(s) (-1 semitom para natural)'
-                : 'Ligar Sustenido na(s) nota(s) selecionada(s) (+1 semitom para sustenido)'
-              : sustenidoActive
-                ? 'Sustenido ativo: novas notas recebem sustenido (#). Clique para desativar.'
-                : 'Sustenido inativo: novas notas serão naturais. Clique para ativar (#).'
-          }
-        >
-          <span className="font-mono text-sm leading-none font-bold">#</span>
-          <span>
-            {hasSelectedNotes
-              ? isSelectionSharp
-                ? 'Sustenido (#)'
-                : 'Natural (Sem #)'
-              : 'Sustenido'}
-          </span>
-          <span
-            className={`w-2 h-2 rounded-full transition-colors ${(hasSelectedNotes ? isSelectionSharp : sustenidoActive)
-              ? 'bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.9)]'
-              : 'bg-stone-600'
-              }`}
-          />
-        </button>
-
         {/* MIDI Controller Connect */}
         <button
           onClick={onOpenMidiModal}
@@ -397,24 +497,19 @@ export const Header: React.FC<HeaderProps> = ({
           <span className="hidden xl:inline text-[11px]">MIDI</span>
         </button>
 
-        {/* AI Sheet Scanner Button (BETA) */}
-        {onOpenAiSheetScanner && (
-          <button
-            onClick={onOpenAiSheetScanner}
-            className="p-1.5 rounded-md border text-xs transition-colors flex items-center gap-1.5 bg-stone-900 border-[#2d2722] hover:border-amber-500/50 text-stone-300 hover:text-amber-400 shadow-sm"
-            title="Importar Partitura por Imagem com IA (Gemini Vision OMR) - Recurso Experimental em Desenvolvimento"
-            aria-label="Importar Partitura com IA (BETA)"
-          >
-            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-            <span className="hidden lg:inline text-[11px] font-medium">Partitura IA</span>
-            <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-amber-500/20 text-amber-400 border border-amber-500/40">
-              BETA
-            </span>
-          </button>
-        )}
+        {/* Help & About */}
+        <button
+          data-tour="help"
+          onClick={onOpenHelp}
+          className="p-1.5 rounded-md border bg-stone-900 border-[#2d2722] text-stone-300 hover:text-amber-400 hover:border-amber-700/60 transition-colors"
+          title="Ajuda, comandos e sobre (?)"
+          aria-label="Ajuda"
+        >
+          <CircleHelp className="w-4 h-4" />
+        </button>
 
         {/* Zoom Controls */}
-        <div className="hidden xl:flex items-center rounded-lg bg-stone-900/80 p-0.5 border border-[#2d2722]">
+        <div className="hidden 2xl:flex items-center rounded-lg bg-stone-900/80 p-0.5 border border-[#2d2722]">
           <button
             onClick={() => onZoomChange(-0.15)}
             className="p-1 rounded text-stone-400 hover:text-stone-200"

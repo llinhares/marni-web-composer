@@ -5,13 +5,39 @@
  * Built with zero-residual-hum protection and automatic oscillator termination.
  */
 
-import type { InstrumentId, EffectorSettings, Track, Note } from '../types/music.ts';
-import { pitchToFrequency, ticksToSeconds } from '../utils/musicMath.ts';
+import type { InstrumentId, EffectorSettings, Track } from '../types/music.ts';
+import { pitchToFrequency } from '../utils/musicMath.ts';
 import { WorkerTimer } from './workerTimer.ts';
+import {
+  audibleTracks,
+  notesInWindow,
+  reanchor,
+  songEndTick,
+  sortedByStart,
+  tickAtTime,
+  timeAtTick,
+  type TimelineAnchor,
+} from './scheduling.ts';
+import { sampleLibrary, pickSample, DECAYING_INSTRUMENTS, type SampleSet } from './sampleLibrary.ts';
+import { EQ_BANDS, mixerOf } from './mixer.ts';
+import { newId } from '../utils/ids.ts';
+
+/** Per-track channel strip: input -> EQ low/mid/high -> compressor -> output (+ meter tap, FX send). */
+interface ChannelStrip {
+  input: GainNode;
+  eq: BiquadFilterNode[];
+  comp: DynamicsCompressorNode;
+  output: GainNode;
+  analyser: AnalyserNode;
+  auxConnected: boolean;
+}
+
+const LOOKAHEAD_SEC = 0.15;
 
 export class AudioEngine {
-  private ctx: AudioContext | null = null;
+  private ctx: BaseAudioContext | null = null;
   private isInitialized = false;
+  private readonly offlineContext: OfflineAudioContext | null;
 
   // Master Nodes
   private masterGain: GainNode | null = null;
@@ -35,7 +61,7 @@ export class AudioEngine {
 
   // Active playing voices for note-off handling
   private activeAuditionVoices = new Map<string, { stop: (time: number) => void }>();
-  private activePlaybackVoices = new Set<(time: number) => void>();
+  private activePlaybackVoices = new Map<string, Set<(time: number) => void>>(); // by track id
 
   // Worker-driven lookahead playback scheduler
   private workerTimer: WorkerTimer | null = null;
@@ -43,31 +69,50 @@ export class AudioEngine {
   private playheadTick = 0;
   private tempoBpm = 120;
   private activeTracks: Track[] = [];
+  private anchor: TimelineAnchor = { audioTime: 0, tick: 0, bpm: 120 };
+  private scheduledUntilTick = 0;
+  private playStartTick = 0; // notes before this tick are never played (count-in region)
+  private songEnd = 0;
+  private metronome = { enabled: false, beatsPerBar: 4 };
+  private strips = new Map<string, ChannelStrip>();
+  private masterAnalyser: AnalyserNode | null = null;
+  private meterBuffer = new Float32Array(512);
+  private loop: { start: number; end: number } | null = null;
+  private preWrapAnchor: TimelineAnchor | null = null;
+  private wrapAudioTime = 0;
   private onPlayheadTickUpdate: ((tick: number) => void) | null = null;
   private onPlaybackEnded: (() => void) | null = null;
   private currentEffectorSettings: EffectorSettings | null = null;
 
-  constructor() {
-    this.workerTimer = new WorkerTimer(20);
+  /** With `context`, the engine renders into that OfflineAudioContext (WAV export) instead of the speakers. */
+  constructor(options: { context?: OfflineAudioContext } = {}) {
+    this.offlineContext = options.context ?? null;
+    if (!this.offlineContext) this.workerTimer = new WorkerTimer(20);
+  }
+
+  private get isOffline(): boolean {
+    return this.offlineContext !== null;
   }
 
   public async init(): Promise<void> {
     if (this.isInitialized && this.ctx) {
-      if (this.ctx.state === 'suspended') {
+      if (this.ctx instanceof AudioContext && this.ctx.state === 'suspended') {
         await this.ctx.resume();
       }
       return;
     }
 
-    const AudioContextClass =
-      window.AudioContext ||
-      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    this.ctx = new AudioContextClass({
-      latencyHint: 'interactive',
-    });
-
-    if (this.ctx.state === 'suspended') {
-      await this.ctx.resume();
+    if (this.offlineContext) {
+      this.ctx = this.offlineContext;
+    } else {
+      const AudioContextClass =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const live = new AudioContextClass({ latencyHint: 'interactive' });
+      this.ctx = live;
+      if (live.state === 'suspended') {
+        await live.resume();
+      }
     }
 
     // 1. Master Output Chain with safety limiter
@@ -87,6 +132,9 @@ export class AudioEngine {
 
     this.masterGain.connect(this.masterLimiter);
     this.masterLimiter.connect(this.ctx.destination);
+    this.masterAnalyser = this.ctx.createAnalyser();
+    this.masterAnalyser.fftSize = 512;
+    this.masterLimiter.connect(this.masterAnalyser);
 
     // 2. Aux Send FX Bus
     this.auxSendBus = this.ctx.createGain();
@@ -189,11 +237,14 @@ export class AudioEngine {
     this.currentEffectorSettings = fx;
     if (!this.ctx) return;
     const now = this.ctx.currentTime;
+    // Offline renders start at t=0: set values directly instead of gliding into them
+    const glide = (param: AudioParam, value: number) =>
+      this.isOffline ? param.setValueAtTime(value, now) : param.setTargetAtTime(value, now, 0.05);
 
     // Reverb
     if (this.reverbGain) {
       const revVol = fx.reverb.enabled ? (fx.reverb.mix / 100) * 0.7 : 0;
-      this.reverbGain.gain.setTargetAtTime(revVol, now, 0.05);
+      glide(this.reverbGain.gain, revVol);
     }
 
     // Delay
@@ -202,9 +253,9 @@ export class AudioEngine {
       const feedback = fx.delay.enabled ? Math.min(0.85, (fx.delay.feedback / 100) * 0.8) : 0;
       const delayTime = Math.max(0.05, Math.min(1.5, (fx.delay.time / 100) * 0.8 + 0.05));
 
-      this.delayGain.gain.setTargetAtTime(delVol, now, 0.05);
-      this.delayFeedbackGain.gain.setTargetAtTime(feedback, now, 0.05);
-      this.delayNode.delayTime.setTargetAtTime(delayTime, now, 0.05);
+      glide(this.delayGain.gain, delVol);
+      glide(this.delayFeedbackGain.gain, feedback);
+      glide(this.delayNode.delayTime, delayTime);
     }
 
     // Chorus
@@ -213,9 +264,9 @@ export class AudioEngine {
       const rate = Math.max(0.1, (fx.chorus.lfoFrequency / 100) * 5.0 + 0.2);
       const depth = (fx.chorus.lfoDepth / 100) * 0.005 + 0.0005;
 
-      this.chorusGain.gain.setTargetAtTime(choVol, now, 0.05);
-      this.chorusLfo.frequency.setTargetAtTime(rate, now, 0.05);
-      this.chorusLfoGain.gain.setTargetAtTime(depth, now, 0.05);
+      glide(this.chorusGain.gain, choVol);
+      glide(this.chorusLfo.frequency, rate);
+      glide(this.chorusLfoGain.gain, depth);
     }
   }
 
@@ -240,7 +291,7 @@ export class AudioEngine {
       if (!this.ctx) return '';
     }
 
-    const noteVoiceId = `${instrumentId}-${pitch}-${Date.now()}-${Math.random()}`;
+    const noteVoiceId = newId('voice');
     const startTime = this.ctx.currentTime;
     const stopFn = this.synthesizeInstrument(
       instrumentId,
@@ -284,6 +335,59 @@ export class AudioEngine {
     this.activeAuditionVoices.clear();
   }
 
+  /**
+   * Plays one recorded sample into the voice chain. Plucked/struck instruments ring out after the
+   * note ends (longer with the sustain pedal); sustained instruments release at the note end.
+   */
+  private playSample(
+    set: SampleSet,
+    pitch: number,
+    velFactor: number,
+    volFactor: number,
+    startTime: number,
+    duration: number,
+    sustain: boolean,
+    destination: AudioNode
+  ): ((stopTime: number) => void) | null {
+    if (!this.ctx) return null;
+    const picked = pickSample(pitch, set.pitches);
+    const buffer = picked ? set.buffers.get(picked.samplePitch) : undefined;
+    if (!picked || !buffer) return null;
+
+    const src = this.ctx.createBufferSource();
+    src.buffer = buffer;
+    src.playbackRate.setValueAtTime(picked.rate, startTime);
+
+    const amp = this.ctx.createGain();
+    // SoundFont samples are recorded with headroom: x6 matches the level of the previous synth voices
+    const peak = Math.max(0.0001, velFactor * volFactor * 6);
+    amp.gain.setValueAtTime(peak, startTime);
+
+    const decaying = DECAYING_INSTRUMENTS.has(set.instrumentId);
+    const ring = decaying ? (sustain ? 2.5 : 0.35) : 0.12;
+    const releaseAt = startTime + duration;
+    amp.gain.setTargetAtTime(0, releaseAt, ring / 4);
+
+    src.connect(amp);
+    amp.connect(destination);
+    const naturalEnd = startTime + buffer.duration / picked.rate;
+    src.start(startTime);
+    src.stop(Math.min(naturalEnd, releaseAt + ring * 1.5) + 0.05);
+
+    // The destination voice gain is still at 0 from its creation: open it for the sample
+    if (destination instanceof GainNode) destination.gain.setValueAtTime(1, startTime);
+
+    return (stopTime: number) => {
+      try {
+        // Released key: decaying instruments ring briefly (longer with sustain), others stop quickly
+        const tau = Math.max(0.02, ring / 4);
+        amp.gain.cancelScheduledValues(stopTime);
+        amp.gain.setTargetAtTime(0, stopTime, tau);
+        src.stop(stopTime + tau * 6);
+      } catch {}
+    };
+  }
+
   private synthesizeInstrument(
     instrumentId: InstrumentId,
     pitch: number,
@@ -294,7 +398,8 @@ export class AudioEngine {
     auxSend: boolean,
     pan: number,
     isPlayback = true,
-    sustain = false
+    sustain = false,
+    trackId?: string
   ): (stopTime: number) => void {
     if (!this.ctx || !this.masterGain) return () => {};
 
@@ -303,8 +408,11 @@ export class AudioEngine {
     const volFactor = (trackVolume / 100) * 0.6;
     const noteEndTime = startTime + duration;
 
-    // Connect through playbackBus for songs, or masterGain for direct auditions
-    const destinationNode = isPlayback && this.playbackBus ? this.playbackBus : this.masterGain;
+    // Song notes go through their track's channel strip (which also feeds the FX send);
+    // direct auditions go straight to the master
+    const strip = isPlayback && trackId ? this.strips.get(trackId) : undefined;
+    const destinationNode = strip ? strip.input : isPlayback && this.playbackBus ? this.playbackBus : this.masterGain;
+    if (strip) auxSend = false;
 
     const voiceGain = this.ctx.createGain();
     voiceGain.gain.setValueAtTime(0, startTime);
@@ -326,14 +434,23 @@ export class AudioEngine {
 
     const stopCallbacks: ((t: number) => void)[] = [];
 
-    // Cleanup voiceGain from audio graph
-    const voiceLifeSec = duration + (sustain ? 2.5 : 1.2);
-    setTimeout(() => {
-      try {
-        voiceGain.disconnect();
-        if (panner) panner.disconnect();
-      } catch {}
-    }, voiceLifeSec * 1000);
+    // Cleanup voiceGain from audio graph (not offline: the render may run slower than these timers)
+    const samples = sampleLibrary.get(instrumentId);
+    const voiceLifeSec = duration + (samples ? 4 : sustain ? 2.5 : 1.2);
+    if (!this.isOffline) {
+      setTimeout(() => {
+        try {
+          voiceGain.disconnect();
+          if (panner) panner.disconnect();
+        } catch {}
+      }, voiceLifeSec * 1000);
+    }
+
+    // Sampled instrument (falls back to the synthesizer below while loading or if unavailable)
+    if (samples) {
+      const stop = this.playSample(samples, pitch, velFactor, volFactor, startTime, duration, sustain, voiceGain);
+      if (stop) return stop;
+    }
 
     switch (instrumentId) {
       case 'grand-piano': {
@@ -898,7 +1015,8 @@ export class AudioEngine {
     bpm: number,
     startTick: number = 0,
     onTickUpdate?: (tick: number) => void,
-    onEnded?: () => void
+    onEnded?: () => void,
+    options: { countInTicks?: number } = {}
   ) {
     if (!this.ctx) {
       this.init();
@@ -928,82 +1046,268 @@ export class AudioEngine {
     this.playheadTick = startTick;
     this.tempoBpm = bpm;
     this.activeTracks = tracks;
+    this.songEnd = songEndTick(tracks);
+    this.configureStrips(tracks);
     this.onPlayheadTickUpdate = onTickUpdate || null;
     this.onPlaybackEnded = onEnded || null;
+    // A count-in starts the clock earlier: the metronome clicks while the playhead waits at startTick
+    const countIn = Math.max(0, options.countInTicks ?? 0);
+    this.anchor = { audioTime: this.ctx.currentTime + 0.05, tick: startTick - countIn, bpm };
+    this.scheduledUntilTick = startTick - countIn;
+    this.playStartTick = startTick;
+    this.preWrapAnchor = null;
 
-    const LOOKAHEAD_SEC = 0.15;
-    let currentScheduledTick = startTick;
-    const baseAudioTime = this.ctx.currentTime + 0.05;
-    const baseTick = startTick;
+    this.workerTimer?.start(() => this.schedulerTick());
+  }
 
-    let maxSongTick = 0;
-    tracks.forEach((tr) => {
-      tr.notes.forEach((n) => {
-        const end = n.startTick + n.durationTicks;
-        if (end > maxSongTick) maxSongTick = end;
-      });
-    });
-    maxSongTick = Math.max(maxSongTick, 480 * 4);
+  /**
+   * One scheduler step: publishes the playhead and schedules every note that starts before the
+   * lookahead horizon. Reads the current song each time, so edits made while playing are heard.
+   */
+  private schedulerTick() {
+    if (!this.isPlaying || !this.ctx) return;
 
-    this.workerTimer?.start(() => {
-      if (!this.isPlaying || !this.ctx) return;
+    const now = this.ctx.currentTime;
+    // Right after a loop wrap is scheduled, the old timeline still applies until the wrap moment
+    if (this.preWrapAnchor && now >= this.wrapAudioTime) this.preWrapAnchor = null;
+    const shown = this.preWrapAnchor ?? this.anchor;
+    const currentTick = Math.max(this.playStartTick, Math.round(tickAtTime(shown, now)));
+    this.playheadTick = currentTick;
+    this.onPlayheadTickUpdate?.(currentTick);
 
-      const currentAudioTime = this.ctx.currentTime;
-      const elapsedAudio = currentAudioTime - baseAudioTime;
-      const currentTick = Math.max(0, Math.round(baseTick + (elapsedAudio * this.tempoBpm * 480) / 60));
+    const looping = this.loop !== null && currentTick < this.loop.end;
+    if (!looping && currentTick >= Math.max(this.songEnd, 480 * 4) + 480) {
+      this.stopPlayback();
+      this.onPlaybackEnded?.();
+      return;
+    }
 
-      this.playheadTick = currentTick;
-      if (this.onPlayheadTickUpdate) {
-        this.onPlayheadTickUpdate(currentTick);
-      }
-
-      if (currentTick >= maxSongTick + 480) {
-        this.stopPlayback();
-        if (this.onPlaybackEnded) {
-          this.onPlaybackEnded();
-        }
+    let from = this.scheduledUntilTick;
+    let horizon = Math.round(tickAtTime(this.anchor, now + LOOKAHEAD_SEC));
+    for (let guard = 0; guard < 8; guard++) {
+      const loop = this.loop && from < this.loop.end ? this.loop : null;
+      const to = loop ? Math.min(horizon, loop.end) : horizon;
+      if (to > from) this.scheduleRange(from, to, now, loop?.end ?? Infinity);
+      if (!loop || horizon < loop.end) {
+        this.scheduledUntilTick = Math.max(this.scheduledUntilTick, to);
         return;
       }
+      // Wrap: continue the timeline at the loop start, exactly at the loop end's audio time
+      this.preWrapAnchor = this.anchor;
+      this.wrapAudioTime = timeAtTick(this.anchor, loop.end);
+      this.anchor = { audioTime: this.wrapAudioTime, tick: loop.start, bpm: this.anchor.bpm };
+      this.playStartTick = Math.min(this.playStartTick, loop.start);
+      from = loop.start;
+      this.scheduledUntilTick = loop.start;
+      horizon = Math.round(tickAtTime(this.anchor, now + LOOKAHEAD_SEC));
+    }
+  }
 
-      const scheduleHorizonAudio = currentAudioTime + LOOKAHEAD_SEC;
-      const horizonTick = Math.round(baseTick + ((scheduleHorizonAudio - baseAudioTime) * this.tempoBpm * 480) / 60);
-      const hasSolo = this.activeTracks.some((t) => t.isSolo);
+  /** Schedules metronome clicks and notes starting in [from, to); notes are cut at `cutTick` (loop end). */
+  private scheduleRange(from: number, to: number, now: number, cutTick: number) {
+    const secondsPerTick = 60 / (this.anchor.bpm * 480);
 
-      this.activeTracks.forEach((track) => {
-        if (track.isMuted) return;
-        if (hasSolo && !track.isSolo) return;
+    // Metronome: always during the count-in, then only when enabled
+    for (let beat = Math.ceil(from / 480) * 480; beat < to; beat += 480) {
+      if (beat >= this.playStartTick && !this.metronome.enabled) continue;
+      const beatIndex = Math.round(beat / 480);
+      const n = Math.max(1, this.metronome.beatsPerBar);
+      this.click(timeAtTick(this.anchor, beat), ((beatIndex % n) + n) % n === 0);
+    }
 
-        track.notes.forEach((note) => {
-          if (note.startTick >= currentScheduledTick && note.startTick < horizonTick) {
-            const noteOffsetTicks = note.startTick - baseTick;
-            const noteStartAudio = baseAudioTime + ticksToSeconds(noteOffsetTicks, this.tempoBpm);
-            const durationSec = ticksToSeconds(note.durationTicks, this.tempoBpm);
+    const fromTick = Math.max(from, this.playStartTick);
+    for (const track of audibleTracks(this.activeTracks)) {
+      for (const note of notesInWindow(sortedByStart(track.notes), fromTick, to)) {
+        const durationSec = (Math.min(note.startTick + note.durationTicks, cutTick) - note.startTick) * secondsPerTick;
+        const isSustain = !!(note.sustain ?? track.sustainPedal ?? (track.instrumentId === 'grand-piano'));
+        const stopVoice = this.synthesizeInstrument(
+          track.instrumentId,
+          note.pitch,
+          note.velocity,
+          Math.max(now, timeAtTick(this.anchor, note.startTick)),
+          durationSec,
+          track.volume,
+          track.auxSend,
+          track.pan,
+          true,
+          isSustain,
+          track.id
+        );
 
-            const isSustain = !!(note.sustain ?? track.sustainPedal ?? (track.instrumentId === 'grand-piano'));
-            const stopVoice = this.synthesizeInstrument(
-              track.instrumentId,
-              note.pitch,
-              note.velocity,
-              Math.max(currentAudioTime, noteStartAudio),
-              durationSec,
-              track.volume,
-              track.auxSend,
-              track.pan,
-              true,
-              isSustain
-            );
+        let voices = this.activePlaybackVoices.get(track.id);
+        if (!voices) {
+          voices = new Set();
+          this.activePlaybackVoices.set(track.id, voices);
+        }
+        voices.add(stopVoice);
+        const voiceCleanupSec = durationSec + (isSustain ? 2.5 : 0.5) + LOOKAHEAD_SEC * 2;
+        setTimeout(() => voices!.delete(stopVoice), voiceCleanupSec * 1000);
+      }
+    }
+  }
 
-            this.activePlaybackVoices.add(stopVoice);
-            const voiceCleanupSec = durationSec + (isSustain ? 2.5 : 0.5);
-            setTimeout(() => {
-              this.activePlaybackVoices.delete(stopVoice);
-            }, voiceCleanupSec * 1000);
-          }
+  /** Loop region (ticks) or null. Takes effect immediately, also while playing. */
+  public setLoop(loop: { start: number; end: number } | null) {
+    this.loop = loop && loop.end > loop.start ? { ...loop } : null;
+  }
+
+  /**
+   * Live song update while playing (note edits, mute/solo, added/removed tracks).
+   * Voices of tracks that became silent are released immediately.
+   */
+  /** Creates/updates one channel strip per track and removes strips of deleted tracks. */
+  private configureStrips(tracks: Track[]) {
+    const ctx = this.ctx;
+    if (!ctx || !this.playbackBus) return;
+    const now = ctx.currentTime;
+    const set = (param: AudioParam, value: number) =>
+      this.isOffline ? param.setValueAtTime(value, now) : param.setTargetAtTime(value, now, 0.02);
+
+    const ids = new Set(tracks.map((t) => t.id));
+    for (const [id, strip] of this.strips) {
+      if (ids.has(id)) continue;
+      try {
+        strip.output.disconnect();
+      } catch {}
+      this.strips.delete(id);
+    }
+
+    for (const track of tracks) {
+      let strip = this.strips.get(track.id);
+      if (!strip) {
+        const input = ctx.createGain();
+        const eq = EQ_BANDS.map((band) => {
+          const f = ctx.createBiquadFilter();
+          f.type = band.type;
+          f.frequency.setValueAtTime(band.frequency, now);
+          if (band.type === 'peaking') f.Q.setValueAtTime(0.8, now);
+          return f;
         });
-      });
+        const comp = ctx.createDynamicsCompressor();
+        comp.knee.setValueAtTime(6, now);
+        comp.attack.setValueAtTime(0.005, now);
+        comp.release.setValueAtTime(0.15, now);
+        const output = ctx.createGain();
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 512;
+        input.connect(eq[0]);
+        eq[0].connect(eq[1]);
+        eq[1].connect(eq[2]);
+        eq[2].connect(comp);
+        comp.connect(output);
+        output.connect(this.playbackBus);
+        output.connect(analyser);
+        strip = { input, eq, comp, output, analyser, auxConnected: false };
+        this.strips.set(track.id, strip);
+      }
 
-      currentScheduledTick = horizonTick;
-    });
+      const m = mixerOf(track);
+      set(strip.eq[0].gain, m.eqLow);
+      set(strip.eq[1].gain, m.eqMid);
+      set(strip.eq[2].gain, m.eqHigh);
+      set(strip.comp.threshold, m.compressor ? m.compThreshold : 0);
+      set(strip.comp.ratio, m.compressor ? m.compRatio : 1);
+
+      if (this.auxSendBus && track.auxSend !== strip.auxConnected) {
+        if (track.auxSend) strip.output.connect(this.auxSendBus);
+        else
+          try {
+            strip.output.disconnect(this.auxSendBus);
+          } catch {}
+        strip.auxConnected = track.auxSend;
+      }
+    }
+  }
+
+  /** Current peak level (linear) per track and for the master output. */
+  public getMeterPeaks(): { tracks: Record<string, number>; master: number } {
+    const peakOf = (analyser: AnalyserNode | null) => {
+      if (!analyser) return 0;
+      analyser.getFloatTimeDomainData(this.meterBuffer);
+      let peak = 0;
+      for (let i = 0; i < this.meterBuffer.length; i++) peak = Math.max(peak, Math.abs(this.meterBuffer[i]));
+      return peak;
+    };
+    const tracks: Record<string, number> = {};
+    this.strips.forEach((strip, id) => (tracks[id] = peakOf(strip.analyser)));
+    return { tracks, master: peakOf(this.masterAnalyser) };
+  }
+
+  public updateSong(tracks: Track[]) {
+    this.activeTracks = tracks;
+    this.songEnd = songEndTick(tracks);
+    this.configureStrips(tracks);
+    if (!this.isPlaying || !this.ctx) return;
+
+    const audible = new Set(audibleTracks(tracks).map((t) => t.id));
+    const now = this.ctx.currentTime;
+    for (const [trackId, voices] of this.activePlaybackVoices) {
+      if (audible.has(trackId)) continue;
+      voices.forEach((stop) => {
+        try {
+          stop(now);
+        } catch {}
+      });
+      this.activePlaybackVoices.delete(trackId);
+    }
+  }
+
+  /** Short metronome tick (accented on the first beat of the bar); never part of exports. */
+  private click(time: number, accent: boolean) {
+    if (!this.ctx || !this.masterGain || time < this.ctx.currentTime - 0.01) return;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(accent ? 1760 : 1175, time);
+    gain.gain.setValueAtTime(0.0001, time);
+    gain.gain.exponentialRampToValueAtTime(accent ? 0.35 : 0.2, time + 0.002);
+    gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.05);
+    osc.connect(gain);
+    gain.connect(this.masterGain);
+    osc.start(time);
+    osc.stop(time + 0.06);
+  }
+
+  public setMetronome(enabled: boolean, beatsPerBar: number) {
+    this.metronome = { enabled, beatsPerBar };
+  }
+
+  /** Exact playback position right now (more precise than the last published playhead). */
+  public currentTick(): number {
+    if (!this.isPlaying || !this.ctx) return this.playheadTick;
+    return tickAtTime(this.anchor, this.ctx.currentTime);
+  }
+
+  /** Note held from a MIDI keyboard: sounds until releaseHeldNote (no fixed length). */
+  public startHeldNote(
+    instrumentId: InstrumentId,
+    pitch: number,
+    velocity: number,
+    trackVolume: number,
+    auxSend: boolean,
+    pan: number,
+    sustain: boolean
+  ): string {
+    return this.playNote(instrumentId, pitch, velocity, 30, trackVolume, auxSend, pan, sustain);
+  }
+
+  public releaseHeldNote(noteVoiceId: string) {
+    this.stopNote(noteVoiceId);
+  }
+
+  /** Live tempo change: playback continues from the current position at the new tempo. */
+  public setTempo(bpm: number) {
+    if (!(bpm > 0) || bpm === this.tempoBpm) return;
+    this.tempoBpm = bpm;
+    if (this.isPlaying && this.ctx) {
+      if (this.preWrapAnchor) {
+        // A loop wrap is pending: the new tempo applies now on the old timeline and from the wrap point on
+        this.preWrapAnchor = reanchor(this.preWrapAnchor, this.ctx.currentTime, bpm);
+        this.anchor = { ...this.anchor, bpm };
+      } else {
+        this.anchor = reanchor(this.anchor, this.ctx.currentTime, bpm);
+      }
+    }
   }
 
   public stopPlayback() {
@@ -1029,9 +1333,11 @@ export class AudioEngine {
       }
 
       // Stop all active playback voices and disconnect them immediately
-      this.activePlaybackVoices.forEach((stopFn) => {
-        try { stopFn(now); } catch {}
-      });
+      this.activePlaybackVoices.forEach((voices) =>
+        voices.forEach((stopFn) => {
+          try { stopFn(now); } catch {}
+        })
+      );
       this.activePlaybackVoices.clear();
       this.stopAllNotes();
     }
@@ -1039,6 +1345,49 @@ export class AudioEngine {
 
   public pausePlayback() {
     this.stopPlayback();
+  }
+
+  /**
+   * Renders the song offline through exactly the same instruments, mix and effects as live playback
+   * (used by the WAV export, so the file sounds like what was heard in the editor).
+   */
+  public static async renderOffline(
+    tracks: Track[],
+    bpm: number,
+    effector: EffectorSettings,
+    sampleRate = 48000
+  ): Promise<AudioBuffer> {
+    const audible = audibleTracks(tracks);
+    await sampleLibrary.loadAll(audible.map((t) => t.instrumentId));
+
+    const secondsPerTick = 60 / (bpm * 480);
+    const lead = 0.05;
+    const seconds = Math.max(2, lead + songEndTick(audible) * secondsPerTick + 3.5); // reverb/release tail
+    const ctx = new OfflineAudioContext(2, Math.ceil(sampleRate * seconds), sampleRate);
+    const engine = new AudioEngine({ context: ctx });
+    engine.currentEffectorSettings = effector;
+    await engine.init();
+    engine.configureStrips(audible);
+
+    for (const track of audible) {
+      for (const note of track.notes) {
+        const isSustain = !!(note.sustain ?? track.sustainPedal ?? (track.instrumentId === 'grand-piano'));
+        engine.synthesizeInstrument(
+          track.instrumentId,
+          note.pitch,
+          note.velocity,
+          lead + note.startTick * secondsPerTick,
+          note.durationTicks * secondsPerTick,
+          track.volume,
+          track.auxSend,
+          track.pan,
+          true,
+          isSustain,
+          track.id
+        );
+      }
+    }
+    return ctx.startRendering();
   }
 
   public getPlaybackState(): { isPlaying: boolean; playheadTick: number } {
