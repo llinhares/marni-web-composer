@@ -18,6 +18,7 @@ import type {
 import { BDO_INSTRUMENTS, BDO_GRADE_LIMITS } from './types/music.ts';
 import { AudioEngine } from './audio/AudioEngine.ts';
 import { createPlayheadStore } from './audio/playheadStore.ts';
+import { sampleLibrary } from './audio/sampleLibrary.ts';
 import { WebMidiManager } from './midi/webMidi.ts';
 import { createStandardMidiFile, triggerFileDownload } from './midi/midiEncoder.ts';
 import { parseStandardMidiFile } from './midi/midiDecoder.ts';
@@ -409,6 +410,13 @@ export default function App() {
     [isPlaying, playhead, startEngineAt]
   );
 
+  // Download the sampled instruments the song uses (cached after the first time)
+  const instrumentKey = [...new Set(tracks.map((t) => t.instrumentId))].sort().join(',');
+  const instrumentIds = useMemo(() => (instrumentKey ? (instrumentKey.split(',') as InstrumentId[]) : []), [instrumentKey]);
+  useEffect(() => {
+    void sampleLibrary.loadAll(instrumentIds);
+  }, [instrumentIds]);
+
   // Edits, mute/solo and tempo changes reach the engine while it plays
   useEffect(() => {
     audioEngineRef.current?.updateSong(tracks);
@@ -566,7 +574,7 @@ export default function App() {
     try {
       const suffix = bitDepth === 24 ? '_master_24bit.wav' : '_cd_16bit.wav';
       const filename = `${(title || 'marni_composition').toLowerCase().replace(/\s+/g, '_')}${suffix}`;
-      await exportWavFile(tracks, bpm, filename, bitDepth);
+      await exportWavFile(tracks, bpm, effectorSettings, filename, bitDepth);
     } finally {
       setIsExportingAudio(false);
     }
@@ -1201,6 +1209,7 @@ export default function App() {
         onStop={handleStop}
         playhead={playhead}
         maxTick={maxTick}
+        instrumentIds={instrumentIds}
         bpm={bpm}
         onBpmChange={setBpm}
         timeSignature={timeSignature}

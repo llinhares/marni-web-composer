@@ -17,9 +17,10 @@ import {
   Redo2,
   Hand,
 } from 'lucide-react';
-import type { ToolMode, GridSnap, TimeSignature, EffectorSettings } from '../types/music.ts';
+import type { ToolMode, GridSnap, TimeSignature, EffectorSettings, InstrumentId } from '../types/music.ts';
 import { formatTimecode, ticksToSeconds } from '../utils/musicMath.ts';
 import { usePlayheadTick, type PlayheadStore } from '../audio/playheadStore.ts';
+import { SampleStatusBadge } from './SampleStatusBadge.tsx';
 
 const Timecode: React.FC<{ playhead: PlayheadStore; maxTick: number; bpm: number }> = ({ playhead, maxTick, bpm }) => {
   const currentTick = usePlayheadTick(playhead);
@@ -41,6 +42,7 @@ interface HeaderProps {
   onStop: () => void;
   playhead: PlayheadStore;
   maxTick: number;
+  instrumentIds: InstrumentId[];
   bpm: number;
   onBpmChange: (bpm: number) => void;
   timeSignature: TimeSignature;
@@ -82,6 +84,7 @@ export const Header: React.FC<HeaderProps> = ({
   onStop,
   playhead,
   maxTick,
+  instrumentIds,
   bpm,
   onBpmChange,
   timeSignature,
@@ -312,6 +315,7 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Timecode Readout (only this element re-renders while playing) */}
         <Timecode playhead={playhead} maxTick={maxTick} bpm={bpm} />
+        <SampleStatusBadge instrumentIds={instrumentIds} />
       </div>
 
       {/* Right Segment: Time Signature, Grid Snap, Sustenido (#/b), MIDI, Zoom */}

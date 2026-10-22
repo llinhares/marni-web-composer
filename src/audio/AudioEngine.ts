@@ -18,12 +18,14 @@ import {
   timeAtTick,
   type TimelineAnchor,
 } from './scheduling.ts';
+import { sampleLibrary, pickSample, DECAYING_INSTRUMENTS, type SampleSet } from './sampleLibrary.ts';
 
 const LOOKAHEAD_SEC = 0.15;
 
 export class AudioEngine {
-  private ctx: AudioContext | null = null;
+  private ctx: BaseAudioContext | null = null;
   private isInitialized = false;
+  private readonly offlineContext: OfflineAudioContext | null;
 
   // Master Nodes
   private masterGain: GainNode | null = null;
@@ -62,27 +64,35 @@ export class AudioEngine {
   private onPlaybackEnded: (() => void) | null = null;
   private currentEffectorSettings: EffectorSettings | null = null;
 
-  constructor() {
-    this.workerTimer = new WorkerTimer(20);
+  /** With `context`, the engine renders into that OfflineAudioContext (WAV export) instead of the speakers. */
+  constructor(options: { context?: OfflineAudioContext } = {}) {
+    this.offlineContext = options.context ?? null;
+    if (!this.offlineContext) this.workerTimer = new WorkerTimer(20);
+  }
+
+  private get isOffline(): boolean {
+    return this.offlineContext !== null;
   }
 
   public async init(): Promise<void> {
     if (this.isInitialized && this.ctx) {
-      if (this.ctx.state === 'suspended') {
+      if (this.ctx instanceof AudioContext && this.ctx.state === 'suspended') {
         await this.ctx.resume();
       }
       return;
     }
 
-    const AudioContextClass =
-      window.AudioContext ||
-      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    this.ctx = new AudioContextClass({
-      latencyHint: 'interactive',
-    });
-
-    if (this.ctx.state === 'suspended') {
-      await this.ctx.resume();
+    if (this.offlineContext) {
+      this.ctx = this.offlineContext;
+    } else {
+      const AudioContextClass =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const live = new AudioContextClass({ latencyHint: 'interactive' });
+      this.ctx = live;
+      if (live.state === 'suspended') {
+        await live.resume();
+      }
     }
 
     // 1. Master Output Chain with safety limiter
@@ -204,11 +214,14 @@ export class AudioEngine {
     this.currentEffectorSettings = fx;
     if (!this.ctx) return;
     const now = this.ctx.currentTime;
+    // Offline renders start at t=0: set values directly instead of gliding into them
+    const glide = (param: AudioParam, value: number) =>
+      this.isOffline ? param.setValueAtTime(value, now) : param.setTargetAtTime(value, now, 0.05);
 
     // Reverb
     if (this.reverbGain) {
       const revVol = fx.reverb.enabled ? (fx.reverb.mix / 100) * 0.7 : 0;
-      this.reverbGain.gain.setTargetAtTime(revVol, now, 0.05);
+      glide(this.reverbGain.gain, revVol);
     }
 
     // Delay
@@ -217,9 +230,9 @@ export class AudioEngine {
       const feedback = fx.delay.enabled ? Math.min(0.85, (fx.delay.feedback / 100) * 0.8) : 0;
       const delayTime = Math.max(0.05, Math.min(1.5, (fx.delay.time / 100) * 0.8 + 0.05));
 
-      this.delayGain.gain.setTargetAtTime(delVol, now, 0.05);
-      this.delayFeedbackGain.gain.setTargetAtTime(feedback, now, 0.05);
-      this.delayNode.delayTime.setTargetAtTime(delayTime, now, 0.05);
+      glide(this.delayGain.gain, delVol);
+      glide(this.delayFeedbackGain.gain, feedback);
+      glide(this.delayNode.delayTime, delayTime);
     }
 
     // Chorus
@@ -228,9 +241,9 @@ export class AudioEngine {
       const rate = Math.max(0.1, (fx.chorus.lfoFrequency / 100) * 5.0 + 0.2);
       const depth = (fx.chorus.lfoDepth / 100) * 0.005 + 0.0005;
 
-      this.chorusGain.gain.setTargetAtTime(choVol, now, 0.05);
-      this.chorusLfo.frequency.setTargetAtTime(rate, now, 0.05);
-      this.chorusLfoGain.gain.setTargetAtTime(depth, now, 0.05);
+      glide(this.chorusGain.gain, choVol);
+      glide(this.chorusLfo.frequency, rate);
+      glide(this.chorusLfoGain.gain, depth);
     }
   }
 
@@ -299,6 +312,57 @@ export class AudioEngine {
     this.activeAuditionVoices.clear();
   }
 
+  /**
+   * Plays one recorded sample into the voice chain. Plucked/struck instruments ring out after the
+   * note ends (longer with the sustain pedal); sustained instruments release at the note end.
+   */
+  private playSample(
+    set: SampleSet,
+    pitch: number,
+    velFactor: number,
+    volFactor: number,
+    startTime: number,
+    duration: number,
+    sustain: boolean,
+    destination: AudioNode
+  ): ((stopTime: number) => void) | null {
+    if (!this.ctx) return null;
+    const picked = pickSample(pitch, set.pitches);
+    const buffer = picked ? set.buffers.get(picked.samplePitch) : undefined;
+    if (!picked || !buffer) return null;
+
+    const src = this.ctx.createBufferSource();
+    src.buffer = buffer;
+    src.playbackRate.setValueAtTime(picked.rate, startTime);
+
+    const amp = this.ctx.createGain();
+    // SoundFont samples are recorded with headroom: x6 matches the level of the previous synth voices
+    const peak = Math.max(0.0001, velFactor * volFactor * 6);
+    amp.gain.setValueAtTime(peak, startTime);
+
+    const decaying = DECAYING_INSTRUMENTS.has(set.instrumentId);
+    const ring = decaying ? (sustain ? 2.5 : 0.35) : 0.12;
+    const releaseAt = startTime + duration;
+    amp.gain.setTargetAtTime(0, releaseAt, ring / 4);
+
+    src.connect(amp);
+    amp.connect(destination);
+    const naturalEnd = startTime + buffer.duration / picked.rate;
+    src.start(startTime);
+    src.stop(Math.min(naturalEnd, releaseAt + ring * 1.5) + 0.05);
+
+    // The destination voice gain is still at 0 from its creation: open it for the sample
+    if (destination instanceof GainNode) destination.gain.setValueAtTime(1, startTime);
+
+    return (stopTime: number) => {
+      try {
+        amp.gain.cancelScheduledValues(stopTime);
+        amp.gain.setTargetAtTime(0, stopTime, 0.02);
+        src.stop(stopTime + 0.1);
+      } catch {}
+    };
+  }
+
   private synthesizeInstrument(
     instrumentId: InstrumentId,
     pitch: number,
@@ -341,14 +405,23 @@ export class AudioEngine {
 
     const stopCallbacks: ((t: number) => void)[] = [];
 
-    // Cleanup voiceGain from audio graph
-    const voiceLifeSec = duration + (sustain ? 2.5 : 1.2);
-    setTimeout(() => {
-      try {
-        voiceGain.disconnect();
-        if (panner) panner.disconnect();
-      } catch {}
-    }, voiceLifeSec * 1000);
+    // Cleanup voiceGain from audio graph (not offline: the render may run slower than these timers)
+    const samples = sampleLibrary.get(instrumentId);
+    const voiceLifeSec = duration + (samples ? 4 : sustain ? 2.5 : 1.2);
+    if (!this.isOffline) {
+      setTimeout(() => {
+        try {
+          voiceGain.disconnect();
+          if (panner) panner.disconnect();
+        } catch {}
+      }, voiceLifeSec * 1000);
+    }
+
+    // Sampled instrument (falls back to the synthesizer below while loading or if unavailable)
+    if (samples) {
+      const stop = this.playSample(samples, pitch, velFactor, volFactor, startTime, duration, sustain, voiceGain);
+      if (stop) return stop;
+    }
 
     switch (instrumentId) {
       case 'grand-piano': {
@@ -1071,6 +1144,47 @@ export class AudioEngine {
 
   public pausePlayback() {
     this.stopPlayback();
+  }
+
+  /**
+   * Renders the song offline through exactly the same instruments, mix and effects as live playback
+   * (used by the WAV export, so the file sounds like what was heard in the editor).
+   */
+  public static async renderOffline(
+    tracks: Track[],
+    bpm: number,
+    effector: EffectorSettings,
+    sampleRate = 48000
+  ): Promise<AudioBuffer> {
+    const audible = audibleTracks(tracks);
+    await sampleLibrary.loadAll(audible.map((t) => t.instrumentId));
+
+    const secondsPerTick = 60 / (bpm * 480);
+    const lead = 0.05;
+    const seconds = Math.max(2, lead + songEndTick(audible) * secondsPerTick + 3.5); // reverb/release tail
+    const ctx = new OfflineAudioContext(2, Math.ceil(sampleRate * seconds), sampleRate);
+    const engine = new AudioEngine({ context: ctx });
+    engine.currentEffectorSettings = effector;
+    await engine.init();
+
+    for (const track of audible) {
+      for (const note of track.notes) {
+        const isSustain = !!(note.sustain ?? track.sustainPedal ?? (track.instrumentId === 'grand-piano'));
+        engine.synthesizeInstrument(
+          track.instrumentId,
+          note.pitch,
+          note.velocity,
+          lead + note.startTick * secondsPerTick,
+          note.durationTicks * secondsPerTick,
+          track.volume,
+          track.auxSend,
+          track.pan,
+          true,
+          isSustain
+        );
+      }
+    }
+    return ctx.startRendering();
   }
 
   public getPlaybackState(): { isPlaying: boolean; playheadTick: number } {

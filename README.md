@@ -17,7 +17,7 @@ An advanced, open-source, and responsive web-based digital audio workstation (DA
 
 - **High-Performance HTML5 Canvas Piano Roll**: Ultra-smooth rendering with automatic device pixel ratio (Retina/High-DPI) scaling, marquee selection, note dragging, proportional stretching (0.5x, 2x), transposition, and ghost notes.
 - **Undo / Redo Action Stack**: Comprehensive history tracking with keyboard shortcuts (<kbd>Ctrl</kbd>+<kbd>Z</kbd>, <kbd>Ctrl</kbd>+<kbd>Y</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd>) and dedicated toolbar buttons.
-- **Pure Web Audio API Synthesis Engine**: Procedural and algorithmic synthesis for all 10 BDO instruments (Grand Piano, Flute, Violin, Percussion, Acoustic Guitar, Acoustic Bass, Harp, Trumpet, Cello, and Marnisynth) with instant loading and zero network overhead.
+- **Sampled Instruments**: Piano, Flute, Violin, Guitar, Bass, Harp, Trumpet and Cello play recorded General MIDI samples (one per semitone), downloaded on demand and cached for offline use; Percussion and Marnisynth use the built-in Web Audio synthesizer, which is also the fallback while samples load. WAV export renders through the same engine, so files sound exactly like the editor.
 - **Jitter-Free Worker Timer**: Dedicated background Web Worker timer via inline Blob URL combined with lookahead scheduling (150ms) to eliminate browser tab throttling and audio drift.
 - **Native BDO Percussion Mapping**: Dedicated drum row watermarks, color coding, and quick audition pads mapped to authentic Black Desert drum pieces (Kick, Snare, Rimshot, Flam, Closed/Open Hi-Hats, Pedal, Toms 1–5, Crash, and Ride).
 - **Direct BDO Binary Export (`.bms`)**: Pure TypeScript implementation of the game's proprietary ICE encryption cipher. Supports automatic extraction of Owner ID and Character Name from existing game files, note rank limits (Rank F to S), velocity compression modes, and chunk note partitioning.
@@ -107,6 +107,11 @@ Contributions are more than welcome!
 Feel free to open Issues reporting bugs or feature requests, or submit Pull Requests with improvements (such as new visualizers, workflow tools, or musical enhancements).
 
 ---
+
+## 🎹 Credits
+
+- Instrument samples: **FluidR3_GM** SoundFont by Frank Wen, pre-rendered by [midi-js-soundfonts](https://github.com/gleitz/midi-js-soundfonts), licensed under [Creative Commons Attribution 3.0](https://creativecommons.org/licenses/by/3.0/).
+- Audio-to-MIDI model: [Spotify basic-pitch](https://github.com/spotify/basic-pitch-ts) (Apache-2.0).
 
 ## 📄 License
 

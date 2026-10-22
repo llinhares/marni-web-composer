@@ -18,6 +18,7 @@ import {
 import type { Track, InstrumentId } from '../types/music.ts';
 import { BDO_INSTRUMENTS } from '../types/music.ts';
 import { AddInstrumentModal } from './AddInstrumentModal.tsx';
+import { SAMPLES_CREDIT } from '../audio/sampleLibrary.ts';
 
 interface TrackListProps {
   tracks: Track[];
@@ -420,6 +421,15 @@ export const TrackList: React.FC<TrackListProps> = ({
             className="text-amber-500/80 hover:text-amber-400 underline underline-offset-2"
           >
             GitHub
+          </a>
+          <a
+            href="https://github.com/gleitz/midi-js-soundfonts"
+            target="_blank"
+            rel="noreferrer"
+            className="basis-full text-[9px] text-stone-500 hover:text-stone-400"
+            title={SAMPLES_CREDIT}
+          >
+            Timbres: FluidR3_GM (Frank Wen) • CC BY 3.0
           </a>
         </div>
       </div>
