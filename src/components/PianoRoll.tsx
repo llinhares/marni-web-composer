@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import type { Note, Track, ToolMode, GridSnap, TimeSignature } from '../types/music.ts';
 import type { PlayheadStore } from '../audio/playheadStore.ts';
+import { instrumentRange } from '../bdo/bdoValidation.ts';
 import {
   pitchToNoteName,
   isBlackKey,
@@ -99,6 +100,11 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
   );
   const activeNotes = activeTrack?.notes || [];
   const isPercussion = activeTrack?.instrumentId === 'percussion';
+  // Range of the active instrument: rows outside it are dimmed and notes outside it outlined in red
+  const instRange = useMemo(
+    () => (activeTrack && !isPercussion ? instrumentRange(activeTrack) : null),
+    [activeTrack, isPercussion]
+  );
 
   // Dynamic keyboard width for drum names with full descriptions
   const keyboardWidth = isPercussion ? 148 : 58;
@@ -624,6 +630,10 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
       }
 
       ctx.fillRect(keyboardWidth, y, width - keyboardWidth, keyHeight);
+      if (instRange && (p < instRange.min || p > instRange.max)) {
+        ctx.fillStyle = 'rgba(70, 10, 10, 0.35)';
+        ctx.fillRect(keyboardWidth, y, width - keyboardWidth, keyHeight);
+      }
 
       // In drum mode, show watermark of the piece name on the row
       if (isPercussion && drumInfo?.isNativeBdo) {
@@ -733,6 +743,16 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
       ctx.strokeStyle = isSelected ? '#ffffff' : '#7c4d1e';
       ctx.lineWidth = isSelected ? 2 : 1;
       ctx.stroke();
+
+      // Out of the instrument's range: red dashed outline
+      if (instRange && (note.pitch < instRange.min || note.pitch > instRange.max)) {
+        ctx.save();
+        ctx.setLineDash([3, 2]);
+        ctx.strokeStyle = '#ef4444';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.restore();
+      }
 
       // Right Resize Handle Grip
       if (w > 12) {
@@ -997,6 +1017,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
     zoomLevel,
     keyHeight,
     pixelsPerTick,
+    instRange,
     accidentals,
     gridSnap,
     timeSignature,

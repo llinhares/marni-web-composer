@@ -11,6 +11,10 @@ import {
   Sliders,
   AudioWaveform,
   Lock,
+  CircleAlert,
+  Info,
+  Wrench,
+  CheckCircle2,
 } from 'lucide-react';
 import type { Track, EffectorSettings, SongMetadata } from '../types/music.ts';
 import {
@@ -24,6 +28,14 @@ import {
 } from '../bdo/bdoExportV2.ts';
 import { generateBdoScore } from '../bdo/bdoConverter.ts';
 import { BDO_GRADE_LIMITS } from '../types/music.ts';
+import {
+  applyBdoFix,
+  timeSignatureParts,
+  validateForBdo,
+  BDO_GRADES,
+  type BdoGradeId,
+  type BdoIssue,
+} from '../bdo/bdoValidation.ts';
 
 interface BdoExportModalProps {
   isOpen: boolean;
@@ -31,7 +43,24 @@ interface BdoExportModalProps {
   tracks: Track[];
   metadata: SongMetadata;
   effectorSettings: EffectorSettings;
+  onApplyTracks: (tracks: Track[]) => void;
+  onGradeChange: (grade: BdoGradeId) => void;
 }
+
+const SEVERITY_STYLE: Record<BdoIssue['severity'], { box: string; icon: React.ReactNode }> = {
+  error: {
+    box: 'border-red-700/60 bg-red-950/30 text-red-200',
+    icon: <CircleAlert className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />,
+  },
+  warning: {
+    box: 'border-amber-700/50 bg-amber-950/30 text-amber-100',
+    icon: <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />,
+  },
+  info: {
+    box: 'border-[#3e342b] bg-stone-900/60 text-stone-300',
+    icon: <Info className="w-4 h-4 text-stone-400 shrink-0 mt-0.5" />,
+  },
+};
 
 export const BdoExportModal: React.FC<BdoExportModalProps> = ({
   isOpen,
@@ -39,6 +68,8 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
   tracks,
   metadata,
   effectorSettings,
+  onApplyTracks,
+  onGradeChange,
 }) => {
   // Active Export Mode: 'binary' (Game-compatible .bms ICE file) or 'xml-mml' (Sheet Score preview from print)
   const [activeTab, setActiveTab] = useState<'binary' | 'xml'>('binary');
@@ -125,8 +156,29 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
     return generateBdoScore(tracks, metadata);
   }, [tracks, metadata, isOpen]);
 
-  const totalNotes = tracks.reduce((acc, tr) => acc + tr.notes.length, 0);
-  const maxNotesAllowed = BDO_GRADE_LIMITS[metadata.bdoGrade]?.maxNotes || 10000;
+  const validation = useMemo(
+    () =>
+      isOpen
+        ? validateForBdo(tracks, {
+            grade: metadata.bdoGrade,
+            timeSignature: metadata.timeSignature,
+            instrumentOverrides: instOverrides,
+          })
+        : null,
+    [isOpen, tracks, metadata.bdoGrade, metadata.timeSignature, instOverrides]
+  );
+  const gradeLimits = BDO_GRADE_LIMITS[metadata.bdoGrade] ?? BDO_GRADE_LIMITS.S;
+
+  const handleFix = (issue: BdoIssue) => {
+    const fix = issue.fix;
+    if (!fix) return;
+    if (fix.kind === 'use-grade') {
+      if (fix.grade) onGradeChange(fix.grade);
+      return;
+    }
+    const fixed = applyBdoFix(tracks, fix.kind, instOverrides);
+    if (fixed !== tracks) onApplyTracks(fixed);
+  };
 
   if (!isOpen) return null;
 
@@ -221,7 +273,7 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
 
     const songContext: SongContext = {
       bpm: metadata.bpm,
-      timeSignature: [4, 4],
+      timeSignature: timeSignatureParts(metadata.timeSignature),
       title: songTitle,
       author: resolvedComposer,
     };
@@ -324,17 +376,49 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
         </div>
 
         {/* Note Budget / BDO Grade Status Bar */}
-        <div className="px-5 sm:px-6 py-2.5 bg-[#141210] border-b border-[#2d2722] flex items-center justify-between text-xs shrink-0">
-          <div className="flex items-center gap-2">
-            <span className="text-stone-400">Total de Notas:</span>
-            <span className="font-mono font-bold text-amber-400 text-sm">{totalNotes}</span>
-            <span className="text-stone-500">/</span>
-            <span className="font-mono text-stone-400">{maxNotesAllowed}</span>
+        <div className="px-5 sm:px-6 py-2.5 bg-[#141210] border-b border-[#2d2722] flex flex-wrap items-center justify-between gap-2 text-xs shrink-0">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-1.5" title="Notas que serão gravadas (sem faixas mutadas e duplicadas)">
+              <span className="text-stone-400">Notas:</span>
+              <span
+                className={`font-mono font-bold text-sm ${
+                  (validation?.exportedNotes ?? 0) > gradeLimits.maxNotes ? 'text-red-400' : 'text-amber-400'
+                }`}
+              >
+                {validation?.exportedNotes ?? 0}
+              </span>
+              <span className="text-stone-500">/</span>
+              <span className="font-mono text-stone-400">{gradeLimits.maxNotes}</span>
+            </div>
+            <div className="flex items-center gap-1.5" title={`Compassos em ${metadata.timeSignature}`}>
+              <span className="text-stone-400">Compassos:</span>
+              <span
+                className={`font-mono font-bold text-sm ${
+                  (validation?.bars ?? 0) > gradeLimits.maxBars ? 'text-red-400' : 'text-amber-400'
+                }`}
+              >
+                {validation?.bars ?? 0}
+              </span>
+              <span className="text-stone-500">/</span>
+              <span className="font-mono text-stone-400">{gradeLimits.maxBars}</span>
+            </div>
           </div>
 
-          <div className="px-2.5 py-1 rounded-md bg-amber-950/40 border border-amber-600/40 text-amber-400 font-mono text-xs font-semibold">
-            Grau BDO: Rank {metadata.bdoGrade}
-          </div>
+          <label className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-amber-950/40 border border-amber-600/40 text-amber-400 font-mono text-xs font-semibold">
+            <span>Grau BDO:</span>
+            <select
+              value={metadata.bdoGrade}
+              onChange={(e) => onGradeChange(e.target.value as BdoGradeId)}
+              className="bg-transparent text-amber-300 font-bold focus:outline-none cursor-pointer"
+              aria-label="Grau (rank) da partitura no BDO"
+            >
+              {BDO_GRADES.map((g) => (
+                <option key={g} value={g} className="bg-stone-900">
+                  Rank {g}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
 
         {/* Mode Switcher Tabs */}
@@ -363,6 +447,43 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5">
           {activeTab === 'binary' ? (
             <>
+              {/* SECTION 0: PRE-EXPORT CHECK */}
+              {validation && (
+                <div className="rounded-xl border border-[#3e342b] bg-[#1a1715]/70 p-3 space-y-2" aria-live="polite">
+                  {validation.issues.length === 0 ? (
+                    <div className="flex items-center gap-2 text-xs text-emerald-300">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                      <span>
+                        Pronta para o jogo: nada será alterado na exportação
+                        {validation.minGrade ? ` • rank mínimo: ${validation.minGrade}` : ''}.
+                      </span>
+                    </div>
+                  ) : (
+                    validation.issues.map((issue) => (
+                      <div
+                        key={issue.id}
+                        className={`flex items-start gap-2.5 rounded-lg border px-3 py-2 text-xs ${SEVERITY_STYLE[issue.severity].box}`}
+                      >
+                        {SEVERITY_STYLE[issue.severity].icon}
+                        <div className="flex-1 min-w-0">
+                          <div className="font-semibold">{issue.title}</div>
+                          <div className="opacity-80 leading-relaxed">{issue.detail}</div>
+                        </div>
+                        {issue.fix && (
+                          <button
+                            onClick={() => handleFix(issue)}
+                            className="shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-md bg-stone-900 border border-[#3e342b] hover:border-amber-500/60 text-stone-200 hover:text-amber-300 font-semibold transition-colors"
+                          >
+                            <Wrench className="w-3 h-3" />
+                            {issue.fix.label}
+                          </button>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+
               {/* SECTION 1: SETTINGS */}
               <div className="relative rounded-xl border border-[#3e342b] bg-[#1a1715]/70 p-4 pt-5 shadow-sm">
                 <span className="absolute -top-2.5 left-3 bg-[#161412] px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-400 border border-[#3e342b] rounded-md">
@@ -785,10 +906,17 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
         <div className="p-4 border-t border-[#2d2722] bg-[#141210] shrink-0 flex items-center gap-3">
           <button
             onClick={handleExportBinary}
-            className="w-full py-3 rounded-lg bg-amber-500 hover:bg-amber-400 text-stone-950 font-bold text-sm tracking-wider uppercase transition-all shadow-[0_0_15px_rgba(245,158,11,0.25)] hover:shadow-[0_0_20px_rgba(245,158,11,0.45)] active:scale-[0.99] flex items-center justify-center gap-2"
+            disabled={validation?.exportedNotes === 0}
+            className={`w-full py-3 rounded-lg font-bold text-sm tracking-wider uppercase transition-all active:scale-[0.99] flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed ${
+              validation && !validation.canExport
+                ? 'bg-red-900/70 hover:bg-red-800/80 text-red-100 border border-red-700/60'
+                : 'bg-amber-500 hover:bg-amber-400 text-stone-950 shadow-[0_0_15px_rgba(245,158,11,0.25)] hover:shadow-[0_0_20px_rgba(245,158,11,0.45)]'
+            }`}
           >
             <Download className="w-4 h-4" />
-            EXPORTAR ARQUIVO BDO (SEM EXTENSÃO)
+            {validation && !validation.canExport
+              ? 'EXPORTAR MESMO ASSIM (FORA DO LIMITE DO RANK)'
+              : 'EXPORTAR ARQUIVO BDO (SEM EXTENSÃO)'}
           </button>
         </div>
       </div>

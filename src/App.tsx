@@ -1350,6 +1350,11 @@ export default function App() {
         tracks={tracks}
         metadata={metadata}
         effectorSettings={effectorSettings}
+        onApplyTracks={(fixed) => {
+          setTracks(fixed);
+          pushHistory(fixed);
+        }}
+        onGradeChange={setBdoGrade}
       />
 
       {/* Web MIDI Settings Modal */}
