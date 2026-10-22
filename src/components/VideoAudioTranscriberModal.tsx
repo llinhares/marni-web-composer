@@ -35,6 +35,8 @@ import {
   DetectedBarSegment,
   KeyHit,
 } from '../utils/videoScanner.ts';
+import { calibrateBars, type BarCalibration } from '../utils/barCalibration.ts';
+import { notify } from '../ui/notify.ts';
 import { pitchToNoteName, formatTimecode } from '../utils/musicMath.ts';
 import { newId } from '../utils/ids.ts';
 
@@ -114,6 +116,8 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
   const [keyboardXEnd, setKeyboardXEnd] = useState<number>(100); // 100% from left
   const [octaveShift, setOctaveShift] = useState<number>(0); // -2 to +2 octaves
   const [detectedLayout, setDetectedLayout] = useState<KeyboardLayout | null>(null);
+  // Background level and bar colours measured from the video (makes the preview match the scan)
+  const [detectedCalibration, setDetectedCalibration] = useState<BarCalibration | null>(null);
   const [brightnessThreshold] = useState<number>(38);
   const [minSaturation] = useState<number>(0.20);
   const [liveBars, setLiveBars] = useState<{ right: number; left: number }>({ right: 0, left: 0 });
@@ -165,6 +169,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
       setEyedropperTarget(null);
       setHoveredColor(null);
       setDetectedLayout(null);
+      setDetectedCalibration(null);
     }
   }, [isOpen, activeTrackId]);
 
@@ -276,6 +281,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
       setEyedropperTarget(null);
       setHoveredColor(null);
       setDetectedLayout(null);
+      setDetectedCalibration(null);
     }
   };
 
@@ -363,17 +369,34 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
       ctx.stroke();
 
       let currentLayout = detectedLayout;
-      if (!currentLayout && video.videoWidth > 0 && video.readyState >= 2) {
+      let currentCalibration = detectedCalibration;
+      if ((!currentLayout || !currentCalibration) && video.videoWidth > 0 && video.readyState >= 2) {
         try {
           const off = document.createElement('canvas');
           off.width = 640;
           off.height = 360;
           const offCtx = off.getContext('2d', { willReadFrequently: true });
           if (offCtx) {
-            const found = detectKeyboardLayoutInFrame(offCtx, video, 640, 360, 0.45);
-            if (found) {
-              currentLayout = found;
-              setDetectedLayout(found);
+            if (!currentLayout) {
+              const found = detectKeyboardLayoutInFrame(offCtx, video, 640, 360, 0.45);
+              if (found) {
+                currentLayout = found;
+                setDetectedLayout(found);
+              }
+            }
+            if (currentLayout && !currentCalibration) {
+              offCtx.drawImage(video, 0, 0, 640, 360);
+              const top = Math.round(360 * 0.12);
+              const rows = Math.max(20, Math.round(360 * (scanlineY / 100)) - 3 - top);
+              const cal = calibrateBars(
+                [{ data: offCtx.getImageData(0, top, 640, rows).data, width: 640, rows }],
+                currentLayout.whiteKeyWidthRatio * 640
+              );
+              // Keep measuring until a frame with bars on screen is seen
+              if (cal.barHues.length > 0) {
+                currentCalibration = cal;
+                setDetectedCalibration(cal);
+              }
             }
           }
         } catch {
@@ -447,6 +470,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
               hand2Color: hexToRgb(hand2ColorHex),
               splitPitch,
               layout: currentLayout,
+              calibration: currentCalibration,
             });
           }
         } catch {
@@ -499,6 +523,8 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
       hand2ColorHex,
       splitPitch,
       octaveShift,
+      detectedLayout,
+      detectedCalibration,
     ]
   );
 
@@ -622,6 +648,19 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
 
         if (videoScanResult.keyboardLayout && !detectedLayout) {
           setDetectedLayout(videoScanResult.keyboardLayout);
+        }
+
+        // Show the colours actually used (detected from the video when the chosen ones did not match)
+        if (videoScanResult.calibration) setDetectedCalibration(videoScanResult.calibration);
+        if (videoScanResult.colorsAdjusted) {
+          setColorMode(videoScanResult.colorModeUsed);
+          setHand1ColorHex(rgbToHex(videoScanResult.dominantColors.rightHand.r, videoScanResult.dominantColors.rightHand.g, videoScanResult.dominantColors.rightHand.b));
+          setHand2ColorHex(rgbToHex(videoScanResult.dominantColors.leftHand.r, videoScanResult.dominantColors.leftHand.g, videoScanResult.dominantColors.leftHand.b));
+          notify.info(
+            videoScanResult.colorModeUsed === 'single-color'
+              ? 'As duas mãos usam a mesma cor no vídeo: as mãos foram separadas pela altura das notas.'
+              : 'As cores escolhidas não batiam com o vídeo: as cores das barras foram detectadas automaticamente.'
+          );
         }
 
         const ticksPerSecond = (effectiveBpm * TICKS_PER_BEAT) / 60;
@@ -748,6 +787,19 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
 
           if (videoScanResult.keyboardLayout && !detectedLayout) {
             setDetectedLayout(videoScanResult.keyboardLayout);
+          }
+
+          // Show the colours actually used (detected from the video when the chosen ones did not match)
+          if (videoScanResult.calibration) setDetectedCalibration(videoScanResult.calibration);
+          if (videoScanResult.colorsAdjusted) {
+            setColorMode(videoScanResult.colorModeUsed);
+            setHand1ColorHex(rgbToHex(videoScanResult.dominantColors.rightHand.r, videoScanResult.dominantColors.rightHand.g, videoScanResult.dominantColors.rightHand.b));
+            setHand2ColorHex(rgbToHex(videoScanResult.dominantColors.leftHand.r, videoScanResult.dominantColors.leftHand.g, videoScanResult.dominantColors.leftHand.b));
+            notify.info(
+              videoScanResult.colorModeUsed === 'single-color'
+                ? 'As duas mãos usam a mesma cor no vídeo: as mãos foram separadas pela altura das notas.'
+                : 'As cores escolhidas não batiam com o vídeo: as cores das barras foram detectadas automaticamente.'
+            );
           }
 
           setStatusMessage('Cruzando notas do áudio com visão computacional...');
