@@ -165,8 +165,11 @@ const GUIDE: GuideSection[] = [
   },
   {
     icon: <Sparkles className="w-4 h-4" />,
-    title: 'Ferramentas de IA',
+    title: 'Ferramentas de IA (beta)',
     items: [
+      <>
+        Ficam no botão de varinha, ao lado de Adicionar. As três estão em <b>beta</b>: confira o resultado antes de exportar.
+      </>,
       <>
         <b>Partitura por imagem</b>: envie uma foto ou PDF e o Gemini lê os compassos (requer sua chave gratuita do Google AI Studio).
         Para fidelidade total, prefira importar MIDI ou MusicXML.
@@ -175,6 +178,12 @@ const GUIDE: GuideSection[] = [
         <b>Vídeo/Áudio para MIDI</b>: transcreve vídeos no estilo Synthesia (lendo as barras coloridas) e gravações de áudio.
         O teclado (quantidade de teclas e extensão), a linha de leitura e as cores das mãos são detectados sozinhos;
         em teclados parciais (vídeo com zoom) o modo Híbrido confirma a oitava pelo áudio.
+      </>,
+      <>
+        <b>Separar instrumentos</b>: de um áudio ou vídeo, separa voz, bateria, baixo e harmonia (IA Demucs, no seu computador) e cria
+        uma faixa para cada um: a voz vira uma melodia no Violino, o baixo no Marnibass, a harmonia no Piano e a bateria nas peças do
+        Kit de Bateria. Dá para ouvir cada parte separada e trocar o instrumento antes de importar. Na primeira vez o modelo (180 MB)
+        é baixado e fica guardado no navegador.
       </>,
     ],
   },

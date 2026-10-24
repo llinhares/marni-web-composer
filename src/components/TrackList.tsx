@@ -13,7 +13,10 @@ import {
   FileUp,
   ChevronUp,
   Video,
+  Wand2,
+  Layers,
 } from 'lucide-react';
+import { BetaBadge } from './BetaBadge.tsx';
 import type { Track } from '../types/music.ts';
 import { BDO_INSTRUMENTS } from '../types/music.ts';
 import { AddInstrumentModal } from './AddInstrumentModal.tsx';
@@ -38,6 +41,7 @@ interface TrackListProps {
   onImportClick: (mode: 'replace' | 'append') => void;
   onOpenAiSheetScanner?: () => void;
   onOpenVideoTranscriber?: () => void;
+  onOpenStemSplitter?: () => void;
   totalNotes: number;
   maxNotes: number;
   bdoGrade: string;
@@ -56,6 +60,7 @@ export const TrackList: React.FC<TrackListProps> = ({
   onImportClick,
   onOpenAiSheetScanner,
   onOpenVideoTranscriber,
+  onOpenStemSplitter,
   totalNotes,
   maxNotes,
   bdoGrade,
@@ -63,6 +68,7 @@ export const TrackList: React.FC<TrackListProps> = ({
 }) => {
   const [menuOpenTrackId, setMenuOpenTrackId] = useState<string | null>(null);
   const [isImportMenuOpen, setIsImportMenuOpen] = useState(false);
+  const [isTranscribeMenuOpen, setIsTranscribeMenuOpen] = useState(false);
   const [changingTrackId, setChangingTrackId] = useState<string | null>(null);
 
   return (
@@ -375,28 +381,80 @@ export const TrackList: React.FC<TrackListProps> = ({
             )}
           </div>
 
-          {/* AI Sheet Music Scanner Button */}
-          {onOpenAiSheetScanner && (
-            <button
-              onClick={onOpenAiSheetScanner}
-              className="p-2 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/40 hover:border-amber-400 text-amber-300 transition-colors flex items-center justify-center shadow-sm"
-              title="Ler Partitura por Imagem com IA (Gemini OMR)"
-              aria-label="Ler Partitura com IA"
-            >
-              <Sparkles className="w-4 h-4 text-amber-400" />
-            </button>
-          )}
+          {/* Transcription tools (beta): score image, Synthesia video/audio, instrument separation */}
+          {(onOpenAiSheetScanner || onOpenVideoTranscriber || onOpenStemSplitter) && (
+            <div className="relative">
+              <button
+                onClick={() => setIsTranscribeMenuOpen((prev) => !prev)}
+                className={`p-2 rounded-lg border transition-colors flex items-center gap-1 ${
+                  isTranscribeMenuOpen
+                    ? 'bg-sky-500/20 border-sky-400/70 text-sky-300'
+                    : 'bg-sky-500/10 hover:bg-sky-500/20 border-sky-500/40 hover:border-sky-400 text-sky-300'
+                }`}
+                title="Transcrever com IA (beta): partitura, vídeo/áudio e separação de instrumentos"
+                aria-label="Transcrever com IA"
+                aria-expanded={isTranscribeMenuOpen}
+              >
+                <Wand2 className="w-4 h-4" />
+                <ChevronUp
+                  className={`w-3 h-3 transition-transform duration-200 ${isTranscribeMenuOpen ? 'rotate-180' : ''}`}
+                />
+              </button>
 
-          {/* Video & Audio AI Transcriber Button */}
-          {onOpenVideoTranscriber && (
-            <button
-              onClick={onOpenVideoTranscriber}
-              className="p-2 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/40 hover:border-emerald-400 text-emerald-300 transition-colors flex items-center justify-center shadow-sm"
-              title="Transcrever Vídeo (Cascata Synthesia) ou Áudio para Faixas MIDI com IA"
-              aria-label="Transcritor de Vídeo e Áudio com IA"
-            >
-              <Video className="w-4 h-4 text-emerald-400" />
-            </button>
+              {isTranscribeMenuOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setIsTranscribeMenuOpen(false)} />
+                  <div className="absolute left-0 bottom-full mb-2 w-72 rounded-xl bg-[#1c1917] border border-[#3e342b] shadow-2xl p-1.5 text-xs text-stone-300 z-50 animate-in fade-in zoom-in-95 duration-100">
+                    <div className="px-2.5 py-1.5 text-[10px] uppercase font-bold text-stone-500 tracking-wider border-b border-[#2d2722] mb-1">
+                      Transcrever com IA
+                    </div>
+                    {[
+                      {
+                        show: Boolean(onOpenAiSheetScanner),
+                        onClick: onOpenAiSheetScanner,
+                        icon: <Sparkles className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />,
+                        title: 'Partitura por imagem',
+                        detail: 'Foto ou PDF de partitura lida pelo Gemini',
+                      },
+                      {
+                        show: Boolean(onOpenVideoTranscriber),
+                        onClick: onOpenVideoTranscriber,
+                        icon: <Video className="w-4 h-4 text-emerald-400 mt-0.5 shrink-0" />,
+                        title: 'Vídeo Synthesia / áudio',
+                        detail: 'Lê as barras de vídeos de piano em cascata, ou transcreve um áudio',
+                      },
+                      {
+                        show: Boolean(onOpenStemSplitter),
+                        onClick: onOpenStemSplitter,
+                        icon: <Layers className="w-4 h-4 text-sky-400 mt-0.5 shrink-0" />,
+                        title: 'Separar instrumentos',
+                        detail: 'Áudio ou vídeo em faixas de voz, bateria, baixo e harmonia',
+                      },
+                    ]
+                      .filter((item) => item.show)
+                      .map((item) => (
+                        <button
+                          key={item.title}
+                          onClick={() => {
+                            setIsTranscribeMenuOpen(false);
+                            item.onClick?.();
+                          }}
+                          className="w-full p-2 rounded-lg flex items-start gap-2.5 hover:bg-stone-850 text-left transition-colors group cursor-pointer"
+                        >
+                          {item.icon}
+                          <div className="min-w-0">
+                            <div className="font-semibold text-stone-200 group-hover:text-sky-300 transition-colors flex items-center gap-1.5">
+                              {item.title}
+                              <BetaBadge />
+                            </div>
+                            <div className="text-[10px] text-stone-400 leading-tight mt-0.5">{item.detail}</div>
+                          </div>
+                        </button>
+                      ))}
+                  </div>
+                </>
+              )}
+            </div>
           )}
         </div>
 
