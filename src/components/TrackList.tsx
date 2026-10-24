@@ -14,9 +14,16 @@ import {
   ChevronUp,
   Video,
 } from 'lucide-react';
-import type { Track, InstrumentId } from '../types/music.ts';
+import type { Track } from '../types/music.ts';
 import { BDO_INSTRUMENTS } from '../types/music.ts';
 import { AddInstrumentModal } from './AddInstrumentModal.tsx';
+import { BdoInstrumentSelect } from './BdoInstrumentSelect.tsx';
+import {
+  MARNION_SOUND_NAMES,
+  bdoInstrumentFromCode,
+  trackGameInstrument,
+} from '../bdo/bdoInstruments.ts';
+import { switchTrackInstrument } from '../bdo/trackInstrument.ts';
 import { APP_VERSION_LABEL } from '../version.ts';
 
 interface TrackListProps {
@@ -200,48 +207,40 @@ export const TrackList: React.FC<TrackListProps> = ({
                   </div>
                 )}
 
-                {/* Quick Instrument Selector Dropdown */}
-                <div className="mb-2" onClick={(e) => e.stopPropagation()}>
-                  <select
-                    value={track.instrumentId}
-                    onChange={(e) => {
-                      const newInstId = e.target.value as InstrumentId;
-                      const newInst = BDO_INSTRUMENTS.find((i) => i.id === newInstId);
-                      const oldInst = BDO_INSTRUMENTS.find((i) => i.id === track.instrumentId);
-
-                      let newName = track.name;
-                      if (oldInst) {
-                        const oldBase = oldInst.name;
-                        if (track.name === oldBase) {
-                          newName = newInst?.name || 'Instrumento';
-                        } else if (track.name.startsWith(`${oldBase} `)) {
-                          const suffix = track.name.slice(oldBase.length);
-                          newName = `${newInst?.name || 'Instrumento'}${suffix}`;
-                        }
-                      }
-
-                      onUpdateTrack(track.id, {
-                        instrumentId: newInstId,
-                        name: newName,
-                        color: newInst?.color || track.color,
-                        volume: newInst?.defaultVolume !== undefined ? newInst.defaultVolume : track.volume,
-                        sustainPedal: newInstId === 'grand-piano' ? true : (newInstId === 'percussion' ? false : track.sustainPedal),
-                      });
-                    }}
-                    className="w-full bg-[#12100e] hover:bg-[#1a1714] border border-[#2d2722] hover:border-amber-600/70 rounded-md px-2 py-1 text-[11px] text-amber-300 font-semibold focus:outline-none focus:border-amber-500 cursor-pointer transition-colors truncate shadow-inner"
-                    title="Clique para trocar o tipo de instrumento desta faixa"
-                    aria-label={`Trocar instrumento da faixa ${track.name}`}
-                  >
-                    {BDO_INSTRUMENTS.map((instOption) => (
-                      <option
-                        key={instOption.id}
-                        value={instOption.id}
-                        className="bg-[#1c1917] text-stone-200"
-                      >
-                        {instOption.name}
-                      </option>
-                    ))}
-                  </select>
+                {/* Game instrument (and the Marnion sound, like the game's track header) */}
+                <div className="mb-2 flex gap-1" onClick={(e) => e.stopPropagation()}>
+                  {(() => {
+                    const { def, sound } = trackGameInstrument(track);
+                    return (
+                      <>
+                        <BdoInstrumentSelect
+                          perSound={false}
+                          value={def.code}
+                          onChange={(code) => {
+                            const found = bdoInstrumentFromCode(code);
+                            if (found) onUpdateTrack(track.id, switchTrackInstrument(track, found.def.key, found.sound));
+                          }}
+                          className="w-full min-w-0 bg-[#12100e] hover:bg-[#1a1714] border border-[#2d2722] hover:border-amber-600/70 rounded-md px-2 py-1 text-[11px] text-amber-300 font-semibold focus:outline-none focus:border-amber-500 cursor-pointer transition-colors truncate shadow-inner"
+                          title="Instrumento do Black Desert desta faixa"
+                        />
+                        {def.sounds > 1 && (
+                          <select
+                            value={sound}
+                            onChange={(e) => onUpdateTrack(track.id, switchTrackInstrument(track, def.key, Number(e.target.value)))}
+                            className="shrink-0 bg-[#12100e] border border-[#2d2722] rounded-md px-1 py-1 text-[11px] text-lime-300 focus:outline-none focus:border-amber-500 cursor-pointer"
+                            title="Som do Marnion"
+                            aria-label={`Som do Marnion da faixa ${track.name}`}
+                          >
+                            {MARNION_SOUND_NAMES.map((n, i) => (
+                              <option key={n} value={i} className="bg-[#1c1917] text-stone-200">
+                                {n}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
 
                 {/* AUX Send Toggle Button */}
@@ -440,31 +439,9 @@ export const TrackList: React.FC<TrackListProps> = ({
             onClose={() => setChangingTrackId(null)}
             title="Trocar Instrumento"
             subtitle={`Escolha o novo timbre para a faixa "${targetTrack?.name || 'Faixa'}"`}
-            initialInstrumentId={targetTrack?.instrumentId}
-            onSelectInstrument={(newInstId) => {
-              if (targetTrack) {
-                const newInst = BDO_INSTRUMENTS.find((i) => i.id === newInstId);
-                const oldInst = BDO_INSTRUMENTS.find((i) => i.id === targetTrack.instrumentId);
-
-                let newName = targetTrack.name;
-                if (oldInst) {
-                  const oldBase = oldInst.name;
-                  if (targetTrack.name === oldBase) {
-                    newName = newInst?.name || 'Instrumento';
-                  } else if (targetTrack.name.startsWith(`${oldBase} `)) {
-                    const suffix = targetTrack.name.slice(oldBase.length);
-                    newName = `${newInst?.name || 'Instrumento'}${suffix}`;
-                  }
-                }
-
-                onUpdateTrack(targetTrack.id, {
-                  instrumentId: newInstId,
-                  name: newName,
-                  color: newInst?.color || targetTrack.color,
-                  volume: newInst?.defaultVolume !== undefined ? newInst.defaultVolume : targetTrack.volume,
-                  sustainPedal: newInstId === 'grand-piano' ? true : (newInstId === 'percussion' ? false : targetTrack.sustainPedal),
-                });
-              }
+            initialInstrument={targetTrack ? trackGameInstrument(targetTrack).def.key : undefined}
+            onSelectInstrument={(key) => {
+              if (targetTrack) onUpdateTrack(targetTrack.id, switchTrackInstrument(targetTrack, key));
               setChangingTrackId(null);
             }}
           />

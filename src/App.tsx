@@ -16,7 +16,7 @@ import type {
   InstrumentId,
   Marker,
 } from './types/music.ts';
-import { BDO_INSTRUMENTS, BDO_GRADE_LIMITS } from './types/music.ts';
+import { BDO_GRADE_LIMITS } from './types/music.ts';
 import { AudioEngine } from './audio/AudioEngine.ts';
 import { createPlayheadStore } from './audio/playheadStore.ts';
 import { newId } from './utils/ids.ts';
@@ -39,6 +39,8 @@ import { PianoRoll } from './components/PianoRoll.tsx';
 import { BottomBar } from './components/BottomBar.tsx';
 import { EffectorModal } from './components/EffectorModal.tsx';
 import { AddInstrumentModal } from './components/AddInstrumentModal.tsx';
+import type { BdoInstrumentKey } from './bdo/bdoInstruments.ts';
+import { instrumentTrackFields, newTrackName } from './bdo/trackInstrument.ts';
 import { BdoExportModal } from './components/BdoExportModal.tsx';
 import { MidiSettingsModal } from './components/MidiSettingsModal.tsx';
 import { AiSheetScannerModal } from './components/AiSheetScannerModal.tsx';
@@ -608,22 +610,15 @@ export default function App() {
     [commitTracks]
   );
 
-  const handleAddTrack = (instrumentId: InstrumentId) => {
-    const inst = BDO_INSTRUMENTS.find((i) => i.id === instrumentId);
-    const count = tracks.filter((t) => t.instrumentId === instrumentId).length;
-    const name = count === 0 ? (inst?.name || 'Instrumento') : `${inst?.name} ${count + 1}`;
-
+  const handleAddTrack = (key: BdoInstrumentKey) => {
     const newTrack: Track = {
       id: newId('track'),
-      name,
-      instrumentId,
-      color: inst?.color || '#d4a373',
-      volume: inst?.defaultVolume || 75,
+      name: newTrackName(key, tracks),
+      ...instrumentTrackFields(key),
       pan: 0,
       isMuted: false,
       isSolo: false,
       auxSend: true,
-      sustainPedal: instrumentId === 'grand-piano',
       notes: [],
     };
 

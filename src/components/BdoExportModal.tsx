@@ -19,12 +19,12 @@ import type { Track, EffectorSettings, SongMetadata } from '../types/music.ts';
 import {
   exportToBdo,
   decryptOwnerHeader,
-  FULL_BDO_INSTRUMENTS,
-  getDefaultBdoInstrument,
-  BDO_PERCUSSION_IDS,
+  exportCodeForTrack,
   type ExportOptions,
   type SongContext,
 } from '../bdo/bdoExportV2.ts';
+import { bdoInstrumentFromCode } from '../bdo/bdoInstruments.ts';
+import { BdoInstrumentSelect } from './BdoInstrumentSelect.tsx';
 import { generateBdoScore } from '../bdo/bdoConverter.ts';
 import { notify, errorMessage } from '../ui/notify.ts';
 import { getSavedAuthor, getSavedOwnerId, saveOwnerId } from '../user/userProfile.ts';
@@ -110,13 +110,12 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
   const [floorVal, setFloorVal] = useState<string>('100');
 
   // Instrument overrides, volume scales, and sustain pedal per track
-  const [instOverrides, setInstOverrides] = useState<Record<string, string>>({});
+  const [instOverrides, setInstOverrides] = useState<Record<string, number>>({});
   const [velScales, setVelScales] = useState<Record<string, number>>({});
   const [sustainOverrides, setSustainOverrides] = useState<Record<string, boolean>>({});
-  const [mergeTarget, setMergeTarget] = useState<string>('Florchestra Piano');
+  const [mergeTarget, setMergeTarget] = useState<number>(0x11); // Florquestra · Piano
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const bdoInstrumentNames = Object.keys(FULL_BDO_INSTRUMENTS);
 
   // Initialize overrides from tracks and metadata
   useEffect(() => {
@@ -127,16 +126,15 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
     setOwnerId(owner);
     setIdStatus(describeId(owner, composer));
 
-    const initialOverrides: Record<string, string> = {};
+    const initialOverrides: Record<string, number> = {};
     const initialScales: Record<string, number> = {};
     const initialSustains: Record<string, boolean> = {};
 
     tracks.forEach((t) => {
-      initialOverrides[t.id] = getDefaultBdoInstrument(t.instrumentId || t.name);
+      // The track's own game instrument (chosen when it was created or imported)
+      initialOverrides[t.id] = exportCodeForTrack(t);
       initialScales[t.id] = 100;
-      const isPiano = t.instrumentId === 'grand-piano' || t.name.toLowerCase().includes('piano');
-      initialSustains[t.id] =
-        t.sustainPedal !== undefined ? t.sustainPedal : (isPiano || t.notes.some((n) => n.sustain));
+      initialSustains[t.id] = t.sustainPedal !== undefined ? t.sustainPedal : t.notes.some((n) => n.sustain);
     });
 
     setInstOverrides(initialOverrides);
@@ -181,8 +179,7 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
   const handleMergeAll = () => {
     const newOverrides = { ...instOverrides };
     tracks.forEach((t) => {
-      const currentInstId = FULL_BDO_INSTRUMENTS[newOverrides[t.id]];
-      if (!BDO_PERCUSSION_IDS.includes(currentInstId)) {
+      if (!bdoInstrumentFromCode(newOverrides[t.id] ?? exportCodeForTrack(t))?.def.percussion) {
         newOverrides[t.id] = mergeTarget;
       }
     });
@@ -618,17 +615,11 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
                 {/* Merge all into row */}
                 <div className="flex items-center gap-2 mb-4 text-xs flex-wrap">
                   <span className="text-stone-400 font-medium">Mesclar todos em:</span>
-                  <select
+                  <BdoInstrumentSelect
                     value={mergeTarget}
-                    onChange={(e) => setMergeTarget(e.target.value)}
+                    onChange={setMergeTarget}
                     className="bg-stone-900/90 border border-[#3e342b] rounded-lg px-2.5 py-1 text-xs text-stone-200 outline-none focus:border-amber-500 transition-colors"
-                  >
-                    {bdoInstrumentNames.map((name) => (
-                      <option key={name} value={name}>
-                        {name}
-                      </option>
-                    ))}
-                  </select>
+                  />
                   <button
                     onClick={handleMergeAll}
                     className="px-3 py-1 rounded-lg border border-[#3e342b] bg-stone-850 hover:bg-stone-800 text-xs font-medium text-stone-300 hover:text-amber-300 hover:border-amber-500/50 transition-all"
@@ -648,7 +639,7 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
 
                   <div className="divide-y divide-[#2d2722] max-h-40 overflow-y-auto">
                     {activeTracks.map((track) => {
-                      const currentInst = instOverrides[track.id] || 'Florchestra Piano';
+                      const currentInst = instOverrides[track.id] ?? exportCodeForTrack(track);
                       const currentVol = velScales[track.id] ?? 100;
                       const hasSustain = Boolean(sustainOverrides[track.id]);
 
@@ -663,19 +654,11 @@ export const BdoExportModal: React.FC<BdoExportModalProps> = ({
 
                           <div className="flex items-center gap-1.5">
                             <span className="text-stone-500">→</span>
-                            <select
+                            <BdoInstrumentSelect
                               value={currentInst}
-                              onChange={(e) =>
-                                setInstOverrides((prev) => ({ ...prev, [track.id]: e.target.value }))
-                              }
+                              onChange={(code) => setInstOverrides((prev) => ({ ...prev, [track.id]: code }))}
                               className="bg-stone-900/90 border border-[#3e342b] rounded-lg px-2 py-1 text-xs text-stone-200 outline-none focus:border-amber-500 flex-1 min-w-0 transition-colors"
-                            >
-                              {bdoInstrumentNames.map((name) => (
-                                <option key={name} value={name}>
-                                  {name}
-                                </option>
-                              ))}
-                            </select>
+                            />
                           </div>
 
                           <div className="flex items-center gap-2">

@@ -65,12 +65,18 @@ const GUIDE: GuideSection[] = [
         outras aparecem em cinza ao fundo.
       </>,
       <>
+        Os instrumentos são os mesmos do compositor do Black Desert, nas mesmas abas (Flauta, Violinos, Piano Elétrico, Percussão) e
+        níveis (Para Novato, Florquestra, Marnis). Cada faixa é exportada exatamente como o instrumento escolhido; nos Marnions, o
+        menu ao lado escolhe o som (Básico, Som 2, 3 ou 4). O Kit de Bateria tem as 17 peças do jogo (Kck a SnrRollL).
+      </>,
+      <>
         <b>M</b> silencia (mute) e <b>S</b> deixa só ela tocando (solo). O controle deslizante ajusta o volume; o menu ⋮ troca o instrumento,
         duplica ou exclui a faixa.
       </>,
       <>
         O botão de importar abre MIDI (.mid), MusicXML, partituras do BDO, XML e projetos .marni — substituindo o projeto ou somando
-        faixas.
+        faixas. No MIDI, cada canal/instrumento vira uma faixa com o instrumento do jogo mais próximo (pelo programa General MIDI ou
+        pelo nome da faixa), a bateria do canal 10 vai para as peças do Kit de Bateria e mudanças de andamento mantêm o tempo real.
       </>,
     ],
   },

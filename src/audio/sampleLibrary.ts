@@ -28,10 +28,24 @@ export const INSTRUMENT_SAMPLES: Record<InstrumentId, string | null> = {
   cello: 'cello',
   percussion: null, // the BDO drum kit pieces have no General MIDI melodic equivalent
   marnisynth: null, // synthesizer by design
+  recorder: 'recorder',
+  clarinet: 'clarinet',
+  horn: 'french_horn',
+  'electric-guitar': 'electric_guitar_clean',
+  'electric-bass': 'electric_bass_finger',
+  handpan: 'steel_drums',
 };
 
 /** Instruments whose sound decays naturally (plucked/struck): the sample keeps ringing after note-off. */
-export const DECAYING_INSTRUMENTS = new Set<InstrumentId>(['grand-piano', 'guitar', 'bass', 'harp']);
+export const DECAYING_INSTRUMENTS = new Set<InstrumentId>([
+  'grand-piano',
+  'guitar',
+  'bass',
+  'harp',
+  'electric-guitar',
+  'electric-bass',
+  'handpan',
+]);
 
 const NOTE_OFFSETS: Record<string, number> = {
   C: 0, 'C#': 1, Db: 1, D: 2, 'D#': 3, Eb: 3, E: 4, F: 5, 'F#': 6, Gb: 6, G: 7, 'G#': 8, Ab: 8, A: 9, 'A#': 10, Bb: 10, B: 11,

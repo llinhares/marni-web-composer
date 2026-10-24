@@ -1,4 +1,15 @@
 import type { Track, Note, EffectorSettings } from '../types/music.ts';
+import {
+  BDO_INSTRUMENT_DEFS,
+  DRUM_KIT_MAX,
+  DRUM_KIT_MIN,
+  bdoInstrumentCode,
+  bdoInstrumentFromCode,
+  gmDrumToKit,
+  trackGameInstrument,
+  validTechnique,
+  type BdoInstrumentDef,
+} from './bdoInstruments.ts';
 
 export interface SongContext {
   bpm: number;
@@ -31,6 +42,7 @@ function _decrypt_block(data: Uint8Array, offset: number): Uint8Array { let l = 
 function encryptIce(plaintext: Uint8Array): Uint8Array { const out = new Uint8Array(plaintext.length); let i = 0; while (i + 8 <= plaintext.length) { out.set(_encrypt_block(plaintext, i), i); i += 8; } if (i < plaintext.length) { out.set(plaintext.subarray(i), i); } return out; }
 export function decryptOwnerHeader(ciphertext: Uint8Array): Uint8Array { const maxOwnerFileSize = 0x08 << 0x06; if (ciphertext.length > maxOwnerFileSize) { throw new Error("File too large for owner ID extraction. Use a single-note file saved in-game."); } const out = new Uint8Array(ciphertext.length); let i = 0; while (i + 8 <= ciphertext.length) { out.set(_decrypt_block(ciphertext, i), i); i += 8; } if (i < ciphertext.length) out.set(ciphertext.subarray(i), i); return out; }
 
+/** Legacy English instrument names (older export dialogs and tests) -> game instrument code. */
 export const FULL_BDO_INSTRUMENTS: Record<string, number> = {
   'Beginner Guitar': 0x00, 'Beginner Flute': 0x01, 'Beginner Recorder': 0x02, 'Hand Drum': 0x04,
   'Cymbals': 0x05, 'Beginner Harp': 0x06, 'Beginner Piano': 0x07, 'Beginner Violin': 0x08,
@@ -45,94 +57,21 @@ export const FULL_BDO_INSTRUMENTS: Record<string, number> = {
   'Guitar Hexe Glam': 0x26, 'Florchestra Clarinet': 0x27, 'Florchestra Horn': 0x28,
 };
 
-export const BDO_PERCUSSION_IDS = [0x04, 0x05, 0x0d, 0x13];
+/** Codes of the percussion instruments (no pitch transposition, no sustain). */
+export const BDO_PERCUSSION_IDS = BDO_INSTRUMENT_DEFS.filter((d) => d.percussion).map((d) => d.code);
 
-export function getDefaultBdoInstrument(baseType: string): string {
-  switch (baseType) {
-    case 'Tamborim': return 'Hand Drum';
-    case 'Kit de Bateria':
-    case 'percussion':
-    case 'Percussão':
-    case 'Bateria': return 'Drum Set';
-    case 'Pratos': return 'Cymbals';
-    case 'Handpan': return 'Handpan';
-    case 'grand-piano':
-    case 'Grand Piano':
-    case 'Piano': return 'Florchestra Piano';
-    case 'guitar':
-    case 'Violão Acústico':
-    case 'Violão':
-    case 'Guitarra Acústica': return 'Florchestra Acoustic Guitar';
-    case 'Guitar Silver Wave':
-    case 'Guitarra Silver Wave':
-    case 'Guitarra Elétrica': return 'Guitar Silver Wave';
-    case 'Guitar Highway':
-    case 'Guitarra Highway': return 'Guitar Highway';
-    case 'Guitar Hexe Glam':
-    case 'Guitarra Hexe Glam': return 'Guitar Hexe Glam';
-    case 'marnibass':
-    case 'Marnibass': return 'Marnibass';
-    case 'bass':
-    case 'Contrabaixo':
-    case 'Baixo Acústico':
-    case 'Baixo': return 'Florchestra Contrabass';
-    case 'harp':
-    case 'Harpa': return 'Florchestra Harp';
-    case 'violin':
-    case 'Violino': return 'Florchestra Violin';
-    case 'flute':
-    case 'Flauta Transversal':
-    case 'Flauta': return 'Florchestra Flute';
-    case 'Flauta Doce': return 'Beginner Recorder';
-    case 'clarinet':
-    case 'Clarinete': return 'Florchestra Clarinet';
-    case 'trumpet':
-    case 'Trompa':
-    case 'Trompete': return 'Florchestra Horn';
-    case 'marnisynth':
-    case 'Marnisynth':
-    case 'Marnisynth & Ondas': return 'Marnian Wavy Planet';
-    case 'cello':
-    case 'Violoncelo': return 'Florchestra Contrabass';
-    default: return 'Florchestra Piano';
-  }
+/** Game code a track is exported as: the export dialog's choice, else the track's game instrument. */
+export function exportCodeForTrack(track: Track, overrides: Record<string, number | string> = {}): number {
+  const o = overrides[track.id];
+  if (typeof o === 'number' && bdoInstrumentFromCode(o)) return o;
+  if (typeof o === 'string' && FULL_BDO_INSTRUMENTS[o] !== undefined) return FULL_BDO_INSTRUMENTS[o];
+  const { def, sound } = trackGameInstrument(track);
+  return bdoInstrumentCode(def, sound);
 }
 
-const DRUM_NAME_TO_BDO: Record<string, number> = {
-  'Kck': 48, 'SnrSide': 51, 'SnrHit': 50, 'RimShot': 51, 'SnrFlam': 50,
-  'Tom1': 53, 'HihatC': 54, 'Tom2': 55, 'HatPdl': 56, 'Tom3': 57,
-  'HihatO': 58, 'Tom4': 59, 'Tom5': 60, 'CymCrsh': 61, 'CymRide': 62,
-  'SnrRollS': 50, 'SnrRollL': 50
-};
-
-const GM_NUM_TO_BDO: Record<number, number> = {
-  35: 48, 36: 48, 37: 51, 38: 50, 39: 50, 40: 50,
-  41: 53, 42: 54, 43: 55, 44: 56, 45: 57, 46: 58,
-  47: 59, 48: 60, 49: 61, 50: 60, 51: 62, 52: 61,
-  53: 62, 54: 61, 55: 61, 56: 51, 57: 61, 58: 51, 59: 62
-};
-
-export function resolveDrumPitch(pitch: string | number): number {
-  if (typeof pitch === 'string') {
-    if (DRUM_NAME_TO_BDO[pitch] !== undefined) return DRUM_NAME_TO_BDO[pitch];
-    const parsed = parseInt(pitch, 10);
-    if (!isNaN(parsed)) {
-      if (parsed >= 48 && parsed <= 64) return parsed;
-      if (GM_NUM_TO_BDO[parsed]) return GM_NUM_TO_BDO[parsed];
-      return 48;
-    }
-    try {
-      const idx = getPitchIndex(pitch);
-      if (GM_NUM_TO_BDO[idx]) return GM_NUM_TO_BDO[idx];
-      if (idx >= 48 && idx <= 64) return idx;
-    } catch {
-      // ignore
-    }
-  } else if (typeof pitch === 'number') {
-    if (pitch >= 48 && pitch <= 64) return pitch;
-    if (GM_NUM_TO_BDO[pitch]) return GM_NUM_TO_BDO[pitch];
-  }
-  return 48;
+/** Drum kit key for a note of a drum kit track (old projects stored General MIDI drum notes). */
+export function resolveDrumPitch(pitch: number): number {
+  return pitch >= DRUM_KIT_MIN && pitch <= DRUM_KIT_MAX ? pitch : gmDrumToKit(pitch);
 }
 
 export interface ExportOptions {
@@ -144,10 +83,11 @@ export interface ExportOptions {
   velMode: 'layered' | 'stepped' | 'rescale' | 'floor' | 'off';
   velStepBase: number; velStepStep: number;
   velRescaleMin: number; velRescaleMax: number; velFloorVal: number;
-  instrumentOverrides: Record<string, string>; 
+  /** Track id -> game instrument code (or a legacy English name). */
+  instrumentOverrides: Record<string, number | string>;
   velocityScales: Record<string, number>;
   sustainOverrides?: Record<string, boolean>;
-  effector: EffectorSettings;                 
+  effector: EffectorSettings;
   maxChunkNotes?: number;
 }
 
@@ -167,17 +107,18 @@ function encodeNameUTF16LE(name: string, size: number = 62): Uint8Array {
 function getPitchIndex(pitchStr: string): number {
   const notes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
   const note = pitchStr.replace(/[0-9-]/g, '');
-  const octave = parseInt(pitchStr.replace(/[^0-9-]/g, '')) + 1; 
+  const octave = parseInt(pitchStr.replace(/[^0-9-]/g, '')) + 1;
   return octave * 12 + notes.indexOf(note);
 }
 
-function clampNotes(notes: Note[], transpose: number): Note[] {
+/** Transposes and moves notes by whole octaves into [min, max] (the instrument's keys in the game). */
+function clampNotes(notes: Note[], transpose: number, min = BDO_NOTE_MIN, max = BDO_NOTE_MAX): Note[] {
   return notes.map(n => {
     let p = (typeof n.pitch === 'number' ? n.pitch : getPitchIndex(String(n.pitch))) + transpose;
-    if (p < BDO_NOTE_MIN) p = p + 12 * Math.floor((BDO_NOTE_MIN - p + 11) / 12);
-    else if (p > BDO_NOTE_MAX) p = p - 12 * Math.floor((p - BDO_NOTE_MAX + 11) / 12);
-    p = Math.max(BDO_NOTE_MIN, Math.min(BDO_NOTE_MAX, p));
-    return { ...n, pitch: p }; 
+    while (p < min && p + 12 <= max) p += 12;
+    while (p > max && p - 12 >= min) p -= 12;
+    p = Math.max(min, Math.min(max, p));
+    return { ...n, pitch: p };
   });
 }
 
@@ -213,217 +154,172 @@ function processVelocity(notes: Note[], opts: ExportOptions): Note[] {
   return notes;
 }
 
+/** Technique byte of a note, as the game stores it. */
+export function techniqueByte(note: Note, def: BdoInstrumentDef, trackSustain: boolean): number {
+  if (def.techniques.length === 0) return 99; // instrument without techniques (beginner instruments, percussion)
+  if (note.technique !== undefined && def.techniques.includes(note.technique)) return note.technique;
+  // Piano pedal from the editor's sustain flag; a technique of another instrument falls back to the default
+  const pedal = note.sustain !== undefined ? note.sustain : trackSustain;
+  return pedal && def.techniques.includes(11) ? 11 : validTechnique(def, undefined);
+}
+
+interface ExportNote {
+  pitch: number;
+  technique: number;
+  velocity: number;
+  startMs: number;
+  durationMs: number;
+}
+
+/**
+ * Writes the game's music file. One group per instrument code (sorted like the game), notes in blocks
+ * of at most 730 followed by an empty block, start/duration in milliseconds.
+ */
 export function exportToBdo(tracks: Track[], song: SongContext, options: ExportOptions): Blob {
-  const mergedNotesByInst: Record<number, { notes: Note[]; volume: number; auxSend: boolean }> = {};
-  
-  tracks.forEach(t => {
-    if (t.notes.length === 0 || t.isMuted) return; 
-    
-    const finalInstName = options.instrumentOverrides[t.id] || getDefaultBdoInstrument((t as unknown as { instrument?: string }).instrument || t.instrumentId || t.name);
-    const instId = FULL_BDO_INSTRUMENTS[finalInstName] ?? FULL_BDO_INSTRUMENTS['Florchestra Piano'];
-    const isPerc = BDO_PERCUSSION_IDS.includes(instId);
-    
-    const msFactor = 60000 / (song.bpm * 480);
-    const scaleFactor = (options.velocityScales[t.id] ?? 100) / 100;
-    const isPianoInst = instId === FULL_BDO_INSTRUMENTS['Florchestra Piano'] || instId === FULL_BDO_INSTRUMENTS['Beginner Piano'];
-    const trackSustainActive = options.sustainOverrides?.[t.id] !== undefined
-      ? options.sustainOverrides[t.id]
-      : (t.sustainPedal !== undefined ? t.sustainPedal : isPianoInst);
-    
-    let processedNotes: Note[] = t.notes.map(n => {
-      let finalPitch: number = n.pitch;
-      if (isPerc) {
-        finalPitch = resolveDrumPitch(n.pitch);
-      }
-      const noteSustain = n.sustain !== undefined ? n.sustain : trackSustainActive;
-      return {
-        ...n,
-        pitch: finalPitch,
-        startTick: n.startTick * msFactor, 
-        durationTicks: n.durationTicks * msFactor, 
-        velocity: Math.max(1, Math.min(127, Math.round(n.velocity * scaleFactor))),
-        sustain: noteSustain,
-      };
-    });
-    
-    if (!isPerc) processedNotes = clampNotes(processedNotes, options.transpose);
-    processedNotes = processVelocity(processedNotes, options);
-    
-    if (!mergedNotesByInst[instId]) {
-      mergedNotesByInst[instId] = {
-        notes: [],
-        volume: t.volume ?? 100,
-        auxSend: t.auxSend !== false,
-      };
-    } else {
-      if (t.auxSend !== false) {
-        mergedNotesByInst[instId].auxSend = true;
-      }
-    }
-    mergedNotesByInst[instId].notes.push(...processedNotes);
-  });
+  const msPerTick = 60000 / (song.bpm * 480);
+  const groups = new Map<number, { notes: ExportNote[]; volume: number; auxSend: boolean; sources: Array<{ track: Track; notes: Note[] }> }>();
 
-  const processedGroups: { instId: number; volume: number; auxSend: boolean; tracks: Note[][] }[] = [];
-  
-  Object.entries(mergedNotesByInst).forEach(([idStr, groupData]) => {
-    const instId = parseInt(idStr);
-    
-    // Remove duplicates (same pitch and startTick) taking the longest duration
-    const noteMap = new Map<string, Note>();
-    groupData.notes.forEach(note => {
-      const key = `${note.pitch}-${Math.round(note.startTick)}`;
-      const existing = noteMap.get(key);
-      if (!existing || note.durationTicks > existing.durationTicks) {
-        noteMap.set(key, note);
-      }
-    });
-    
-    const uniqueNotes = Array.from(noteMap.values()).sort((a, b) => a.startTick - b.startTick);
-    
-    const chunks: Note[][] = [];
-    const chunkLimit = options.maxChunkNotes || 730;
-    for (let i = 0; i < uniqueNotes.length; i += chunkLimit) {
-      chunks.push(uniqueNotes.slice(i, i + chunkLimit));
-    }
-    processedGroups.push({
-      instId,
-      volume: groupData.volume,
-      auxSend: groupData.auxSend,
-      tracks: chunks,
-    });
-  });
-
-  if (processedGroups.length === 0) {
-    processedGroups.push({
-      instId: FULL_BDO_INSTRUMENTS['Florchestra Piano'],
-      volume: 100,
-      auxSend: true,
-      tracks: [],
-    });
+  for (const t of tracks) {
+    if (t.notes.length === 0 || t.isMuted) continue;
+    const code = exportCodeForTrack(t, options.instrumentOverrides);
+    const g = groups.get(code) ?? { notes: [], volume: 0, auxSend: false, sources: [] };
+    g.volume = Math.max(g.volume, Math.min(100, Math.max(0, Math.round(t.volume ?? 100))));
+    if (t.auxSend !== false) g.auxSend = true;
+    g.sources.push({ track: t, notes: t.notes });
+    groups.set(code, g);
   }
 
-  const totalNoteCount = Object.values(mergedNotesByInst).reduce((acc, g) => acc + g.notes.length, 0);
-  const estimatedBufferSize = Math.max(16384, HEADER_SIZE + 4096 + (totalNoteCount * 28));
-  const buffer = new ArrayBuffer(estimatedBufferSize); 
+  for (const [code, g] of groups) {
+    const def = bdoInstrumentFromCode(code)!.def;
+    for (const { track, notes } of g.sources) {
+      // Tracks sharing one game instrument keep their balance through the note velocities
+      const balance = g.volume > 0 ? Math.min(1, (track.volume ?? 100) / g.volume) : 1;
+      const scale = ((options.velocityScales[track.id] ?? 100) / 100) * balance;
+      const isPiano = def.family === 'grand-piano';
+      const trackSustain =
+        options.sustainOverrides?.[track.id] !== undefined ? options.sustainOverrides[track.id] : Boolean(track.sustainPedal ?? false) && isPiano;
+      let prepared: Note[] = notes.map((n) => ({
+        ...n,
+        pitch: def.drumKit ? resolveDrumPitch(n.pitch) : n.pitch,
+        velocity: n.velocity === 0 ? 0 : Math.max(1, Math.min(127, Math.round(n.velocity * scale))),
+      }));
+      // Keys the game offers for this instrument (the drum kit keeps its pieces)
+      if (!def.drumKit) prepared = clampNotes(prepared, def.percussion ? 0 : options.transpose, def.minPitch, def.maxPitch);
+      prepared = processVelocity(prepared, options);
+      for (const n of prepared) {
+        g.notes.push({
+          pitch: n.pitch,
+          technique: techniqueByte(n, def, trackSustain),
+          velocity: n.velocity,
+          startMs: n.startTick * msPerTick,
+          durationMs: Math.max(1, n.durationTicks) * msPerTick,
+        });
+      }
+    }
+  }
+
+  // Same key at the same time on one instrument: keep the longest
+  const ordered = [...groups.entries()].sort((a, b) => a[0] - b[0]);
+  const processedGroups = ordered.map(([code, g]) => {
+    const unique = new Map<string, ExportNote>();
+    for (const n of g.notes) {
+      const key = `${n.pitch}-${Math.round(n.startMs * 10)}`;
+      const existing = unique.get(key);
+      if (!existing || n.durationMs > existing.durationMs) unique.set(key, n);
+    }
+    const sorted = [...unique.values()].sort((a, b) => a.startMs - b.startMs || a.pitch - b.pitch);
+    const chunkLimit = options.maxChunkNotes || 730;
+    const chunks: ExportNote[][] = [];
+    for (let i = 0; i < sorted.length; i += chunkLimit) chunks.push(sorted.slice(i, i + chunkLimit));
+    return { instId: code, volume: g.volume || 100, auxSend: g.auxSend, tracks: chunks };
+  });
+  if (processedGroups.length === 0) {
+    processedGroups.push({ instId: FULL_BDO_INSTRUMENTS['Florchestra Piano'], volume: 100, auxSend: true, tracks: [] });
+  }
+
+  const totalNoteCount = processedGroups.reduce((acc, g) => acc + g.tracks.reduce((a, c) => a + c.length, 0), 0);
+  const buffer = new ArrayBuffer(Math.max(16384, HEADER_SIZE + 4096 + totalNoteCount * 28));
   const view = new DataView(buffer);
   let offset = 0;
 
-  view.setUint32(offset, options.ownerId, true); offset += 4;
-  view.setUint32(offset, 0, true); offset += 4;
-  
-  // In Black Desert Online:
-  // Offset 0x008 (bytes 8..69): Compositor (Composição)
-  // Offset 0x046 (bytes 70..131): Arranjador (Arranjo)
-  // For original songs, both use options.charName.
-  // For imported/protected songs, composerName preserves the original composer.
+  view.setUint32(offset, options.ownerId, true);
+  offset += 4;
+  view.setUint32(offset, 0, true);
+  offset += 4;
+
+  // Offset 0x008 (bytes 8..69): composer; offset 0x046 (bytes 70..131): arranger.
+  // Original songs use the character name for both; imported/protected songs keep the original composer.
   const compName = (options.composerName || options.charName || song.author || 'Composer').trim();
   const arrName = (options.arrangerName || options.charName || song.author || compName).trim();
-  const compBuf = encodeNameUTF16LE(compName);
-  const arrBuf = encodeNameUTF16LE(arrName);
-  new Uint8Array(buffer, offset, 62).set(compBuf); offset += 62;
-  new Uint8Array(buffer, offset, 62).set(arrBuf); offset += 62;
-  
-  view.setUint16(offset, song.bpm, true); offset += 2;
-  view.setUint16(offset, song.timeSignature[0], true); offset += 2;
+  new Uint8Array(buffer, offset, 62).set(encodeNameUTF16LE(compName));
+  offset += 62;
+  new Uint8Array(buffer, offset, 62).set(encodeNameUTF16LE(arrName));
+  offset += 62;
 
-  const instTag = processedGroups.map(g => g.instId).join(',');
-  for (let i = 0; i < instTag.length; i++) {
-    view.setUint8(offset++, instTag.charCodeAt(i));
-  }
-  
-  offset = HEADER_SIZE; 
+  view.setUint16(offset, song.bpm, true);
+  offset += 2;
+  view.setUint16(offset, song.timeSignature[0], true);
+  offset += 2;
+
+  const instTag = processedGroups.map((g) => g.instId).join(',');
+  for (let i = 0; i < instTag.length; i++) view.setUint8(offset++, instTag.charCodeAt(i));
+
+  offset = HEADER_SIZE;
+
+  const fx = options.effector;
+  const pct = (v: number | undefined, fallback: number) => Math.min(100, Math.max(0, Math.round(v ?? fallback)));
 
   processedGroups.forEach((group, gIndex) => {
-    const isFirstGroup = (gIndex === 0);
-    const trackCount = group.tracks.length + 1; 
-    const isPercGroup = BDO_PERCUSSION_IDS.includes(group.instId);
-    
-    if (isFirstGroup) {
+    if (gIndex === 0) {
       view.setUint8(offset++, 0x00);
-      view.setUint16(offset, processedGroups.length, true); offset += 2;
+      view.setUint16(offset, processedGroups.length, true);
+      offset += 2;
     }
-    view.setUint16(offset, trackCount, true); offset += 2;
+    view.setUint16(offset, group.tracks.length + 1, true);
+    offset += 2;
 
-    const writeTrack = (notes: Note[]) => {
-      const dataSize = 2 + 8 + 2 + notes.length * 20;
-      // In BDO, volume in trackMarker high byte is native 0..100%
-      const bdoVolume = Math.min(100, Math.max(0, Math.round(group.volume ?? 100)));
-      const trackMarker = (group.instId & 0xFF) | ((bdoVolume & 0xFF) << 8); 
-      
-      view.setUint16(offset, dataSize, true); offset += 2;
-      view.setUint16(offset, trackMarker, true); offset += 2;
-      
-      // 8 Effector DSP bytes (Reverb, Delay, Chorus sends and parameters)
-      // Byte 0: Reverb send level (0..100)
-      // Byte 1: Reverb room/decay time (0..100)
-      // Byte 2: Delay send level (0..100)
-      // Byte 3: Delay time/feedback (0..100)
-      // Byte 4: Chorus send level (0..100)
-      // Byte 5: Chorus feedback (0..100)
-      // Byte 6: Chorus LFO depth (0..100)
-      // Byte 7: Chorus LFO frequency (0..100)
-      const revSend = (group.auxSend && options.effector?.reverb?.enabled)
-        ? Math.min(100, Math.max(0, Math.round(options.effector.reverb.mix ?? 40)))
-        : 0;
-      const revTime = Math.min(100, Math.max(0, Math.round(options.effector?.reverb?.time ?? 20)));
+    const writeTrack = (notes: ExportNote[]) => {
+      view.setUint16(offset, 2 + 8 + 2 + notes.length * 20, true);
+      offset += 2;
+      // Instrument code (low byte) and volume 0..100 (high byte)
+      view.setUint16(offset, (group.instId & 0xff) | ((group.volume & 0xff) << 8), true);
+      offset += 2;
 
-      const delSend = (group.auxSend && options.effector?.delay?.enabled)
-        ? Math.min(100, Math.max(0, Math.round(options.effector.delay.mix ?? 30)))
-        : 0;
-      const delTime = Math.min(100, Math.max(0, Math.round(options.effector?.delay?.feedback ?? options.effector?.delay?.time ?? 10)));
+      // Effector: reverb send, reverb time, delay send, delay time, chorus send, feedback, depth, rate
+      view.setUint8(offset++, group.auxSend && fx?.reverb?.enabled ? pct(fx.reverb.mix, 40) : 0);
+      view.setUint8(offset++, pct(fx?.reverb?.time, 20));
+      view.setUint8(offset++, group.auxSend && fx?.delay?.enabled ? pct(fx.delay.mix, 30) : 0);
+      view.setUint8(offset++, pct(fx?.delay?.feedback ?? fx?.delay?.time, 10));
+      view.setUint8(offset++, group.auxSend && fx?.chorus?.enabled ? pct(fx.chorus.mix, 30) : 0);
+      view.setUint8(offset++, pct(fx?.chorus?.feedback, 20));
+      view.setUint8(offset++, pct(fx?.chorus?.lfoDepth, 30));
+      view.setUint8(offset++, pct(fx?.chorus?.lfoFrequency, 20));
 
-      const choSend = (group.auxSend && options.effector?.chorus?.enabled)
-        ? Math.min(100, Math.max(0, Math.round(options.effector.chorus.mix ?? 30)))
-        : 0;
-      const choFb = Math.min(100, Math.max(0, Math.round(options.effector?.chorus?.feedback ?? 20)));
-      const choDp = Math.min(100, Math.max(0, Math.round(options.effector?.chorus?.lfoDepth ?? 30)));
-      const choFr = Math.min(100, Math.max(0, Math.round(options.effector?.chorus?.lfoFrequency ?? 20)));
-
-      view.setUint8(offset++, revSend); 
-      view.setUint8(offset++, revTime); 
-      view.setUint8(offset++, delSend); 
-      view.setUint8(offset++, delTime); 
-      view.setUint8(offset++, choSend); 
-      view.setUint8(offset++, choFb); 
-      view.setUint8(offset++, choDp); 
-      view.setUint8(offset++, choFr); 
-      
-      view.setUint16(offset, notes.length, true); offset += 2;
-
-      notes.forEach(n => {
-        const p = isPercGroup 
-          ? resolveDrumPitch(n.pitch) 
-          : (typeof n.pitch === 'string' ? parseInt(n.pitch, 10) : n.pitch); 
-        
-        // Byte 1: Articulation
-        // 99 = Percussion trigger
-        // 11 (0x0B) = Sustain pedal resonance (BDO Piano and instruments with pedal)
-        // 0 = Normal key release
-        const articulation = isPercGroup ? 99 : (n.sustain ? 11 : 0);
-
-        view.setUint8(offset++, p & 0x7F);
-        view.setUint8(offset++, articulation);
-        view.setUint8(offset++, n.velocity & 0x7F);
-        view.setUint8(offset++, n.velocity & 0x7F);
-        view.setFloat64(offset, n.startTick, true); offset += 8;
-        view.setFloat64(offset, n.durationTicks, true); offset += 8;
-      });
+      view.setUint16(offset, notes.length, true);
+      offset += 2;
+      for (const n of notes) {
+        // pitch, technique, velocity (twice), start ms (f64), duration ms (f64)
+        view.setUint8(offset++, n.pitch & 0x7f);
+        view.setUint8(offset++, n.technique & 0xff);
+        view.setUint8(offset++, n.velocity & 0x7f);
+        view.setUint8(offset++, n.velocity & 0x7f);
+        view.setFloat64(offset, n.startMs, true);
+        offset += 8;
+        view.setFloat64(offset, n.durationMs, true);
+        offset += 8;
+      }
     };
 
-    group.tracks.forEach(chunk => writeTrack(chunk));
-    writeTrack([]); 
+    group.tracks.forEach((chunk) => writeTrack(chunk));
+    writeTrack([]);
   });
 
   const remainder = offset % 8;
-  if (remainder > 0) offset += (8 - remainder); 
+  if (remainder > 0) offset += 8 - remainder;
 
-  const plaintext = new Uint8Array(buffer, 0, offset);
-  const ciphertext = encryptIce(plaintext);
-
+  const ciphertext = encryptIce(new Uint8Array(buffer, 0, offset));
   const finalBuffer = new ArrayBuffer(4 + ciphertext.length);
-  const finalView = new DataView(finalBuffer);
-  finalView.setUint32(0, BDO_VERSION, true);
+  new DataView(finalBuffer).setUint32(0, BDO_VERSION, true);
   new Uint8Array(finalBuffer, 4).set(ciphertext);
-
   return new Blob([finalBuffer], { type: 'application/octet-stream' });
 }

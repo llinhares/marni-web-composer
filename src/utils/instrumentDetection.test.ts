@@ -1,65 +1,70 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { detectBdoInstrument } from './instrumentDetection.ts';
+import { detectBdoInstrument, detectGameInstrument } from './instrumentDetection.ts';
 
-test('detectBdoInstrument detects percussion via channel 9', () => {
+test('channel 10 is always the drum kit', () => {
+  assert.strictEqual(detectGameInstrument({ channel: 9, program: 40, name: 'Violin' }), 'florchestra-drum-set');
   assert.strictEqual(detectBdoInstrument({ channel: 9 }), 'percussion');
 });
 
-test('detectBdoInstrument detects instrument from file name', () => {
-  assert.strictEqual(detectBdoInstrument({ fileName: '01_Acoustic_Bass.mid' }), 'bass');
-  assert.strictEqual(detectBdoInstrument({ fileName: 'guitar_melody.mid' }), 'guitar');
-  assert.strictEqual(detectBdoInstrument({ fileName: 'violao_nylon.mid' }), 'guitar');
-  assert.strictEqual(detectBdoInstrument({ fileName: 'flauta_solo.mid' }), 'flute');
-  assert.strictEqual(detectBdoInstrument({ fileName: 'violino_lead.mid' }), 'violin');
-  assert.strictEqual(detectBdoInstrument({ fileName: 'bateria_track.mid' }), 'percussion');
-  assert.strictEqual(detectBdoInstrument({ fileName: 'cello_bassline.mid' }), 'cello');
-  assert.strictEqual(detectBdoInstrument({ fileName: 'harpa_gliss.mid' }), 'harp');
-  assert.strictEqual(detectBdoInstrument({ fileName: 'trompete_fanfare.mid' }), 'trumpet');
-  assert.strictEqual(detectBdoInstrument({ fileName: 'synth_waves.mid' }), 'marnisynth');
-});
-
-test('detectBdoInstrument detects instrument from track name', () => {
-  assert.strictEqual(detectBdoInstrument({ name: 'Contrabaixo Acústico' }), 'bass');
-  assert.strictEqual(detectBdoInstrument({ name: 'Violoncelo' }), 'cello');
-  assert.strictEqual(detectBdoInstrument({ name: 'Lead Flute' }), 'flute');
-  assert.strictEqual(detectBdoInstrument({ name: 'Section Brass Trumpet' }), 'trumpet');
-  assert.strictEqual(detectBdoInstrument({ name: 'Electric Guitar Overdrive' }), 'guitar');
-});
-
-test('detectBdoInstrument detects instrument from GM program change', () => {
-  assert.strictEqual(detectBdoInstrument({ program: 25 }), 'guitar'); // Steel Guitar
-  assert.strictEqual(detectBdoInstrument({ program: 33 }), 'bass'); // Electric Bass
-  assert.strictEqual(detectBdoInstrument({ program: 40 }), 'violin'); // Violin
-  assert.strictEqual(detectBdoInstrument({ program: 42 }), 'cello'); // Cello
-  assert.strictEqual(detectBdoInstrument({ program: 46 }), 'harp'); // Orchestral Harp
-  assert.strictEqual(detectBdoInstrument({ program: 56 }), 'trumpet'); // Trumpet
-  assert.strictEqual(detectBdoInstrument({ program: 73 }), 'flute'); // Flute
-  assert.strictEqual(detectBdoInstrument({ program: 81 }), 'marnisynth'); // Lead Synth
-  assert.strictEqual(detectBdoInstrument({ program: 118 }), 'percussion'); // Synth Drum
-  assert.strictEqual(detectBdoInstrument({ program: 0 }), 'grand-piano'); // Acoustic Grand Piano
-});
-
-test('detectBdoInstrument detects bass or flute register from notes pitch heuristics', () => {
-  // Low notes -> bass
-  const bassNotes = [
-    { pitch: 36 },
-    { pitch: 40 },
-    { pitch: 43 },
-    { pitch: 38 },
+test('instrument words in file and track names (pt-BR and English, accents included)', () => {
+  const cases: Array<[string, string]> = [
+    ['01_Acoustic_Bass.mid', 'florchestra-contrabass'],
+    ['guitar_melody.mid', 'florchestra-acoustic-guitar'],
+    ['violao_nylon.mid', 'florchestra-acoustic-guitar'],
+    ['flauta_solo.mid', 'florchestra-flute'],
+    ['violino_lead.mid', 'florchestra-violin'],
+    ['bateria_track.mid', 'florchestra-drum-set'],
+    ['cello_bassline.mid', 'florchestra-contrabass'],
+    ['harpa_gliss.mid', 'florchestra-harp'],
+    ['trompete_fanfare.mid', 'florchestra-horn'],
+    ['synth_waves.mid', 'marnion-wavy-planet'],
   ];
-  assert.strictEqual(detectBdoInstrument({ notes: bassNotes }), 'bass');
+  for (const [fileName, key] of cases) assert.strictEqual(detectGameInstrument({ fileName }), key, fileName);
 
-  // High notes -> flute
-  const fluteNotes = [
-    { pitch: 72 },
-    { pitch: 76 },
-    { pitch: 84 },
-    { pitch: 88 },
+  const names: Array<[string, string]> = [
+    ['Contrabaixo Acústico', 'florchestra-contrabass'],
+    ['Violoncelo', 'florchestra-contrabass'],
+    ['Lead Flute', 'florchestra-flute'],
+    ['Section Brass Trumpet', 'florchestra-horn'],
+    ['Electric Guitar Overdrive', 'guitar-highway'],
+    ['Guitarra distorção', 'guitar-hexe-glam'],
+    ['Electric Bass', 'marnibass'],
+    ['Órgão Hammond', 'marnion-sandwich'],
+    ['Sax Alto', 'florchestra-clarinet'],
+    ['Percussão', 'florchestra-drum-set'],
+    ['Strings Ensemble', 'florchestra-violin'],
   ];
-  assert.strictEqual(detectBdoInstrument({ notes: fluteNotes }), 'flute');
+  for (const [name, key] of names) assert.strictEqual(detectGameInstrument({ name }), key, name);
 });
 
-test('detectBdoInstrument falls back to grand-piano when unknown', () => {
-  assert.strictEqual(detectBdoInstrument({ name: 'Track 1', fileName: 'song.mid' }), 'grand-piano');
+test('a General MIDI program wins over the track name', () => {
+  assert.strictEqual(detectGameInstrument({ program: 25 }), 'florchestra-acoustic-guitar'); // steel guitar
+  assert.strictEqual(detectGameInstrument({ program: 30 }), 'guitar-hexe-glam'); // distortion
+  assert.strictEqual(detectGameInstrument({ program: 33 }), 'marnibass'); // electric bass
+  assert.strictEqual(detectGameInstrument({ program: 40 }), 'florchestra-violin');
+  assert.strictEqual(detectGameInstrument({ program: 42 }), 'florchestra-contrabass'); // cello
+  assert.strictEqual(detectGameInstrument({ program: 46 }), 'florchestra-harp');
+  assert.strictEqual(detectGameInstrument({ program: 56 }), 'florchestra-horn'); // trumpet
+  assert.strictEqual(detectGameInstrument({ program: 65 }), 'florchestra-clarinet'); // alto sax
+  assert.strictEqual(detectGameInstrument({ program: 73 }), 'florchestra-flute');
+  assert.strictEqual(detectGameInstrument({ program: 81 }), 'marnion-wavy-planet'); // lead
+  assert.strictEqual(detectGameInstrument({ program: 89 }), 'marnion-illusion-tree'); // pad
+  assert.strictEqual(detectGameInstrument({ program: 114 }), 'florchestra-handpan'); // steel drums
+  assert.strictEqual(detectGameInstrument({ program: 0 }), 'florchestra-piano');
+  assert.strictEqual(detectGameInstrument({ program: 41, name: 'Piano' }), 'florchestra-violin');
+  // Program 0 is the default many DAWs write: the name decides
+  assert.strictEqual(detectGameInstrument({ program: 0, name: 'Flute' }), 'florchestra-flute');
+});
+
+test('register of the notes when nothing else is known', () => {
+  const low = [36, 40, 43, 38].map((pitch) => ({ pitch }));
+  assert.strictEqual(detectGameInstrument({ notes: low }), 'florchestra-contrabass');
+  const high = [72, 76, 84, 88].map((pitch) => ({ pitch }));
+  assert.strictEqual(detectGameInstrument({ notes: high }), 'florchestra-flute');
+});
+
+test('falls back to the Florchestra piano', () => {
+  assert.strictEqual(detectGameInstrument({ name: 'Track 1', fileName: 'song.mid' }), 'florchestra-piano');
+  assert.strictEqual(detectBdoInstrument({ name: 'Track 1' }), 'grand-piano');
 });

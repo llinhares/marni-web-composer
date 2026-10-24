@@ -36,23 +36,29 @@ import {
   getBeatsPerMeasure,
   getBdoDrumInfo,
 } from '../utils/musicMath.ts';
+import {
+  DRUM_KIT_PIECES,
+  techniqueColor,
+  techniqueName,
+  trackGameInstrument,
+  validTechnique,
+} from '../bdo/bdoInstruments.ts';
 
-const BDO_DRUM_PADS = [
-  { pitch: 48, label: 'Bumbo (Kick)', code: '48', icon: '🥁', color: '#f59e0b' },
-  { pitch: 50, label: 'Caixa (Snare)', code: '50', icon: '🥁', color: '#f43f5e' },
-  { pitch: 51, label: 'Rimshot', code: '51', icon: '🥢', color: '#fb7185' },
-  { pitch: 52, label: 'Caixa Flam', code: '52', icon: '🥁', color: '#e11d48' },
-  { pitch: 54, label: 'Chimbal Fech.', code: '54', icon: '🪙', color: '#38bdf8' },
-  { pitch: 56, label: 'Pedal Chimbal', code: '56', icon: '👣', color: '#0ea5e9' },
-  { pitch: 58, label: 'Chimbal Ab.', code: '58', icon: '🔔', color: '#0284c7' },
-  { pitch: 53, label: 'Tom 1 (Grave)', code: '53', icon: '🪘', color: '#34d399' },
-  { pitch: 55, label: 'Tom 2 (Médio-Grv)', code: '55', icon: '🪘', color: '#10b981' },
-  { pitch: 57, label: 'Tom 3 (Médio)', code: '57', icon: '🪘', color: '#059669' },
-  { pitch: 59, label: 'Tom 4 (Agudo)', code: '59', icon: '🪘', color: '#047857' },
-  { pitch: 60, label: 'Tom 5 (Sup. Agudo)', code: '60', icon: '🪘', color: '#065f46' },
-  { pitch: 61, label: 'Crash', code: '61', icon: '💥', color: '#c084fc' },
-  { pitch: 62, label: 'Ride', code: '62', icon: '📀', color: '#a855f7' },
-];
+const PAD_COLORS: Record<string, string> = {
+  kick: '#f59e0b',
+  snare: '#f43f5e',
+  hihat: '#38bdf8',
+  tom: '#34d399',
+  cymbal: '#a855f7',
+};
+
+// The 17 pieces of the game's drum kit, in the order the game lists them
+const BDO_DRUM_PADS = DRUM_KIT_PIECES.map((p) => ({
+  pitch: p.key,
+  label: p.label,
+  title: p.name,
+  color: PAD_COLORS[p.category],
+}));
 
 interface PianoRollProps {
   tracks: Track[];
@@ -91,7 +97,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
   gridSnap,
   timeSignature,
   accidentals,
-  sustenidoActive = true,
+  sustenidoActive = false,
   playhead,
   isPlaying = false,
   loop,
@@ -117,7 +123,11 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
     [tracks, activeTrackId]
   );
   const activeNotes = activeTrack?.notes || [];
-  const isPercussion = activeTrack?.instrumentId === 'percussion';
+  // Game instrument of the active track: drum lanes only for the drum kit, styles from its menu
+  const gameDef = activeTrack ? trackGameInstrument(activeTrack).def : null;
+  const isPercussion = gameDef?.drumKit ?? false;
+  // Style ("Estilo") given to new notes; null = the instrument's default
+  const [newNoteTechnique, setNewNoteTechnique] = useState<number | null>(null);
   // Range of the active instrument: rows outside it are dimmed and notes outside it outlined in red
   const instRange = useMemo(
     () => (activeTrack && !isPercussion ? instrumentRange(activeTrack) : null),
@@ -217,10 +227,10 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
   const maxScrollX = Math.max(0, totalGridWidth - visibleWidth);
   const maxScrollY = Math.max(0, totalGridHeight - visibleHeight);
 
-  // Auto-focus drum kit range (pitches 48 to 62) when switching to percussion track
+  // Auto-focus the drum kit pieces (keys 48 to 64) when switching to the drum kit
   useEffect(() => {
     if (isPercussion) {
-      const centerIndex = MAX_PITCH - 55;
+      const centerIndex = MAX_PITCH - 56;
       const targetScroll = Math.max(0, Math.min(maxScrollY, centerIndex * keyHeight - visibleHeight / 2));
       setScrollY(targetScroll);
     }
@@ -529,12 +539,39 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
   const handleToggleSelectionSustain = useCallback(() => {
     if (selectedNoteIds.size === 0) return;
     const shouldSustain = !isSelectionSustained;
+    // On the piano the pedal is a style of the game (code 11): keep both in step
+    const pedalStyle = gameDef?.techniques.includes(11) ?? false;
     const updated = activeNotes.map((note) => {
       if (!selectedNoteIds.has(note.id)) return note;
-      return { ...note, sustain: shouldSustain };
+      return pedalStyle
+        ? { ...note, sustain: shouldSustain, technique: shouldSustain ? 11 : 0 }
+        : { ...note, sustain: shouldSustain };
     });
     onUpdateNotes(activeTrack.id, updated, true);
-  }, [activeNotes, selectedNoteIds, isSelectionSustained, activeTrack.id, onUpdateNotes]);
+  }, [activeNotes, selectedNoteIds, isSelectionSustained, activeTrack.id, onUpdateNotes, gameDef]);
+
+  // Style of the selected notes (null when they differ)
+  const selectionTechnique = useMemo(() => {
+    if (!gameDef || gameDef.techniques.length === 0) return null;
+    const selected = activeNotes.filter((n) => selectedNoteIds.has(n.id));
+    if (selected.length === 0) return null;
+    const first = validTechnique(gameDef, selected[0].technique);
+    return selected.every((n) => validTechnique(gameDef, n.technique) === first) ? first : null;
+  }, [activeNotes, selectedNoteIds, gameDef]);
+
+  const handleSetTechnique = useCallback(
+    (technique: number) => {
+      if (selectedNoteIds.size === 0 || !gameDef) return;
+      const pedalStyle = gameDef.techniques.includes(11);
+      const updated = activeNotes.map((note) => {
+        if (!selectedNoteIds.has(note.id)) return note;
+        return pedalStyle ? { ...note, technique, sustain: technique === 11 } : { ...note, technique };
+      });
+      setNewNoteTechnique(technique);
+      onUpdateNotes(activeTrack.id, updated, true);
+    },
+    [activeNotes, selectedNoteIds, activeTrack.id, onUpdateNotes, gameDef]
+  );
 
   // Selected notes velocity (returns exact number if all identical or 1 selected, or average)
   const selectionVelocity = useMemo(() => {
@@ -771,6 +808,12 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
       ctx.beginPath();
       ctx.roundRect(x, y + 1.5, w, keyHeight - 3, 3);
       ctx.fill();
+
+      // Style ("Estilo") marker: coloured left edge, as the game colours its style menu
+      if (gameDef && gameDef.techniques.length > 0 && note.technique !== undefined && note.technique !== 0) {
+        ctx.fillStyle = techniqueColor(validTechnique(gameDef, note.technique));
+        ctx.fillRect(x + 1, y + 2.5, Math.min(4, w / 3), keyHeight - 5);
+      }
 
       // Velocity Level Indicator Bar at bottom of note
       const velBarW = Math.max(2, (w - 4) * velRatio);
@@ -1399,6 +1442,9 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
           velocity: defaultVelocity,
           selected: true,
           sustain: hasTrackSustain,
+          ...(gameDef && newNoteTechnique !== null && gameDef.techniques.includes(newNoteTechnique)
+            ? { technique: newNoteTechnique }
+            : {}),
         };
 
         const updated: Note[] = [
@@ -1785,7 +1831,7 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
           <div className="flex items-center gap-2 shrink-0">
             <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
             <span className="font-semibold text-amber-400 text-[11px] tracking-wide">
-              Bateria BDO (Notas 48 a 62):
+              Kit de Bateria (Kck a SnrRollL):
             </span>
           </div>
 
@@ -1795,11 +1841,10 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
                 key={pad.pitch}
                 onClick={() => handleDrumPadClick(pad.pitch)}
                 className="px-2 py-1 rounded bg-[#231e1a] hover:bg-[#2e2620] border border-[#3e342b] hover:border-amber-500/80 text-[11px] text-stone-200 transition-all flex items-center gap-1 active:scale-95 shadow-sm"
-                title={`Tocar e Focar no ${pad.label} (Nota ${pad.pitch})`}
+                title={`Tocar e focar: ${pad.title} (${pad.label})`}
               >
-                <span>{pad.icon}</span>
+                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: pad.color }} />
                 <span className="font-medium">{pad.label}</span>
-                <span className="text-[9px] font-mono text-amber-400/80 font-bold">[{pad.code}]</span>
               </button>
             ))}
           </div>
@@ -1924,6 +1969,30 @@ export const PianoRoll: React.FC<PianoRollProps> = ({
               <span className="text-xs font-bold italic tracking-tighter shrink-0">Ped</span>
               <span className="whitespace-nowrap">{isSelectionSustained ? 'Pedal Ativo' : 'Pedal'}</span>
             </button>
+
+            {/* Estilo: the style menu of the game composer for this instrument */}
+            {gameDef && gameDef.techniques.length > 1 && (
+              <label className="flex items-center gap-1 pl-2 border-l border-[#3e342b] shrink-0 whitespace-nowrap">
+                <span className="text-[11px] text-amber-400 font-bold">Estilo</span>
+                <span
+                  className="w-2 h-2 rounded-sm shrink-0"
+                  style={{ backgroundColor: techniqueColor(selectionTechnique ?? gameDef.defaultTechnique) }}
+                />
+                <select
+                  value={selectionTechnique ?? ''}
+                  onChange={(e) => handleSetTechnique(Number(e.target.value))}
+                  className="h-6 bg-stone-900 border border-[#3e342b] focus:border-amber-400 rounded px-1 text-xs text-stone-200 focus:outline-none"
+                  title="Estilo das notas selecionadas (o mesmo menu do compositor do jogo)"
+                >
+                  {selectionTechnique === null && <option value="">Vários</option>}
+                  {gameDef.techniques.map((code) => (
+                    <option key={code} value={code}>
+                      {techniqueName(code)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
 
             {/* Intensidade (Velocity) Controls */}
             <div className="flex items-center gap-1 pl-2 pr-1 border-l border-[#3e342b] whitespace-nowrap shrink-0">

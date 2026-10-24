@@ -630,9 +630,9 @@ export class AudioEngine {
 
         if (pitch === 48 || pitch === 35 || pitch === 36) {
           drumType = 'kick';
-        } else if (pitch === 50 || pitch === 52 || pitch === 38 || pitch === 40) {
-          drumType = 'snare';
-        } else if (pitch === 51 || pitch === 37) {
+        } else if (pitch === 50 || pitch === 52 || pitch === 63 || pitch === 64 || pitch === 38 || pitch === 40) {
+          drumType = 'snare'; // SnrHit, SnrFlam, SnrRollS, SnrRollL
+        } else if (pitch === 51 || pitch === 49 || pitch === 37) {
           drumType = 'rimshot';
         } else if (pitch === 54 || pitch === 42) {
           drumType = 'hihat_closed';
@@ -655,7 +655,7 @@ export class AudioEngine {
         } else if (pitch === 60) {
           drumType = 'tom';
           tomIndex = 5; // High Tom
-        } else if (pitch === 61 || pitch === 49) {
+        } else if (pitch === 61) {
           drumType = 'crash';
         } else if (pitch === 62) {
           drumType = 'ride';

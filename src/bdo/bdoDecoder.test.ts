@@ -116,8 +116,8 @@ test('exportToBdo and parseBdoBinaryFile preserve sustain pedal and C0-B8 note r
   assert.strictEqual(decodedNotes[1].pitch, 81);
   assert.strictEqual(decodedNotes[1].sustain, true);
 
-  // Note 2: B8 without sustain pedal!
-  assert.strictEqual(decodedNotes[2].pitch, 119);
+  // Note 2: B8 is above the Florchestra piano (C0–B7 in the game): folded to B7, without pedal
+  assert.strictEqual(decodedNotes[2].pitch, 107);
   assert.strictEqual(decodedNotes[2].sustain, false);
   assert.strictEqual(decoded.tracks[0].volume, 80);
 });
@@ -246,7 +246,8 @@ test('parseBdoBinaryFile unifies multiple chunks of the same instrument into a s
   const decoded = parseBdoBinaryFile(arrayBuffer, 'Multi_Chunk_Song');
   // Must be exactly 1 track with all 800 notes, NOT 2 separate duplicate piano tracks!
   assert.strictEqual(decoded.tracks.length, 1);
-  assert.strictEqual(decoded.tracks[0].name, 'Florchestra Piano');
+  assert.strictEqual(decoded.tracks[0].name, 'Florquestra · Piano');
+  assert.strictEqual(decoded.tracks[0].bdoInstrument, 'florchestra-piano');
   assert.strictEqual(decoded.tracks[0].notes.length, 800);
 });
 
@@ -382,3 +383,114 @@ test('parseBdoBinaryFile prioritizes original composer over arranger and retains
 });
 
 
+
+test('exportToBdo writes the exact game instrument, Marnion sound, technique byte and kit keys', async () => {
+  const mk = (id: string, extra: Partial<Track>, notes: Array<Partial<Note>>): Track => ({
+    id,
+    name: id,
+    instrumentId: 'grand-piano',
+    color: '#fff',
+    volume: 100,
+    pan: 0,
+    isMuted: false,
+    isSolo: false,
+    auxSend: true,
+    ...extra,
+    notes: notes.map((n, i) => ({ id: `${id}-${i}`, trackId: id, pitch: 60, startTick: i * 480, durationTicks: 240, velocity: 100, ...n })),
+  });
+  const tracks: Track[] = [
+    mk('beg', { bdoInstrument: 'beginner-piano' }, [{}]),
+    mk('flor', { bdoInstrument: 'florchestra-piano', sustainPedal: false }, [{ sustain: true }, {}]),
+    mk('kit', { bdoInstrument: 'florchestra-drum-set', instrumentId: 'percussion' }, [{ pitch: 42 }, { pitch: 64 }]),
+    mk('marn', { bdoInstrument: 'marnion-sandwich', bdoSound: 2, instrumentId: 'marnisynth' }, [{ technique: 17 }, {}]),
+    mk('bass', { bdoInstrument: 'marnibass', instrumentId: 'electric-bass' }, [{ technique: 13 }]),
+  ];
+  const blob = exportToBdo(tracks, { bpm: 120, timeSignature: [4, 4], title: 't' }, {
+    charName: 'A',
+    ownerId: 1,
+    transpose: 0,
+    velMode: 'off',
+    velStepBase: 100,
+    velStepStep: 5,
+    velRescaleMin: 80,
+    velRescaleMax: 127,
+    velFloorVal: 100,
+    instrumentOverrides: {},
+    velocityScales: {},
+    effector: {
+      reverb: { enabled: false, damp: 0, mix: 0, time: 0 },
+      delay: { enabled: false, time: 0, feedback: 0, mix: 0 },
+      chorus: { enabled: false, feedback: 0, lfoDepth: 0, lfoFrequency: 0, mix: 0 },
+    },
+  });
+  const song = parseBdoBinaryFile(await blob.arrayBuffer(), 't');
+  const by = (key: string, sound = 0) => song.tracks.find((t) => t.bdoInstrument === key && (t.bdoSound ?? 0) === sound)!;
+
+  // Instruments without techniques store 99 (beginner piano, drum kit), like the game
+  assert.deepEqual(by('beginner-piano').notes.map((n) => n.technique), [99]);
+  // Florchestra piano: 11 = pedal, 0 = plain note
+  assert.deepEqual(by('florchestra-piano').notes.map((n) => n.technique), [11, 0]);
+  // Drum kit: General MIDI closed hi-hat (42) becomes HihatC (54); SnrRollL (64) is kept
+  assert.deepEqual(by('florchestra-drum-set').notes.map((n) => [n.pitch, n.technique]), [
+    [54, 99],
+    [64, 99],
+  ]);
+  // Marnion sound 3 is its own code; techniques are kept note by note
+  assert.deepEqual(by('marnion-sandwich', 2).notes.map((n) => n.technique), [17, 0]);
+  assert.deepEqual(by('marnibass').notes.map((n) => n.technique), [13]);
+});
+
+test('the game instrument song: every range and style decodes and exports back unchanged', async () => {
+  // Built like the song made in the game: each instrument at its lowest and highest key, with its styles
+  const { BDO_INSTRUMENT_DEFS } = await import('./bdoInstruments.ts');
+  const tracks: Track[] = BDO_INSTRUMENT_DEFS.map((d) => ({
+    id: d.key,
+    name: d.name,
+    instrumentId: d.family,
+    bdoInstrument: d.key,
+    color: '#fff',
+    volume: 70,
+    pan: 0,
+    isMuted: false,
+    isSolo: false,
+    auxSend: false,
+    notes: [d.minPitch, d.maxPitch, ...d.techniques.map(() => Math.round((d.minPitch + d.maxPitch) / 2))].map((pitch, i) => ({
+      id: `${d.key}-${i}`,
+      trackId: d.key,
+      pitch,
+      startTick: i * 480,
+      durationTicks: 480,
+      velocity: 100,
+      technique: i >= 2 ? d.techniques[i - 2] : undefined,
+    })),
+  }));
+  const blob = exportToBdo(tracks, { bpm: 120, timeSignature: [4, 4], title: 'instrumentos' }, {
+    charName: 'A',
+    ownerId: 1,
+    transpose: 0,
+    velMode: 'off',
+    velStepBase: 100,
+    velStepStep: 5,
+    velRescaleMin: 80,
+    velRescaleMax: 127,
+    velFloorVal: 100,
+    instrumentOverrides: {},
+    velocityScales: {},
+    effector: {
+      reverb: { enabled: false, damp: 0, mix: 0, time: 0 },
+      delay: { enabled: false, time: 0, feedback: 0, mix: 0 },
+      chorus: { enabled: false, feedback: 0, lfoDepth: 0, lfoFrequency: 0, mix: 0 },
+    },
+  });
+  const song = parseBdoBinaryFile(await blob.arrayBuffer(), 'instrumentos');
+  for (const d of BDO_INSTRUMENT_DEFS) {
+    const tr = song.tracks.find((t) => t.bdoInstrument === d.key)!;
+    assert.ok(tr, d.key);
+    const pitches = tr.notes.map((x) => x.pitch);
+    assert.equal(Math.min(...pitches), d.minPitch, `${d.key} lowest key`);
+    assert.equal(Math.max(...pitches), d.maxPitch, `${d.key} highest key`);
+    const styles = new Set(tr.notes.map((x) => x.technique));
+    if (d.techniques.length === 0) assert.deepEqual([...styles], [99], d.key);
+    else for (const code of d.techniques) assert.ok(styles.has(code), `${d.key} style ${code}`);
+  }
+});

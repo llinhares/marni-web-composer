@@ -2,6 +2,7 @@
  * Pure TypeScript Standard MIDI File (SMF Type 1) Encoder and Decoder
  */
 
+import { gmProgramForBdoInstrument, kitToGmDrum, trackGameInstrument } from '../bdo/bdoInstruments.ts';
 import type { Track, InstrumentId } from '../types/music.ts';
 import { TICKS_PER_BEAT } from '../types/music.ts';
 
@@ -131,7 +132,10 @@ export function createStandardMidiFile(
   let melodicIndex = 0;
 
   tracks.forEach((track) => {
-    const isPercussion = track.instrumentId === 'percussion';
+    const game = trackGameInstrument(track).def;
+    // Only the drum kit goes to the General MIDI drum channel, with its pieces on GM drum notes
+    const isPercussion = game.drumKit;
+    const toMidiPitch = (pitch: number) => (isPercussion ? kitToGmDrum(pitch) : pitch);
     const channel = isPercussion
       ? 9
       : melodicChannels[melodicIndex++ % melodicChannels.length];
@@ -151,7 +155,7 @@ export function createStandardMidiFile(
       tick: 0,
       type: 'program-change',
       channel,
-      program: getGmProgramForInstrument(track.instrumentId),
+      program: gmProgramForBdoInstrument(game.key),
     });
 
     // Convert notes to Note On / Note Off events
@@ -160,7 +164,7 @@ export function createStandardMidiFile(
         tick: note.startTick,
         type: 'note-on',
         channel,
-        pitch: Math.max(0, Math.min(127, note.pitch)),
+        pitch: Math.max(0, Math.min(127, toMidiPitch(note.pitch))),
         velocity: Math.max(1, Math.min(127, note.velocity || 90)),
       });
 
@@ -168,7 +172,7 @@ export function createStandardMidiFile(
         tick: note.startTick + note.durationTicks,
         type: 'note-off',
         channel,
-        pitch: Math.max(0, Math.min(127, note.pitch)),
+        pitch: Math.max(0, Math.min(127, toMidiPitch(note.pitch))),
         velocity: 0,
       });
     });

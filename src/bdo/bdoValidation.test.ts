@@ -70,21 +70,21 @@ test('notes outside C0–B8 are reported and folded by octaves', () => {
   assert.ok(!ids(validateForBdo(fixed, { grade: 'S', timeSignature: '4/4' })).includes('bdo-range'));
 });
 
-test('instrument range is informational and can be folded', () => {
-  const song = [t('f', 'flute', [n(48, 0), n(72, 480)])]; // flute range C4–C7 in the app table
+test('keys the game instrument does not have are reported and folded by octaves', () => {
+  const song = [t('f', 'flute', [n(40, 0), n(72, 480)])]; // Florchestra flute: C3–E6 in the game
   const r = validateForBdo(song, { grade: 'S', timeSignature: '4/4' });
-  assert.equal(r.issues.find((i) => i.id === 'instrument-range')?.severity, 'info');
+  assert.equal(r.issues.find((i) => i.id === 'instrument-range')?.severity, 'warning');
   assert.ok(r.canExport);
-  assert.equal(applyBdoFix(song, 'fold-instrument-range')[0].notes[0].pitch, 60);
+  assert.equal(applyBdoFix(song, 'fold-instrument-range')[0].notes[0].pitch, 52);
 });
 
-test('percussion: GM pitches are converted, unknown pitches are flagged (they would become kick)', () => {
+test('percussion: GM pitches are converted, unknown pitches are flagged (they would become kick or crash)', () => {
   const song = [t('d', 'percussion', [n(38, 0), n(42, 0), n(50, 480), n(100, 960)])];
   const r = validateForBdo(song, { grade: 'S', timeSignature: '4/4' });
   assert.equal(r.issues.find((i) => i.id === 'drums-gm')?.count, 2);
   assert.equal(r.issues.find((i) => i.id === 'drums-unknown')?.count, 1);
   const fixed = applyBdoFix(song, 'map-drums');
-  assert.deepEqual(fixed[0].notes.map((x) => x.pitch), [50, 54, 50, 100]);
+  assert.deepEqual(fixed[0].notes.map((x) => x.pitch), [50, 54, 50, 61]);
   assert.ok(!ids(validateForBdo(fixed, { grade: 'S', timeSignature: '4/4' })).includes('drums-gm'));
 });
 
@@ -133,4 +133,12 @@ test('missing owner ID or author name is a warning, never filled with someone el
   assert.ok(missing.canExport, 'Still exportable: the user decides');
   const ok = validateForBdo(song, { grade: 'S', timeSignature: '4/4', ownerId: 1234, author: 'Aria' });
   assert.deepEqual(ok.issues, []);
+});
+
+test('time signatures the game lacks are reported and exported as the closest game one', () => {
+  const song = [t('a', 'grand-piano', [n(60, 0)])];
+  assert.ok(ids(validateForBdo(song, { grade: 'S', timeSignature: '2/4' })).includes('time-signature'));
+  assert.ok(!ids(validateForBdo(song, { grade: 'S', timeSignature: '6/8' })).includes('time-signature'));
+  assert.deepEqual(timeSignatureParts('2/4'), [4, 4]);
+  assert.deepEqual(timeSignatureParts('12/8'), [6, 8]);
 });
