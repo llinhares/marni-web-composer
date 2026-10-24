@@ -8,8 +8,9 @@
  */
 
 import type { Note, TimeSignature, Track } from '../types/music.ts';
-import { BDO_GRADE_LIMITS, BDO_INSTRUMENTS, TICKS_PER_BEAT } from '../types/music.ts';
-import { BDO_PERCUSSION_IDS, FULL_BDO_INSTRUMENTS, getDefaultBdoInstrument, resolveDrumPitch } from './bdoExportV2.ts';
+import { BDO_GRADE_LIMITS, TICKS_PER_BEAT } from '../types/music.ts';
+import { exportCodeForTrack, resolveDrumPitch } from './bdoExportV2.ts';
+import { bdoInstrumentFromCode, bdoInstrumentLabel, trackGameInstrument } from './bdoInstruments.ts';
 
 export const BDO_PITCH_MIN = 12; // C0
 export const BDO_PITCH_MAX = 119; // B8
@@ -39,21 +40,27 @@ export interface BdoValidationResult {
 export interface BdoValidationOptions {
   grade: BdoGradeId;
   timeSignature: TimeSignature;
-  instrumentOverrides?: Record<string, string>; // track id -> in-game instrument name (export dialog)
+  instrumentOverrides?: Record<string, number | string>; // track id -> game instrument code (export dialog)
   /** Owner ID loaded from the user's character file (undefined = not checked). */
   ownerId?: number;
   /** Character/family name written as composer (undefined = not checked). */
   author?: string;
 }
 
-/** In-game instrument name a track is exported as (same rule as exportToBdo). */
-export function bdoInstrumentName(track: Track, overrides: Record<string, string> = {}): string {
-  return overrides[track.id] || getDefaultBdoInstrument(track.instrumentId || track.name);
+/** In-game instrument a track is exported as (same rule as exportToBdo). */
+export function bdoInstrumentName(track: Track, overrides: Record<string, number | string> = {}): string {
+  const found = bdoInstrumentFromCode(exportCodeForTrack(track, overrides))!;
+  return bdoInstrumentLabel(found.def, found.sound);
 }
 
-export function isBdoPercussionTrack(track: Track, overrides: Record<string, string> = {}): boolean {
-  const id = FULL_BDO_INSTRUMENTS[bdoInstrumentName(track, overrides)] ?? FULL_BDO_INSTRUMENTS['Florchestra Piano'];
-  return BDO_PERCUSSION_IDS.includes(id);
+/** Percussion instruments are never octave-folded. */
+export function isBdoPercussionTrack(track: Track, overrides: Record<string, number | string> = {}): boolean {
+  return bdoInstrumentFromCode(exportCodeForTrack(track, overrides))!.def.percussion;
+}
+
+/** Drum kit tracks: notes must sit on the kit pieces (keys 48-64). */
+export function isBdoDrumKitTrack(track: Track, overrides: Record<string, number | string> = {}): boolean {
+  return bdoInstrumentFromCode(exportCodeForTrack(track, overrides))!.def.drumKit;
 }
 
 /** Beats per bar for a time signature, in quarter notes (6/8 = 3 quarters). */
@@ -62,16 +69,25 @@ export function quartersPerBar(ts: TimeSignature): number {
   return (num * 4) / den;
 }
 
+/** Time signatures of the game composer ("Ritmo"). */
+export const BDO_TIME_SIGNATURES: TimeSignature[] = ['3/4', '4/4', '6/8'];
+
+/** Game time signature for a project one (2/4 is shown as 4/4, 12/8 as 6/8; note times do not change). */
+export function bdoTimeSignature(ts: TimeSignature): TimeSignature {
+  if (BDO_TIME_SIGNATURES.includes(ts)) return ts;
+  return ts === '12/8' ? '6/8' : '4/4';
+}
+
 /** Numerator/denominator pair written to the BDO header. */
 export function timeSignatureParts(ts: TimeSignature): [number, number] {
-  const [num, den] = ts.split('/').map(Number);
+  const [num, den] = bdoTimeSignature(ts).split('/').map(Number);
   return [num || 4, den || 4];
 }
 
-/** Recommended (playable) range of an instrument as defined in the app's instrument table. */
+/** Keys the game composer offers for the track's instrument. */
 export function instrumentRange(track: Track): { min: number; max: number } {
-  const info = BDO_INSTRUMENTS.find((i) => i.id === track.instrumentId);
-  return { min: info?.minPitch ?? BDO_PITCH_MIN, max: info?.maxPitch ?? BDO_PITCH_MAX };
+  const { def } = trackGameInstrument(track);
+  return { min: def.minPitch, max: def.maxPitch };
 }
 
 /** Moves a pitch by whole octaves into [min, max] (keeps the pitch class). */
@@ -83,17 +99,16 @@ export function foldIntoRange(pitch: number, min: number, max: number): number {
 }
 
 const isNativeDrumPitch = (p: number) => p >= 48 && p <= 64;
-const drumIsMappable = (p: number) => isNativeDrumPitch(p) || resolveDrumPitch(p) !== 48 || p === 35 || p === 36;
 
 const GRADE_NAMES = (g: BdoGradeId) => `Rank ${g}`;
 /** "1 nota será movida" / "3 notas serão movidas" */
 const pl = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
-function duplicateKeys(tracks: Track[], overrides: Record<string, string>): Map<string, { trackId: string; note: Note }[]> {
+function duplicateKeys(tracks: Track[], overrides: Record<string, number | string>): Map<string, { trackId: string; note: Note }[]> {
   const groups = new Map<string, { trackId: string; note: Note }[]>();
   for (const t of tracks) {
     if (t.isMuted) continue;
-    const inst = bdoInstrumentName(t, overrides);
+    const inst = exportCodeForTrack(t, overrides);
     for (const n of t.notes) {
       const key = `${inst}|${n.pitch}|${Math.round(n.startTick)}`;
       const list = groups.get(key);
@@ -107,6 +122,15 @@ function duplicateKeys(tracks: Track[], overrides: Record<string, string>): Map<
 export function validateForBdo(tracks: Track[], opts: BdoValidationOptions): BdoValidationResult {
   const overrides = opts.instrumentOverrides ?? {};
   const issues: BdoIssue[] = [];
+  if (!BDO_TIME_SIGNATURES.includes(opts.timeSignature)) {
+    issues.push({
+      id: 'time-signature',
+      severity: 'info',
+      title: `O jogo não tem compasso ${opts.timeSignature}`,
+      detail: `O compositor do jogo só oferece 3/4, 4/4 e 6/8: a música vai como ${bdoTimeSignature(opts.timeSignature)} (as notas tocam no mesmo tempo, muda só a contagem dos compassos).`,
+      count: 0,
+    });
+  }
   const exported = tracks.filter((t) => !t.isMuted && t.notes.length > 0);
 
   // Duplicates are dropped by the exporter (same in-game instrument, pitch and start)
@@ -117,7 +141,7 @@ export function validateForBdo(tracks: Track[], opts: BdoValidationOptions): Bdo
 
   let songEnd = 0;
   for (const t of exported) for (const n of t.notes) songEnd = Math.max(songEnd, n.startTick + n.durationTicks);
-  const ticksPerBar = quartersPerBar(opts.timeSignature) * TICKS_PER_BEAT;
+  const ticksPerBar = quartersPerBar(bdoTimeSignature(opts.timeSignature)) * TICKS_PER_BEAT;
   const bars = songEnd > 0 ? Math.ceil(songEnd / ticksPerBar) : 0;
 
   const fits = (g: BdoGradeId) => exportedNotes <= BDO_GRADE_LIMITS[g].maxNotes && bars <= BDO_GRADE_LIMITS[g].maxBars;
@@ -168,14 +192,16 @@ export function validateForBdo(tracks: Track[], opts: BdoValidationOptions): Bdo
   let drumsRemapped = 0;
   let drumsToKick = 0;
   for (const t of exported) {
-    if (isBdoPercussionTrack(t, overrides)) {
+    if (isBdoDrumKitTrack(t, overrides)) {
+      // Every General MIDI drum note has a kit piece; anything else falls on kick or crash
       for (const n of t.notes) {
         if (isNativeDrumPitch(n.pitch)) continue;
-        if (drumIsMappable(n.pitch)) drumsRemapped++;
+        if (n.pitch >= 27 && n.pitch <= 87) drumsRemapped++;
         else drumsToKick++;
       }
       continue;
     }
+    if (isBdoPercussionTrack(t, overrides)) continue;
     const range = instrumentRange(t);
     for (const n of t.notes) {
       if (n.pitch < BDO_PITCH_MIN || n.pitch > BDO_PITCH_MAX) outsideBdo++;
@@ -197,8 +223,8 @@ export function validateForBdo(tracks: Track[], opts: BdoValidationOptions): Bdo
     issues.push({
       id: 'drums-unknown',
       severity: 'warning',
-      title: 'Notas de percussão sem peça equivalente no BDO',
-      detail: `${pl(drumsToKick, 'nota viraria', 'notas virariam')} bumbo (Kick) na exportação. Mova para as linhas de bateria do BDO (C3–E4).`,
+      title: 'Notas de bateria sem peça equivalente no BDO',
+      detail: `${pl(drumsToKick, 'nota viraria', 'notas virariam')} bumbo ou prato na exportação. Mova para as peças do Kit de Bateria (Kck a SnrRollL).`,
       count: drumsToKick,
     });
   }
@@ -225,11 +251,11 @@ export function validateForBdo(tracks: Track[], opts: BdoValidationOptions): Bdo
   if (outsideInstrument > 0) {
     issues.push({
       id: 'instrument-range',
-      severity: 'info',
-      title: 'Notas fora da extensão recomendada do instrumento',
-      detail: `${pl(outsideInstrument, 'nota está', 'notas estão')} fora da extensão definida para o instrumento da faixa.`,
+      severity: 'warning',
+      title: 'Notas fora da extensão do instrumento no jogo',
+      detail: `${pl(outsideInstrument, 'nota será movida', 'notas serão movidas')} de oitava na exportação: o instrumento do jogo não tem essas teclas.`,
       count: outsideInstrument,
-      fix: { kind: 'fold-instrument-range', label: 'Ajustar oitavas' },
+      fix: { kind: 'fold-instrument-range', label: 'Ajustar oitavas agora' },
     });
   }
 
@@ -289,7 +315,7 @@ export function validateForBdo(tracks: Track[], opts: BdoValidationOptions): Bdo
 export function applyBdoFix(
   tracks: Track[],
   kind: Exclude<BdoFixKind, 'use-grade'>,
-  overrides: Record<string, string> = {}
+  overrides: Record<string, number | string> = {}
 ): Track[] {
   if (kind === 'remove-duplicates') {
     const remove = new Set<Note>();
@@ -304,10 +330,11 @@ export function applyBdoFix(
 
   return tracks.map((t) => {
     const perc = isBdoPercussionTrack(t, overrides);
+    const kit = isBdoDrumKitTrack(t, overrides);
     let changed = false;
     const notes = t.notes.map((n) => {
       let pitch = n.pitch;
-      if (kind === 'map-drums' && perc && !isNativeDrumPitch(pitch) && drumIsMappable(pitch)) {
+      if (kind === 'map-drums' && kit && !isNativeDrumPitch(pitch)) {
         pitch = resolveDrumPitch(pitch);
       } else if (kind === 'fold-bdo-range' && !perc) {
         pitch = foldIntoRange(pitch, BDO_PITCH_MIN, BDO_PITCH_MAX);

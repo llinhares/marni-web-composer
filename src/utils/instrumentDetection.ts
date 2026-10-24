@@ -1,10 +1,20 @@
 /**
- * BDO Instrument Detection Utility
- * Automatically identifies the best matching Black Desert Online instrument
- * based on track name, file name, MIDI Program Change, MIDI Channel, and note pitch registers.
+ * Picks the Black Desert instrument for an imported part (MIDI track/channel, MusicXML part...).
+ *
+ * Order of evidence:
+ * 1. MIDI channel 10 is always the drum kit.
+ * 2. A General MIDI program other than 0 (professional DAWs write the instrument they used).
+ * 3. Instrument words in the track name or file name (pt-BR and English).
+ * 4. Program 0, when present, is a piano.
+ * 5. The register of the notes (low parts -> contrabass, high parts -> flute).
  */
 
 import type { InstrumentId } from '../types/music.ts';
+import {
+  bdoInstrumentForGmProgram,
+  getBdoInstrument,
+  type BdoInstrumentKey,
+} from '../bdo/bdoInstruments.ts';
 
 export interface DetectInstrumentParams {
   name?: string;
@@ -14,161 +24,75 @@ export interface DetectInstrumentParams {
   notes?: { pitch: number }[];
 }
 
-/**
- * Detects the most appropriate BDO instrument for a given track.
- */
-export function detectBdoInstrument(params: DetectInstrumentParams): InstrumentId {
+/** Words that name an instrument, most specific first. */
+const NAME_RULES: Array<[RegExp, BdoInstrumentKey]> = [
+  [/\b(drums?|drum ?kit|kit de bateria|bateria|percuss(ion|ão|ao)|snare|kick|hi-?hat|cymbals?|toms?|bumbo|caixa|chimbal)\b/, 'florchestra-drum-set'],
+  [/\b(hand ?pan|steel ?drums?|tamborim|marimba|xylo(phone)?|xilofone|kalimba|timpani|t[ií]mpanos?)\b/, 'florchestra-handpan'],
+  [/\b(distortion|distorted|distor[cç][aã]o|hexe|metal guitar)\b/, 'guitar-hexe-glam'],
+  [/\b(overdrive|overdriven|drive guitar|highway|rock guitar)\b/, 'guitar-highway'],
+  [/\b(electric guitar|e\.? ?guitar|guitarra|clean guitar|jazz guitar|lead guitar|rhythm guitar)\b/, 'guitar-silver-wave'],
+  [/\b(electric bass|e\.? ?bass|bass guitar|baixo el[eé]trico|slap|synth ?bass|finger bass|pick bass|marnibass)\b/, 'marnibass'],
+  [/\b(cellos?|violoncel(l)?os?|celli|contrabass(es)?|contrabaixos?|double ?bass|upright bass|acoustic bass|baixo ac[uú]stico|bass(es)?|baixos?|vlc)\b/, 'florchestra-contrabass'],
+  [/\b(acoustic guitar|nylon|steel guitar|viol[aã]o|viol[aã]es|guitars?|gtr|banjo|ukulele|mandolin|bandolim|sitar|koto)\b/, 'florchestra-acoustic-guitar'],
+  [/\b(harps?|harpas?|lyre|lira|celesta|glockenspiel|music ?box|caixa de m[uú]sica)\b/, 'florchestra-harp'],
+  [/\b(violins?|violinos?|violas?|vln|fiddle|rabeca|strings?|cordas|ensemble|pizz(icato)?|spiccato)\b/, 'florchestra-violin'],
+  [/\b(recorders?|flauta doce|gravador)\b/, 'beginner-recorder'],
+  [/\b(clarinets?|clarinetes?|sax(ophone)?s?|saxofones?|oboes?|obo[eé]s?|bassoons?|fagotes?|english horn|accordion|acorde[aã]o|harmonica|gaita)\b/, 'florchestra-clarinet'],
+  [/\b(horns?|trompas?|trumpets?|trompetes?|trombones?|tubas?|brass|metais|cornet|flugelhorn)\b/, 'florchestra-horn'],
+  [/\b(flutes?|flautas?|piccolos?|flautim|pan ?flute|ocarinas?|whistle|pife|p[ií]fano|shakuhachi|choir|coro|voice|voz|vocals?)\b/, 'florchestra-flute'],
+  [/\b(organs?|[oó]rg[aã]os?|synth ?brass)\b/, 'marnion-sandwich'],
+  [/\b(pads?|atmosphere|ambient|strings? pad|warm)\b/, 'marnion-illusion-tree'],
+  [/\b(fx|sfx|effects?|efeitos?)\b/, 'marnion-secret-note'],
+  [/\b(synths?|sintetizador(es)?|leads?|saw(tooth)?|square|chiptune|8-?bit|marni(on|synth)?|wavy)\b/, 'marnion-wavy-planet'],
+  [/\b(pianos?|grand|pno|keys|keyboards?|teclados?|rhodes|e\.? ?piano|epiano|harpsichord|cravo|clav(inet)?)\b/, 'florchestra-piano'],
+];
+
+// Word boundaries that also work with accented letters (\b only knows ASCII)
+const LETTER_OR_DIGIT = '\\p{L}\\p{N}';
+const WORD_RULES = NAME_RULES.map(
+  ([re, key]) =>
+    [
+      new RegExp(
+        `(?<![${LETTER_OR_DIGIT}])(?:${re.source.replaceAll('\\b', '')})(?![${LETTER_OR_DIGIT}])`,
+        'u'
+      ),
+      key,
+    ] as const
+);
+
+/** Detects the exact game instrument for an imported part. */
+export function detectGameInstrument(params: DetectInstrumentParams): BdoInstrumentKey {
   const { name, fileName, program, channel, notes } = params;
 
-  // 1. Channel 9 (MIDI Channel 10, 0-indexed) is standard GM Percussion/Drums
-  if (channel === 9) {
-    return 'percussion';
-  }
+  if (channel === 9) return 'florchestra-drum-set';
+  if (program !== undefined && program > 0) return bdoInstrumentForGmProgram(program, channel);
 
-  // 2. Keyword matching on track name and file name
-  // Clean names removing extension
   const cleanFileName = fileName ? fileName.replace(/\.[^/.]+$/, '') : '';
-  const combinedText = `${name || ''} ${cleanFileName}`.toLowerCase();
+  const text = ` ${name || ''} ${cleanFileName} `
+    .toLowerCase()
+    .replace(/[_\-.]+/g, ' ')
+    .replace(/\s+/g, ' ');
+  for (const [re, key] of WORD_RULES) if (re.test(text)) return key;
 
-  // A. Drums / Percussion
-  if (
-    /\b(drums?|perc(ussion)?|snare|kick|cymbal|hi-?hat|toms?|bateria|bumbo|caixa|tambor(es)?|pandeiro|pratos?|percussão|percussao)\b/i.test(combinedText) ||
-    combinedText.includes('bateria') ||
-    combinedText.includes('percuss') ||
-    combinedText.includes('drum')
-  ) {
-    return 'percussion';
-  }
+  if (program === 0) return 'florchestra-piano';
 
-  // B. Cello (violoncelo / cello) - checked before bass and violin
-  if (
-    /\b(cello|cellos|violoncelo|violoncelos|violoncello|celli|vlc)\b/i.test(combinedText) ||
-    combinedText.includes('cello') ||
-    combinedText.includes('violoncel')
-  ) {
-    return 'cello';
-  }
-
-  // C. Bass (contrabaixo / baixo / bass) - checked before guitar
-  if (
-    /\b(bass|basses|baixo|baixos|contrabaixo|contrabaixos|contra-baixo|upright|fretless|slap|subbass|double_?bass)\b/i.test(combinedText) ||
-    combinedText.includes('baixo') ||
-    combinedText.includes('contrabaixo') ||
-    combinedText.includes('bass_') ||
-    combinedText.includes('_bass')
-  ) {
-    return 'bass';
-  }
-
-  // D. Guitar (violão / guitarra)
-  if (
-    /\b(guitars?|viol[aã]o|viol[aã]os|gtr|acoust(ic)?|nylon|electric|guitarra|dedilhado)\b/i.test(combinedText) ||
-    combinedText.includes('guitar') ||
-    combinedText.includes('violao') ||
-    combinedText.includes('violão')
-  ) {
-    return 'guitar';
-  }
-
-  // E. Flute (flauta)
-  if (
-    /\b(flute?s?|flautas?|piccolo|recorder|pan_?flute|ocarina|whistle|woodwinds?|p[ií]fano|sopra)\b/i.test(combinedText) ||
-    combinedText.includes('flute') ||
-    combinedText.includes('flauta') ||
-    combinedText.includes('piccolo')
-  ) {
-    return 'flute';
-  }
-
-  // F. Trumpet / Brass (trompete / trompa / metais)
-  if (
-    /\b(trumpets?|trompetes?|horns?|trompas?|brass|trombones?|tubas?|clarim|metais|cornet)\b/i.test(combinedText) ||
-    combinedText.includes('trumpet') ||
-    combinedText.includes('trompete') ||
-    combinedText.includes('brass') ||
-    combinedText.includes('trompa')
-  ) {
-    return 'trumpet';
-  }
-
-  // G. Harp (harpa)
-  if (
-    /\b(harps?|harpas?|lyre|lira)\b/i.test(combinedText) ||
-    combinedText.includes('harp') ||
-    combinedText.includes('harpa')
-  ) {
-    return 'harp';
-  }
-
-  // H. Violin / Strings (violino / cordas)
-  if (
-    /\b(violins?|violinos?|vln|fiddle|strings?|cordas|violas?|spiccato|pizzicato)\b/i.test(combinedText) ||
-    combinedText.includes('violin') ||
-    combinedText.includes('violino') ||
-    combinedText.includes('string') ||
-    combinedText.includes('cordas')
-  ) {
-    return 'violin';
-  }
-
-  // I. Marnisynth / Synth (sintetizador)
-  if (
-    /\b(synths?|sintetizador(es)?|leads?|pads?|marni|marnisynth|saw|square|waves?|electronic|techno)\b/i.test(combinedText) ||
-    combinedText.includes('synth') ||
-    combinedText.includes('marni') ||
-    combinedText.includes('sintetizador')
-  ) {
-    return 'marnisynth';
-  }
-
-  // J. Piano
-  if (
-    /\b(pianos?|grand_?piano|pno|keys?|keyboards?|teclados?|steinway|cauda|upright_?piano)\b/i.test(combinedText) ||
-    combinedText.includes('piano') ||
-    combinedText.includes('teclado')
-  ) {
-    return 'grand-piano';
-  }
-
-  // 3. General MIDI (GM) Program Change Mapping
-  if (program !== undefined) {
-    if (program >= 112 && program <= 127) return 'percussion';
-    if (program >= 24 && program <= 31) return 'guitar';
-    if (program >= 32 && program <= 39) return 'bass';
-    if (program === 42) return 'cello';
-    if (program === 46) return 'harp';
-    if ((program >= 40 && program <= 41) || (program >= 43 && program <= 51)) return 'violin';
-    if (program >= 56 && program <= 63) return 'trumpet';
-    if (program >= 71 && program <= 79) return 'flute';
-    if (program >= 80 && program <= 103) return 'marnisynth';
-    if (program >= 0 && program <= 7) return 'grand-piano';
-    if (program >= 8 && program <= 15) return 'harp'; // Chromatic bells, celesta, marimba
-    if (program >= 16 && program <= 23) return 'grand-piano'; // Organ
-  }
-
-  // 4. Note Pitch Register Heuristics
   if (notes && notes.length > 0) {
-    let sumPitch = 0;
-    let minPitch = 127;
-    let maxPitch = 0;
+    let sum = 0;
+    let min = 127;
+    let max = 0;
     for (const n of notes) {
-      sumPitch += n.pitch;
-      if (n.pitch < minPitch) minPitch = n.pitch;
-      if (n.pitch > maxPitch) maxPitch = n.pitch;
+      sum += n.pitch;
+      if (n.pitch < min) min = n.pitch;
+      if (n.pitch > max) max = n.pitch;
     }
-    const avgPitch = sumPitch / notes.length;
-
-    // Deep bass register (typically pitches 28 to 55, average < 48)
-    if (avgPitch < 50 && maxPitch <= 65 && minPitch <= 43) {
-      return 'bass';
-    }
-
-    // High woodwind/violin register (rarely goes below 58, average > 72)
-    if (minPitch >= 58 && avgPitch >= 72) {
-      return 'flute';
-    }
+    const avg = sum / notes.length;
+    if (avg < 50 && max <= 65 && min <= 43) return 'florchestra-contrabass';
+    if (min >= 58 && avg >= 72) return 'florchestra-flute';
   }
+  return 'florchestra-piano';
+}
 
-  // Default fallback
-  return 'grand-piano';
+/** Sound family of the detected instrument (playback). */
+export function detectBdoInstrument(params: DetectInstrumentParams): InstrumentId {
+  return getBdoInstrument(detectGameInstrument(params))!.family;
 }

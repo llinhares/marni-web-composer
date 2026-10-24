@@ -65,12 +65,18 @@ const GUIDE: GuideSection[] = [
         outras aparecem em cinza ao fundo.
       </>,
       <>
+        Os instrumentos são os mesmos do compositor do Black Desert, nas mesmas abas (Flauta, Violinos, Piano Elétrico, Percussão) e
+        níveis (Para Novato, Florquestra, Marnis). Cada faixa é exportada exatamente como o instrumento escolhido; nos Marnions, o
+        menu ao lado escolhe o som (Básico, Som 2, 3 ou 4). O Kit de Bateria tem as 17 peças do jogo (Kck a SnrRollL).
+      </>,
+      <>
         <b>M</b> silencia (mute) e <b>S</b> deixa só ela tocando (solo). O controle deslizante ajusta o volume; o menu ⋮ troca o instrumento,
         duplica ou exclui a faixa.
       </>,
       <>
         O botão de importar abre MIDI (.mid), MusicXML, partituras do BDO, XML e projetos .marni — substituindo o projeto ou somando
-        faixas.
+        faixas. No MIDI, cada canal/instrumento vira uma faixa com o instrumento do jogo mais próximo (pelo programa General MIDI ou
+        pelo nome da faixa), a bateria do canal 10 vai para as peças do Kit de Bateria e mudanças de andamento mantêm o tempo real.
       </>,
     ],
   },
@@ -159,8 +165,11 @@ const GUIDE: GuideSection[] = [
   },
   {
     icon: <Sparkles className="w-4 h-4" />,
-    title: 'Ferramentas de IA',
+    title: 'Ferramentas de IA (beta)',
     items: [
+      <>
+        Ficam no botão de varinha, ao lado de Adicionar. As três estão em <b>beta</b>: confira o resultado antes de exportar.
+      </>,
       <>
         <b>Partitura por imagem</b>: envie uma foto ou PDF e o Gemini lê os compassos (requer sua chave gratuita do Google AI Studio).
         Para fidelidade total, prefira importar MIDI ou MusicXML.
@@ -169,6 +178,12 @@ const GUIDE: GuideSection[] = [
         <b>Vídeo/Áudio para MIDI</b>: transcreve vídeos no estilo Synthesia (lendo as barras coloridas) e gravações de áudio.
         O teclado (quantidade de teclas e extensão), a linha de leitura e as cores das mãos são detectados sozinhos;
         em teclados parciais (vídeo com zoom) o modo Híbrido confirma a oitava pelo áudio.
+      </>,
+      <>
+        <b>Separar instrumentos</b>: de um áudio ou vídeo, separa voz, bateria, baixo e harmonia (IA Demucs, no seu computador) e cria
+        uma faixa para cada um: a voz vira uma melodia no Violino, o baixo no Marnibass, a harmonia no Piano e a bateria nas peças do
+        Kit de Bateria. Dá para ouvir cada parte separada e trocar o instrumento antes de importar. Na primeira vez o modelo (180 MB)
+        é baixado e fica guardado no navegador.
       </>,
     ],
   },

@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { BetaBadge } from './BetaBadge.tsx';
 import {
   X,
   Video,
@@ -977,6 +978,7 @@ export const VideoAudioTranscriberModal: React.FC<VideoAudioTranscriberModalProp
                 <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-500/20 text-amber-400 border border-amber-500/40">
                   HÍBRIDO IA
                 </span>
+                <BetaBadge />
               </div>
               <p className="text-xs text-stone-400">
                 Converte vídeos Synthesia e gravações para MIDI com corte de intro/outro, paleta de cores e separação de mãos.

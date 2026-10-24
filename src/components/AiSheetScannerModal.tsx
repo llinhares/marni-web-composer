@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { BetaBadge } from './BetaBadge.tsx';
 import {
   X,
   Sparkles,
@@ -330,9 +331,7 @@ export const AiSheetScannerModal: React.FC<AiSheetScannerModalProps> = ({
                 <h2 id="omr-title" className="modal-title">
                   Importar Partitura por Imagem (IA OMR)
                 </h2>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-amber-500/25 text-amber-300 border border-amber-500/50 shadow-sm">
-                  BETA
-                </span>
+                <BetaBadge />
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-stone-800 text-stone-300 border border-[#3e342b]">
                   {selectedModel}
                 </span>

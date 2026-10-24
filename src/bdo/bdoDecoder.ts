@@ -5,8 +5,9 @@
  * Notes (C0-B8) and Sustain Pedal articulation flags (byte 1 === 11).
  */
 
-import type { Track, Note, InstrumentId, TimeSignature, EffectorSettings } from '../types/music.ts';
+import type { Track, Note, TimeSignature, EffectorSettings } from '../types/music.ts';
 import { BDO_INSTRUMENTS } from '../types/music.ts';
+import { bdoInstrumentFromCode, bdoInstrumentLabel, gameInstrumentFields } from './bdoInstruments.ts';
 import { newId } from '../utils/ids.ts';
 
 const _KA = new Uint8Array([0xa3, 0x71, 0x8f, 0x92, 0x46, 0xb2, 0xc8, 0x55]);
@@ -140,48 +141,6 @@ export function isBdoBinaryContent(data: Uint8Array | ArrayBuffer): boolean {
   const ver = bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24);
   return ver === 9;
 }
-
-// Reverse mapping of BDO internal instrument ID to Web Composer InstrumentId
-const BDO_ID_TO_INSTRUMENT: Record<number, { id: InstrumentId; name: string }> = {
-  0x00: { id: 'guitar', name: 'Guitarra Iniciante' },
-  0x01: { id: 'flute', name: 'Flauta Iniciante' },
-  0x02: { id: 'flute', name: 'Flauta Doce' },
-  0x04: { id: 'percussion', name: 'Tamborim' },
-  0x05: { id: 'percussion', name: 'Pratos' },
-  0x06: { id: 'harp', name: 'Harpa Iniciante' },
-  0x07: { id: 'grand-piano', name: 'Piano Iniciante' },
-  0x08: { id: 'violin', name: 'Violino Iniciante' },
-  0x0a: { id: 'guitar', name: 'Florchestra Acoustic Guitar' },
-  0x0b: { id: 'flute', name: 'Florchestra Flute' },
-  0x0d: { id: 'percussion', name: 'Drum Set' },
-  0x0e: { id: 'bass', name: 'Marnibass' },
-  0x0f: { id: 'bass', name: 'Florchestra Contrabass' },
-  0x10: { id: 'harp', name: 'Florchestra Harp' },
-  0x11: { id: 'grand-piano', name: 'Florchestra Piano' },
-  0x12: { id: 'violin', name: 'Florchestra Violin' },
-  0x13: { id: 'percussion', name: 'Handpan' },
-  0x14: { id: 'marnisynth', name: 'Marnian Wavy Planet' },
-  0x15: { id: 'marnisynth', name: 'Marnian Wavy Planet (Wave 2)' },
-  0x16: { id: 'marnisynth', name: 'Marnian Wavy Planet (Wave 3)' },
-  0x17: { id: 'marnisynth', name: 'Marnian Wavy Planet (Wave 4)' },
-  0x18: { id: 'marnisynth', name: 'Marnian Illusion Tree' },
-  0x19: { id: 'marnisynth', name: 'Marnian Illusion Tree (Wave 2)' },
-  0x1a: { id: 'marnisynth', name: 'Marnian Illusion Tree (Wave 3)' },
-  0x1b: { id: 'marnisynth', name: 'Marnian Illusion Tree (Wave 4)' },
-  0x1c: { id: 'marnisynth', name: 'Marnian Secret Note' },
-  0x1d: { id: 'marnisynth', name: 'Marnian Secret Note (Wave 2)' },
-  0x1e: { id: 'marnisynth', name: 'Marnian Secret Note (Wave 3)' },
-  0x1f: { id: 'marnisynth', name: 'Marnian Secret Note (Wave 4)' },
-  0x20: { id: 'marnisynth', name: 'Marnian Sandwich' },
-  0x21: { id: 'marnisynth', name: 'Marnian Sandwich (Wave 2)' },
-  0x22: { id: 'marnisynth', name: 'Marnian Sandwich (Wave 3)' },
-  0x23: { id: 'marnisynth', name: 'Marnian Sandwich (Wave 4)' },
-  0x24: { id: 'guitar', name: 'Guitar Silver Wave' },
-  0x25: { id: 'guitar', name: 'Guitar Highway' },
-  0x26: { id: 'guitar', name: 'Guitar Hexe Glam' },
-  0x27: { id: 'flute', name: 'Florchestra Clarinet' },
-  0x28: { id: 'trumpet', name: 'Florchestra Horn' },
-};
 
 export interface DecodedBdoSong {
   title: string;
@@ -327,7 +286,7 @@ export function parseBdoBinaryFile(
         const durMs = dv.getFloat64(offset + 12, true);
         offset += 20;
 
-        // Byte 1 === 11 indicates BDO sustain pedal resonance!
+        // Byte 1 is the note technique ("Estilo"); 11 is the piano pedal
         const hasSustain = b1 === 11;
 
         groupNotes.push({
@@ -335,9 +294,10 @@ export function parseBdoBinaryFile(
           trackId,
           pitch: Math.max(12, Math.min(119, pitch)),
           startTick: Math.max(0, Math.round(startMs * msToTicks)),
-          durationTicks: Math.max(30, Math.round(durMs * msToTicks)),
-          velocity: Math.max(1, Math.min(127, vel)),
+          durationTicks: Math.max(1, Math.round(durMs * msToTicks)),
+          velocity: Math.max(0, Math.min(127, vel)), // the game allows silent (0) notes
           sustain: hasSustain,
+          technique: b1,
         });
       }
     }
@@ -354,11 +314,12 @@ export function parseBdoBinaryFile(
       });
       const uniqueNotes = Array.from(noteMap.values()).sort((a, b) => a.startTick - b.startTick);
 
-      const instMeta = BDO_ID_TO_INSTRUMENT[groupInstId];
-      const instName = instMeta?.name || `Trilha BDO (${groupInstId})`;
+      const found = bdoInstrumentFromCode(groupInstId);
+      const fields = found ? gameInstrumentFields(found.def.key, found.sound) : gameInstrumentFields('florchestra-piano');
+      const instName = found ? bdoInstrumentLabel(found.def, found.sound) : `Trilha BDO (${groupInstId})`;
       const hasAnySustain = uniqueNotes.some((n) => n.sustain);
 
-      // In case multiple groups share the same instrument, merge them cleanly into one track
+      // Groups of the same instrument code are merged into one track
       const existingTrack = tracks.find((tr) => tr.name === instName);
       if (existingTrack) {
         uniqueNotes.forEach((n) => (n.trackId = existingTrack.id));
@@ -366,11 +327,11 @@ export function parseBdoBinaryFile(
         existingTrack.notes.sort((a, b) => a.startTick - b.startTick);
         if (hasAnySustain) existingTrack.sustainPedal = true;
       } else {
-        const instDef = BDO_INSTRUMENTS.find((i) => i.id === instMeta?.id);
+        const instDef = BDO_INSTRUMENTS.find((i) => i.id === fields.instrumentId);
         tracks.push({
           id: trackId,
           name: instName,
-          instrumentId: instMeta?.id || 'grand-piano',
+          ...fields,
           color: instDef?.color || '#d4a373',
           volume: groupVolume,
           pan: 0,

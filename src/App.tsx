@@ -16,7 +16,7 @@ import type {
   InstrumentId,
   Marker,
 } from './types/music.ts';
-import { BDO_INSTRUMENTS, BDO_GRADE_LIMITS } from './types/music.ts';
+import { BDO_GRADE_LIMITS } from './types/music.ts';
 import { AudioEngine } from './audio/AudioEngine.ts';
 import { createPlayheadStore } from './audio/playheadStore.ts';
 import { newId } from './utils/ids.ts';
@@ -39,6 +39,9 @@ import { PianoRoll } from './components/PianoRoll.tsx';
 import { BottomBar } from './components/BottomBar.tsx';
 import { EffectorModal } from './components/EffectorModal.tsx';
 import { AddInstrumentModal } from './components/AddInstrumentModal.tsx';
+import { StemSplitModal } from './components/StemSplitModal.tsx';
+import type { BdoInstrumentKey } from './bdo/bdoInstruments.ts';
+import { instrumentTrackFields, newTrackName } from './bdo/trackInstrument.ts';
 import { BdoExportModal } from './components/BdoExportModal.tsx';
 import { MidiSettingsModal } from './components/MidiSettingsModal.tsx';
 import { AiSheetScannerModal } from './components/AiSheetScannerModal.tsx';
@@ -175,6 +178,7 @@ export default function App() {
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
   const [isAiSheetScannerOpen, setIsAiSheetScannerOpen] = useState(false);
   const [isVideoTranscriberOpen, setIsVideoTranscriberOpen] = useState(false);
+  const [isStemSplitterOpen, setIsStemSplitterOpen] = useState(false);
   const [isMixerOpen, setIsMixerOpen] = useState(false);
   const [help, setHelp] = useState<{ open: boolean; tab: HelpTab }>({ open: false, tab: 'guide' });
   const [isTourOpen, setIsTourOpen] = useState(false);
@@ -608,22 +612,15 @@ export default function App() {
     [commitTracks]
   );
 
-  const handleAddTrack = (instrumentId: InstrumentId) => {
-    const inst = BDO_INSTRUMENTS.find((i) => i.id === instrumentId);
-    const count = tracks.filter((t) => t.instrumentId === instrumentId).length;
-    const name = count === 0 ? (inst?.name || 'Instrumento') : `${inst?.name} ${count + 1}`;
-
+  const handleAddTrack = (key: BdoInstrumentKey) => {
     const newTrack: Track = {
       id: newId('track'),
-      name,
-      instrumentId,
-      color: inst?.color || '#d4a373',
-      volume: inst?.defaultVolume || 75,
+      name: newTrackName(key, tracks),
+      ...instrumentTrackFields(key),
       pan: 0,
       isMuted: false,
       isSolo: false,
       auxSend: true,
-      sustainPedal: instrumentId === 'grand-piano',
       notes: [],
     };
 
@@ -1197,6 +1194,21 @@ export default function App() {
     [tracks, handleStop, pushHistory]
   );
 
+  // Tracks made from separated stems are added to the project (one undo step)
+  const handleImportStemTracks = useCallback(
+    (newTracks: Track[], options: { bpm?: number; title?: string }) => {
+      handleStop();
+      const nextTracks = [...tracks, ...newTracks];
+      const nextActiveId = newTracks[0]?.id ?? activeTrackId;
+      setTracks(nextTracks);
+      setActiveTrackId(nextActiveId);
+      if (options.bpm) setBpm(options.bpm);
+      if (options.title && tracks.every((t) => t.notes.length === 0)) setTitle(options.title);
+      pushHistory(nextTracks, nextActiveId);
+    },
+    [tracks, activeTrackId, handleStop, pushHistory]
+  );
+
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-[#141210] text-stone-200 font-sans select-none">
       {/* Top Header Bar */}
@@ -1289,6 +1301,7 @@ export default function App() {
           onImportClick={handleTriggerImport}
           onOpenAiSheetScanner={() => setIsAiSheetScannerOpen(true)}
           onOpenVideoTranscriber={() => setIsVideoTranscriberOpen(true)}
+          onOpenStemSplitter={() => setIsStemSplitterOpen(true)}
           totalNotes={totalNotes}
           maxNotes={maxNotesAllowed}
           bdoGrade={bdoGrade}
@@ -1434,6 +1447,14 @@ export default function App() {
         activeTrackId={activeTrackId}
         currentBpm={bpm}
         onImportTranscribedNotes={handleImportAiScore}
+      />
+
+      {/* Instrument separation (stems -> tracks) */}
+      <StemSplitModal
+        isOpen={isStemSplitterOpen}
+        onClose={() => setIsStemSplitterOpen(false)}
+        currentBpm={bpm}
+        onImportTracks={handleImportStemTracks}
       />
 
       {/* Reset All Confirmation Modal */}

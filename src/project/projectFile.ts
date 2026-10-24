@@ -6,6 +6,12 @@
  * The same structure is stored by the IndexedDB autosave.
  */
 
+import {
+  defaultBdoInstrumentForFamily,
+  gameInstrumentFields,
+  isBdoInstrumentKey,
+  trackGameInstrument,
+} from '../bdo/bdoInstruments.ts';
 import type {
   EffectorSettings,
   GridSnap,
@@ -77,6 +83,8 @@ export class ProjectFormatError extends Error {
 function cleanTracks(tracks: Track[]): Track[] {
   return tracks.map((t) => ({
     ...t,
+    // Always explicit, so a project made before the game catalog saves and compares like a new one
+    ...gameInstrumentFields(trackGameInstrument(t).def.key, trackGameInstrument(t).sound),
     notes: t.notes.map(({ selected: _selected, ...n }) => ({ ...n, trackId: t.id })),
   }));
 }
@@ -187,11 +195,12 @@ function parseTrack(raw: unknown, index: number, usedIds: Set<string>): Track {
   while (usedIds.has(id)) id = `${id}-${index}`;
   usedIds.add(id);
 
-  const instrumentId = oneOf(
-    t.instrumentId,
-    BDO_INSTRUMENTS.map((i) => i.id),
-    'grand-piano'
-  ) as InstrumentId;
+  // Game instrument (projects saved before the game catalog get the closest one for their sound)
+  const savedFamily = oneOf(t.instrumentId, BDO_INSTRUMENTS.map((i) => i.id), 'grand-piano') as InstrumentId;
+  const game = isBdoInstrumentKey(t.bdoInstrument)
+    ? gameInstrumentFields(t.bdoInstrument, num(t.bdoSound, 0, 0, 3))
+    : gameInstrumentFields(defaultBdoInstrumentForFamily(savedFamily));
+  const instrumentId = game.instrumentId;
   const inst = BDO_INSTRUMENTS.find((i) => i.id === instrumentId);
 
   const rawNotes = Array.isArray(t.notes) ? t.notes : [];
@@ -208,9 +217,11 @@ function parseTrack(raw: unknown, index: number, usedIds: Set<string>): Track {
       pitch: Math.round(pitch),
       startTick: Math.round(startTick),
       durationTicks: Math.round(durationTicks),
-      velocity: Math.round(num(n.velocity, 95, 1, 127)),
+      velocity: Math.round(num(n.velocity, 95, 0, 127)),
     };
     if (typeof n.sustain === 'boolean') note.sustain = n.sustain;
+    const technique = num(n.technique, NaN, 0, 255);
+    if (Number.isFinite(technique)) note.technique = Math.round(technique);
     notes.push(note);
   });
 
@@ -218,6 +229,8 @@ function parseTrack(raw: unknown, index: number, usedIds: Set<string>): Track {
     id,
     name: str(t.name, inst?.name ?? `Faixa ${index + 1}`),
     instrumentId,
+    bdoInstrument: game.bdoInstrument,
+    bdoSound: game.bdoSound,
     color: str(t.color, inst?.color ?? '#d4a373'),
     volume: num(t.volume, inst?.defaultVolume ?? 75, 0, 100),
     pan: num(t.pan, 0, -1, 1),

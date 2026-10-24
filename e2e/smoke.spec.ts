@@ -97,7 +97,7 @@ test('first visit shows the guided tour; it can be followed to the end and reope
   await page.getByRole('tab', { name: 'Comandos' }).click();
   await expect(page.getByText('Tocar / pausar')).toBeVisible();
   await page.getByRole('tab', { name: 'Sobre' }).click();
-  await expect(page.getByText(/Versão v2\.1/)).toBeVisible();
+  await expect(page.getByText(/Versão v2\.2/)).toBeVisible();
   await page.getByRole('tab', { name: 'Como usar' }).click();
   await page.getByRole('button', { name: 'Fazer o tour guiado' }).click();
   await expect(page.getByRole('dialog', { name: /Bem-vindo/ })).toBeVisible();

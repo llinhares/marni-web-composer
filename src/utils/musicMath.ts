@@ -2,6 +2,7 @@
  * Music calculation, pitch notation, and grid snapping utilities
  */
 
+import { DRUM_KIT_PIECES } from '../bdo/bdoInstruments.ts';
 import type { GridSnap, TimeSignature } from '../types/music.ts';
 import { TICKS_PER_BEAT } from '../types/music.ts';
 
@@ -144,22 +145,19 @@ export interface BdoDrumPiece {
 }
 
 export const BDO_DRUM_PIECES: Record<number, BdoDrumPiece> = {
-  // Native Black Desert Online (BDO) Percussion Note Mapping
-  48: { code: 'KCK', name: 'Bumbo (Kick)', shortName: 'Bumbo (Kick)', category: 'bass', isNativeBdo: true },
-  49: { code: 'CSH', name: 'Prato Crash Alternativo', shortName: 'Crash Alt', category: 'cymbal', isNativeBdo: false },
-  50: { code: 'SNR', name: 'Caixa (Snare Hit)', shortName: 'Caixa (Snare)', category: 'snare', isNativeBdo: true },
-  51: { code: 'RIM', name: 'Rimshot / Lateral', shortName: 'Rimshot', category: 'snare', isNativeBdo: true },
-  52: { code: 'FLM', name: 'Caixa Flam / Roll', shortName: 'Caixa Flam', category: 'snare', isNativeBdo: true },
-  53: { code: 'TM1', name: 'Tom 1 (Grave)', shortName: 'Tom 1 (Grave)', category: 'tom', isNativeBdo: true },
-  54: { code: 'HHC', name: 'Chimbal Fechado', shortName: 'Chimbal Fech.', category: 'hihat', isNativeBdo: true },
-  55: { code: 'TM2', name: 'Tom 2 (Médio-Grave)', shortName: 'Tom 2 (Médio)', category: 'tom', isNativeBdo: true },
-  56: { code: 'HHP', name: 'Pedal de Chimbal', shortName: 'Pedal Chimbal', category: 'hihat', isNativeBdo: true },
-  57: { code: 'TM3', name: 'Tom 3 (Médio)', shortName: 'Tom 3 (Médio)', category: 'tom', isNativeBdo: true },
-  58: { code: 'HHO', name: 'Chimbal Aberto', shortName: 'Chimbal Aberto', category: 'hihat', isNativeBdo: true },
-  59: { code: 'TM4', name: 'Tom 4 (Agudo)', shortName: 'Tom 4 (Agudo)', category: 'tom', isNativeBdo: true },
-  60: { code: 'TM5', name: 'Tom 5 (Super Agudo)', shortName: 'Tom 5 (Agudo)', category: 'tom', isNativeBdo: true },
-  61: { code: 'CSH', name: 'Prato Crash', shortName: 'Prato Crash', category: 'cymbal', isNativeBdo: true },
-  62: { code: 'RID', name: 'Prato Ride', shortName: 'Prato Ride', category: 'cymbal', isNativeBdo: true },
+  // Florchestra Drum Set: the 17 pieces of the game composer (labels as the game shows them)
+  ...Object.fromEntries(
+    DRUM_KIT_PIECES.map((p) => [
+      p.key,
+      {
+        code: p.label.toUpperCase(),
+        name: `${p.label} · ${p.name}`,
+        shortName: p.label,
+        category: p.category === 'kick' ? 'bass' : p.category,
+        isNativeBdo: true,
+      } satisfies BdoDrumPiece,
+    ])
+  ),
 
   // General MIDI (GM) Standard Percussion Fallbacks
   35: { code: 'KCK', name: 'Bumbo Secundário (GM 35)', shortName: 'Bumbo (GM)', category: 'bass', isNativeBdo: false },

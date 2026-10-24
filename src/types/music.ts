@@ -2,6 +2,8 @@
  * Marni Web Composer - Core Music Types
  */
 
+import type { BdoInstrumentKey } from '../bdo/bdoInstruments.ts';
+
 export type InstrumentId =
   | 'grand-piano'
   | 'flute'
@@ -12,7 +14,13 @@ export type InstrumentId =
   | 'harp'
   | 'trumpet'
   | 'cello'
-  | 'marnisynth';
+  | 'marnisynth'
+  | 'recorder'
+  | 'clarinet'
+  | 'horn'
+  | 'electric-guitar'
+  | 'electric-bass'
+  | 'handpan';
 
 export interface InstrumentInfo {
   id: InstrumentId;
@@ -37,6 +45,11 @@ export interface Note {
   velocity: number; // 1 - 127
   selected?: boolean;
   sustain?: boolean; // Sustain pedal effect (BDO byte 11)
+  /**
+   * BDO technique byte ("Estilo" in the game composer), kept exactly as read from a game file or
+   * chosen in the editor. Omitted = the instrument's default.
+   */
+  technique?: number;
 }
 
 /** Channel strip of a track: 3-band EQ (dB) and compressor. */
@@ -52,7 +65,12 @@ export interface TrackMixer {
 export interface Track {
   id: string;
   name: string;
+  /** Sound family used for playback (derived from the game instrument). */
   instrumentId: InstrumentId;
+  /** Exact Black Desert instrument (see src/bdo/bdoInstruments.ts). Omitted in old projects. */
+  bdoInstrument?: BdoInstrumentKey;
+  /** Sound of a Marnion synth (0-3). */
+  bdoSound?: number;
   color: string;
   volume: number; // 0 - 100
   pan: number; // -1 to 1 (0 = center)
@@ -256,5 +274,83 @@ export const BDO_INSTRUMENTS: InstrumentInfo[] = [
     maxPitch: 96, // C7
     defaultVolume: 75,
     bdoCode: 9,
+  },
+  {
+    id: 'recorder',
+    name: 'Flauta Doce',
+    category: 'woodwind',
+    description: 'Flauta doce (gravador) de som simples e direto.',
+    iconName: 'Wind',
+    bdoMnemonic: 'REC',
+    color: '#90caf9',
+    minPitch: 60,
+    maxPitch: 96,
+    defaultVolume: 70,
+    bdoCode: 2,
+  },
+  {
+    id: 'clarinet',
+    name: 'Clarinete',
+    category: 'woodwind',
+    description: 'Clarinete de madeira, quente nos graves e brilhante nos agudos.',
+    iconName: 'Wind',
+    bdoMnemonic: 'CLR',
+    color: '#4fc3f7',
+    minPitch: 50,
+    maxPitch: 94,
+    defaultVolume: 72,
+    bdoCode: 0x27,
+  },
+  {
+    id: 'horn',
+    name: 'Trompa',
+    category: 'brass',
+    description: 'Trompa orquestral, redonda e cheia.',
+    iconName: 'Megaphone',
+    bdoMnemonic: 'HRN',
+    color: '#f2c14e',
+    minPitch: 34,
+    maxPitch: 77,
+    defaultVolume: 78,
+    bdoCode: 0x28,
+  },
+  {
+    id: 'electric-guitar',
+    name: 'Guitarra Elétrica',
+    category: 'strings',
+    description: 'Guitarra elétrica Marni, do timbre limpo à distorção.',
+    iconName: 'Guitar',
+    bdoMnemonic: 'EGT',
+    color: '#ef8354',
+    minPitch: 40,
+    maxPitch: 88,
+    defaultVolume: 75,
+    bdoCode: 0x24,
+  },
+  {
+    id: 'electric-bass',
+    name: 'Marnibass',
+    category: 'strings',
+    description: 'Baixo elétrico Marni para linhas graves marcantes.',
+    iconName: 'Volume2',
+    bdoMnemonic: 'EBS',
+    color: '#d1495b',
+    minPitch: 28,
+    maxPitch: 67,
+    defaultVolume: 85,
+    bdoCode: 0x0e,
+  },
+  {
+    id: 'handpan',
+    name: 'Tamborim (Handpan)',
+    category: 'percussion',
+    description: 'Handpan metálico e afinado, de notas ressonantes.',
+    iconName: 'Disc',
+    bdoMnemonic: 'HPN',
+    color: '#9fd8cb',
+    minPitch: 48,
+    maxPitch: 84,
+    defaultVolume: 75,
+    bdoCode: 0x13,
   },
 ];
